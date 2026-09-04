@@ -1,0 +1,15 @@
+name: sih-app
+channels:
+  - conda-forge
+dependencies:
+  - python=3.11
+  - fastapi
+  - uvicorn
+  - rasterio
+  - geopandas
+  - shapely
+  - networkx
+  - numpy
+  - pydantic
+  - pytest
+  - httpx
