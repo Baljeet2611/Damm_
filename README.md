@@ -19,7 +19,16 @@ pytest -v
 uvicorn app.main:app --reload --port 8000
 ```
 - Health Check: `http://localhost:8000/api/health`
+- Datasets Catalog: `http://localhost:8000/api/datasets`
+- Raster Metadata: `http://localhost:8000/api/rasters/{id}/metadata`
+- Raster Point Value: `http://localhost:8000/api/rasters/{id}/value?lon={lon}&lat={lat}`
 - Interactive API Docs: `http://localhost:8000/docs`
+
+### Registered Dataset IDs
+- `dem` -> `data/raw/data_hidkal/hidkal_dem.tif` (Float32 DEM)
+- `depth` -> `data/raw/data_hidkal/hidkal_depth.tif` (Float32 Inundation Depth)
+- `velocity` -> `data/raw/data_hidkal/hidkal_velocity.tif` (Float32 Velocity)
+- `arrival` -> `data/raw/data_hidkal/hidkal_arrival.tif` (Float32 Arrival Time; both `+9999` and `-9999` treated as NoData)
 
 ### 3. Frontend Application (React + Vite + TypeScript)
 ```powershell
@@ -34,3 +43,4 @@ npm run dev
 ```powershell
 .\scripts\dev.ps1
 ```
+

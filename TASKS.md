@@ -31,18 +31,17 @@ Automated dam-break framework comparing SPH and Delft3D, with inundation, damage
 
 ---
 
-## Phase 3: Data Preprocessing, Normalization & Sanitization
-- [ ] Implement robust raster sanitizer:
-  - [ ] Remap `hidkal_arrival.tif` unflooded value `9999.0` to standard IEEE `NaN` / masked NoData.
-  - [ ] Normalize dry cell representation across `depth`, `velocity`, and `arrival` layers.
-  - [ ] Reproject Hidkal rasters from geographic EPSG:4326 to metric planar CRS (UTM Zone 43N / EPSG:32643) with bilinear/cubic resampling.
-- [ ] DEM conditioning and hydro-enforcement:
-  - [ ] Fill spurious depression sinks and burn main river channel centerlines.
-  - [ ] Compute slope, aspect, and flow accumulation grids.
-- [ ] Vector data preparation:
-  - [ ] Clean and categorize `hidkal_assets.geojson` into physical vulnerability classes (residential, commercial, educational, medical, critical utilities).
-  - [ ] Convert `hidkal_roads.graphml` into a spatial NetworkX graph with metric edge lengths, bridge tags, and speed limits.
-- [ ] Build automated unit and regression tests for data sanitization pipelines.
+## Phase 3: Safe Raster Metadata & Point-Query API [COMPLETED]
+- [x] Register fixed dataset catalog with strict ID whitelisting (`dem`, `depth`, `velocity`, `arrival`).
+- [x] Implement `GET /api/datasets` returning ID, label, availability, data type, unit status, and provenance status without exposing absolute filesystem paths.
+- [x] Implement `GET /api/rasters/{id}/metadata` returning width, height, dtype, CRS, bounds, resolution, metadata NoData, and valid min/max.
+- [x] Implement metadata in-memory caching keyed by ID and file modification time (never returns full raster arrays).
+- [x] Implement `GET /api/rasters/{id}/value?lon=&lat=` with coordinate validation, returning row, column, value, and `is_nodata` (404 for unknown ID, 422 outside bounds).
+- [x] Treat both `+9999` and `-9999` as NoData for `arrival` returning `value: null` without modifying the original raw file.
+- [x] Prevent arbitrary file-path inputs and path traversal vulnerabilities.
+- [x] Build comprehensive unit tests using temporary tiny rasters in `tmp_path` (runs without `data/raw`).
+- [x] Add local integration test that validates real Hidkal rasters when present (skips gracefully when absent).
+
 
 ---
 
