@@ -43,3 +43,26 @@ class RasterPointValueResponse(BaseModel):
     column: int
     value: Optional[float] = None
     is_nodata: bool
+
+
+class LegendItem(BaseModel):
+    value: float
+    color: str
+    label: str
+
+
+class ColorRampStop(BaseModel):
+    offset: float
+    color: str
+    value: float
+
+
+class RasterLegendResponse(BaseModel):
+    id: str
+    label: str
+    unit_status: str
+    provenance_status: str
+    min_value: Optional[float] = None
+    max_value: Optional[float] = None
+    color_ramp: list[ColorRampStop]
+    items: list[LegendItem]

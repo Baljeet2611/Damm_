@@ -1,21 +1,24 @@
-from fastapi import FastAPI, Query
+from fastapi import FastAPI, Query, Response
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.schemas import (
     DatasetResponse,
     RasterMetadataResponse,
     RasterPointValueResponse,
+    RasterLegendResponse,
 )
 from app.raster_service import (
     list_datasets,
     get_raster_metadata,
     get_raster_point_value,
+    get_raster_tile,
+    get_raster_legend,
 )
 
 app = FastAPI(
     title="Dam Break Decision Support System API",
     description="Automated dam-break hydrodynamic inspection and inundation analysis API",
-    version="0.3.0",
+    version="0.4.0",
 )
 
 app.add_middleware(
@@ -63,3 +66,33 @@ def get_point_value(
     Treats +9999 and -9999 as NoData for arrival raster without modifying original file.
     """
     return get_raster_point_value(dataset_id=id, lon=lon, lat=lat)
+
+
+@app.get("/api/rasters/{id}/tiles/{z}/{x}/{y}.png")
+def get_tile(
+    id: str,
+    z: int,
+    x: int,
+    y: int,
+) -> Response:
+    """
+    Web Mercator XYZ tile endpoint for raster visualization.
+    Returns 256x256 PNG with customized color ramp and layer transparency.
+    Out-of-bounds tiles return empty transparent PNGs without 500 errors.
+    """
+    tile_bytes = get_raster_tile(dataset_id=id, z=z, x=x, y=y)
+    return Response(
+        content=tile_bytes,
+        media_type="image/png",
+        headers={"Cache-Control": "public, max-age=3600"},
+    )
+
+
+@app.get("/api/rasters/{id}/legend", response_model=RasterLegendResponse)
+def get_legend(id: str) -> RasterLegendResponse:
+    """
+    Return colormap stops, discrete legend classifications, and value range
+    for the specified raster layer.
+    """
+    return get_raster_legend(dataset_id=id)
+

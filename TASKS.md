@@ -45,20 +45,28 @@ Automated dam-break framework comparing SPH and Delft3D, with inundation, damage
 
 ---
 
-## Phase 4: Hydrodynamic Simulation & Solver Comparison Engine
-- [ ] Near-field SPH modeling interface:
-  - [ ] Define dam breach geometry (trapezoidal / instantaneous / partial collapse parameters).
-  * [ ] Interface with DualSPHysics / SPH solver to simulate 3D free-surface near-field dam-break surge.
-  * [ ] Interpolate particle fields to Eulerian water depth and velocity grids.
-- [ ] Far-field Delft3D-FM (2D SWE) modeling interface:
-  * [ ] Generate flexible computational mesh (unstructured triangular/quadrilateral) for Ghataprabha valley.
-  * [ ] Assign spatially distributed Manning's $n$ bed roughness based on LULC.
-  * [ ] Apply breach inflow hydrograph (from SPH near-field or empirical Froehlich/MacDonald equations).
-  * [ ] Execute 2D hydrodynamic simulation and extract time-series water surface elevation and flow velocities.
-- [ ] Solver Intercomparison & Verification Module:
-  * [ ] Compare peak water depths ($h_{max}$), peak velocities ($v_{max}$), arrival times ($t_{arr}$), and wave front speeds.
-  * [ ] Compute spatial difference maps ($\Delta h = h_{SPH} - h_{Delft3D}$) and mass conservation metrics.
-  * [ ] Quantify computational trade-offs (GPU runtime vs CPU mesh scalability).
+## Phase 4: Raster Tile Rendering, Legends & Interactive GIS Map Viewer [COMPLETED]
+- [x] Integrate `rio-tiler` for XYZ slippy tile serving on registered rasters (`dem`, `depth`, `velocity`, `arrival`).
+- [x] Implement `GET /api/rasters/{id}/tiles/{z}/{x}/{y}.png` returning 256x256 PNGs with caching headers and strict dataset ID whitelisting.
+- [x] Handle outside-extent and out-of-bounds tiles gracefully by returning transparent PNGs without 500 server errors.
+- [x] Implement display transparency rules:
+  - Depth: zero depth (0.0 / dry cells) is transparent.
+  - Velocity: zero velocity (0.0 m/s) is transparent.
+  - Arrival: unflooded cells (+9999.0 and -9999.0) are transparent.
+  - DEM: NoData cells (-9999.0 and NaN) are transparent.
+- [x] Implement `GET /api/rasters/{id}/legend` returning color ramp stops, discrete classification items, and value ranges.
+- [x] Build frontend MapLibre interactive map canvas with OpenStreetMap basemap and attribution.
+- [x] Fit map initial view to Hidkal Dam bounds (`[74.60, 16.12, 74.88, 16.32]`) with quick "Fit Hidkal" button.
+- [x] Add Layer Selector (DEM, Depth, Velocity, Arrival) and Opacity Slider (0% - 100%).
+- [x] Add Dynamic Legend HUD displaying color ramp gradient bar, discrete stop chips, and transparency notices.
+- [x] Add Multi-Raster Point Query Probe on map click querying all four rasters simultaneously and displaying probed values.
+- [x] Prominently display mandatory disclaimer banner: "Unverified sample outputs — not a validated prediction."
+- [x] Add connection status indicator, loading states, error handling, and responsive GIS styling.
+- [x] Build and pass 20 backend pytest unit/integration tests and validate frontend production build (`npm run build`).
+
+---
+
+## Phase 5: Hydrodynamic Simulation & Solver Comparison Engine
 
 ---
 

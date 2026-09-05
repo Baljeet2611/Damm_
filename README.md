@@ -22,13 +22,15 @@ uvicorn app.main:app --reload --port 8000
 - Datasets Catalog: `http://localhost:8000/api/datasets`
 - Raster Metadata: `http://localhost:8000/api/rasters/{id}/metadata`
 - Raster Point Value: `http://localhost:8000/api/rasters/{id}/value?lon={lon}&lat={lat}`
+- Raster XYZ Tiles: `http://localhost:8000/api/rasters/{id}/tiles/{z}/{x}/{y}.png`
+- Raster Legend & Color Ramp: `http://localhost:8000/api/rasters/{id}/legend`
 - Interactive API Docs: `http://localhost:8000/docs`
 
 ### Registered Dataset IDs
 - `dem` -> `data/raw/data_hidkal/hidkal_dem.tif` (Float32 DEM)
-- `depth` -> `data/raw/data_hidkal/hidkal_depth.tif` (Float32 Inundation Depth)
-- `velocity` -> `data/raw/data_hidkal/hidkal_velocity.tif` (Float32 Velocity)
-- `arrival` -> `data/raw/data_hidkal/hidkal_arrival.tif` (Float32 Arrival Time; both `+9999` and `-9999` treated as NoData)
+- `depth` -> `data/raw/data_hidkal/hidkal_depth.tif` (Float32 Inundation Depth; zero is transparent)
+- `velocity` -> `data/raw/data_hidkal/hidkal_velocity.tif` (Float32 Velocity; zero is transparent)
+- `arrival` -> `data/raw/data_hidkal/hidkal_arrival.tif` (Float32 Arrival Time; `+9999` and `-9999` treated as NoData & transparent)
 
 ### 3. Frontend Application (React + Vite + TypeScript)
 ```powershell

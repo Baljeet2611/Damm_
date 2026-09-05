@@ -13,3 +13,4 @@ dependencies:
   - pydantic
   - pytest
   - httpx
+  - rio-tiler
