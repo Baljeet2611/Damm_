@@ -30,6 +30,8 @@ uvicorn app.main:app --reload --port 8000
 - Assets Preliminary Exposure: `http://localhost:8000/api/exposure/assets`
 - Roads Preliminary Exposure: `http://localhost:8000/api/exposure/roads`
 - Exposure Screening Summary: `http://localhost:8000/api/exposure/summary`
+- Damage Scenario Default Config: `http://localhost:8000/api/damage/config`
+- Damage Scenario Estimation: `POST http://localhost:8000/api/damage/estimate`
 
 ### Registered Dataset IDs
 - `dem` -> `data/raw/data_hidkal/hidkal_dem.tif` (Float32 DEM)
@@ -38,6 +40,13 @@ uvicorn app.main:app --reload --port 8000
 - `arrival` -> `data/raw/data_hidkal/hidkal_arrival.tif` (Float32 Arrival Time; `+9999` and `-9999` treated as NoData & transparent)
 - `assets` -> `data/raw/data_hidkal/hidkal_assets.geojson` (513 OSM infrastructure assets)
 - `roads` -> `data/raw/data_hidkal/hidkal_roads.graphml` (3,084 nodes, 8,047 road edges)
+
+### Illustrative Damage Scenario Module (Phase 7)
+- Purely illustrative screening tool: does not represent actual loss, official risk, casualties, or validated predictions.
+- Requires explicit user acknowledgement (`acknowledge_unverified_inputs == true`) before calculation.
+- Editable parameters: currency label, assumed depth unit, category replacement values, piecewise monotonic depth-damage curve, and sensitivity percentage ($\pm X\%$).
+- Piecewise linear interpolation of damage ratios applied to screening-positive asset sampled depths.
+- Roads and human casualties are strictly excluded from monetary valuation.
 
 ### 3. Frontend Application (React + Vite + TypeScript)
 ```powershell

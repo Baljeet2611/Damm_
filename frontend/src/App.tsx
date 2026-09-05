@@ -78,6 +78,59 @@ interface ExposureSummary {
   roads: ExposureDatasetSummary
 }
 
+// Phase 7: Damage Scenario Interfaces
+interface DamageCurvePoint {
+  depth: number
+  damage_ratio: number
+}
+
+interface DamageConfig {
+  assumed_depth_unit: string
+  currency_label: string
+  replacement_values: Record<string, number>
+  depth_damage_curve: DamageCurvePoint[]
+  sensitivity_percentage: number
+  disclaimer: string
+  methodology: string
+}
+
+interface TotalEstimates {
+  base_loss: number
+  low_loss: number
+  high_loss: number
+}
+
+interface AssetCountSummary {
+  total_assets: number
+  assessed_assets: number
+  screening_positive_assets: number
+  not_exposed_assets: number
+  not_assessed_assets: number
+}
+
+interface CategoryDamageResult {
+  total_count: number
+  screening_positive_count: number
+  not_exposed_count: number
+  not_assessed_count: number
+  unit_replacement_value: number
+  base_loss: number
+  low_loss: number
+  high_loss: number
+}
+
+interface DamageScenarioResult {
+  disclaimer: string
+  methodology: string
+  currency_label: string
+  assumed_depth_unit: string
+  sensitivity_percentage: number
+  total_estimates: TotalEstimates
+  asset_counts: AssetCountSummary
+  by_category: Record<string, CategoryDamageResult>
+  warnings: string[]
+}
+
 // Hidkal Dam bounding box [minLon, minLat, maxLon, maxLat]
 const HIDKAL_BOUNDS: [number, number, number, number] = [74.60, 16.12, 74.88, 16.32]
 
@@ -109,7 +162,19 @@ function App() {
   const [showRoads, setShowRoads] = useState<boolean>(true)
   const [exposureSummary, setExposureSummary] = useState<ExposureSummary | null>(null)
   const [summaryLoading, setSummaryLoading] = useState<boolean>(false)
-  const [activeTab, setActiveTab] = useState<'layers' | 'exposure'>('layers')
+  const [activeTab, setActiveTab] = useState<'layers' | 'exposure' | 'damage'>('layers')
+
+  // Phase 7: Damage Scenario State
+  const [damageConfig, setDamageConfig] = useState<DamageConfig | null>(null)
+  const [currencyLabel, setCurrencyLabel] = useState<string>('INR (₹)')
+  const [assumedDepthUnit, setAssumedDepthUnit] = useState<string>('assumed meters (unverified)')
+  const [replacementValues, setReplacementValues] = useState<Record<string, number>>({})
+  const [depthCurve, setDepthCurve] = useState<DamageCurvePoint[]>([])
+  const [sensitivityPercent, setSensitivityPercent] = useState<number>(20.0)
+  const [acknowledgeAssumptions, setAcknowledgeAssumptions] = useState<boolean>(false)
+  const [damageResult, setDamageResult] = useState<DamageScenarioResult | null>(null)
+  const [damageLoading, setDamageLoading] = useState<boolean>(false)
+  const [damageError, setDamageError] = useState<string | null>(null)
 
   const apiBaseUrl = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'
 
@@ -144,6 +209,24 @@ function App() {
       .catch(() => {
         setSummaryLoading(false)
       })
+  }, [apiBaseUrl])
+
+  // Fetch Damage Scenario Defaults
+  useEffect(() => {
+    fetch(`${apiBaseUrl}/api/damage/config`)
+      .then((res) => {
+        if (!res.ok) throw new Error(`HTTP ${res.status}`)
+        return res.json() as Promise<DamageConfig>
+      })
+      .then((data) => {
+        setDamageConfig(data)
+        setCurrencyLabel(data.currency_label)
+        setAssumedDepthUnit(data.assumed_depth_unit)
+        setReplacementValues(data.replacement_values)
+        setDepthCurve(data.depth_damage_curve)
+        setSensitivityPercent(data.sensitivity_percentage)
+      })
+      .catch(() => {})
   }, [apiBaseUrl])
 
   // Fetch legend when active layer changes
@@ -618,6 +701,75 @@ function App() {
     }
   }, [apiBaseUrl])
 
+  // Execute Damage Estimation
+  const handleCalculateDamage = () => {
+    if (!acknowledgeAssumptions) return
+
+    setDamageLoading(true)
+    setDamageError(null)
+
+    const payload = {
+      assumed_depth_unit: assumedDepthUnit,
+      currency_label: currencyLabel,
+      replacement_values: replacementValues,
+      depth_damage_curve: depthCurve,
+      sensitivity_percentage: sensitivityPercent,
+      acknowledge_unverified_inputs: acknowledgeAssumptions,
+    }
+
+    fetch(`${apiBaseUrl}/api/damage/estimate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    })
+      .then(async (res) => {
+        if (!res.ok) {
+          const errData = await res.json().catch(() => ({}))
+          throw new Error(errData.detail || `Server error (HTTP ${res.status})`)
+        }
+        return res.json() as Promise<DamageScenarioResult>
+      })
+      .then((data) => {
+        setDamageResult(data)
+        setDamageLoading(false)
+      })
+      .catch((err) => {
+        setDamageError(err.message || 'Damage calculation failed.')
+        setDamageLoading(false)
+      })
+  }
+
+  const handleResetDamageDefaults = () => {
+    if (!damageConfig) return
+    setCurrencyLabel(damageConfig.currency_label)
+    setAssumedDepthUnit(damageConfig.assumed_depth_unit)
+    setReplacementValues(damageConfig.replacement_values)
+    setDepthCurve(damageConfig.depth_damage_curve)
+    setSensitivityPercent(damageConfig.sensitivity_percentage)
+    setDamageResult(null)
+    setDamageError(null)
+  }
+
+  const handleCurveChange = (index: number, field: 'depth' | 'damage_ratio', val: number) => {
+    const updated = [...depthCurve]
+    updated[index] = { ...updated[index], [field]: val }
+    setDepthCurve(updated)
+  }
+
+  const handleAddCurvePoint = () => {
+    const lastPt = depthCurve[depthCurve.length - 1] || { depth: 0, damage_ratio: 0 }
+    setDepthCurve([...depthCurve, { depth: Number((lastPt.depth + 1.0).toFixed(1)), damage_ratio: Math.min(1.0, Number((lastPt.damage_ratio + 0.1).toFixed(2))) }])
+  }
+
+  const handleRemoveCurvePoint = (index: number) => {
+    if (depthCurve.length <= 2) return
+    setDepthCurve(depthCurve.filter((_, i) => i !== index))
+  }
+
+  const formatCurrency = (val: number) => {
+    return val.toLocaleString('en-IN', { maximumFractionDigits: 0 })
+  }
+
   return (
     <div className="app-layout">
       {/* Top Navigation & Warning Banner */}
@@ -664,17 +816,23 @@ function App() {
                 className={`hud-tab-btn ${activeTab === 'layers' ? 'active' : ''}`}
                 onClick={() => setActiveTab('layers')}
               >
-                🗺️ Layers & Probes
+                🗺️ Layers
               </button>
               <button
                 className={`hud-tab-btn ${activeTab === 'exposure' ? 'active' : ''}`}
                 onClick={() => setActiveTab('exposure')}
               >
-                📊 Exposure Summary
+                📊 Exposure
+              </button>
+              <button
+                className={`hud-tab-btn ${activeTab === 'damage' ? 'active' : ''}`}
+                onClick={() => setActiveTab('damage')}
+              >
+                💰 Damage Scenario
               </button>
             </div>
 
-            {activeTab === 'layers' ? (
+            {activeTab === 'layers' && (
               <>
                 {/* Vector Overlays Toggle Card */}
                 <div className="hud-card vector-controls-card">
@@ -876,7 +1034,7 @@ function App() {
                                   ? `${probe.values.depth.value.toFixed(2)} (unit unverified)`
                                   : '0.00 (unit unverified)'
                                 : probe.values.depth?.is_nodata
-                                ? 'NoData'
+                                ? 'NoData / Dry'
                                 : 'N/A'}
                             </div>
                           </div>
@@ -920,7 +1078,9 @@ function App() {
                   )}
                 </div>
               </>
-            ) : (
+            )}
+
+            {activeTab === 'exposure' && (
               /* Exposure Summary Card */
               <div className="hud-card exposure-summary-card">
                 <div className="hud-card-header">
@@ -1032,6 +1192,251 @@ function App() {
                 ) : (
                   <div className="legend-error">Exposure summary unavailable.</div>
                 )}
+              </div>
+            )}
+
+            {activeTab === 'damage' && (
+              /* Phase 7: Illustrative Damage Scenario Panel */
+              <div className="hud-card damage-card">
+                <div className="hud-card-header">
+                  <h3>Illustrative Damage Scenario</h3>
+                  <button className="btn-fit" onClick={handleResetDamageDefaults} title="Reset to default assumptions">
+                    ↺ Reset
+                  </button>
+                </div>
+
+                <div className="damage-body">
+                  {/* Prominent Mandatory Disclaimer Banner */}
+                  <div className="damage-disclaimer-banner">
+                    <span className="disclaimer-icon">⚠️</span>
+                    <p className="disclaimer-text">
+                      <strong>Illustrative scenario only — not an official loss estimate or emergency decision.</strong>
+                      <br />
+                      Calculations use unverified sample depths and user-configured replacement assumptions. Road network and casualties are excluded.
+                    </p>
+                  </div>
+
+                  {/* User Acknowledgement Box */}
+                  <div className="acknowledgement-box">
+                    <label className="ack-label">
+                      <input
+                        type="checkbox"
+                        checked={acknowledgeAssumptions}
+                        onChange={(e) => setAcknowledgeAssumptions(e.target.checked)}
+                        className="ack-checkbox"
+                      />
+                      <span className="ack-text">
+                        I acknowledge that the rasters, units, replacement values, and damage curves are <strong>unverified illustrative assumptions</strong>. I agree these results cannot be used as official risk predictions.
+                      </span>
+                    </label>
+                  </div>
+
+                  {/* Editable Configuration Controls */}
+                  <div className="damage-config-section">
+                    <h4 className="config-section-title">⚙️ Scenario Parameters</h4>
+
+                    <div className="config-row-grid">
+                      <div className="config-field">
+                        <label>Currency Label</label>
+                        <input
+                          type="text"
+                          value={currencyLabel}
+                          onChange={(e) => setCurrencyLabel(e.target.value)}
+                          className="config-input"
+                        />
+                      </div>
+                      <div className="config-field">
+                        <label>Assumed Depth Unit</label>
+                        <input
+                          type="text"
+                          value={assumedDepthUnit}
+                          onChange={(e) => setAssumedDepthUnit(e.target.value)}
+                          className="config-input"
+                        />
+                      </div>
+                      <div className="config-field config-field-full">
+                        <label>Sensitivity (±%)</label>
+                        <input
+                          type="number"
+                          min="0"
+                          max="100"
+                          step="5"
+                          value={sensitivityPercent}
+                          onChange={(e) => setSensitivityPercent(Math.max(0, Math.min(100, parseFloat(e.target.value) || 0)))}
+                          className="config-input font-mono"
+                        />
+                      </div>
+                    </div>
+
+                    {/* Replacement Values per Category */}
+                    <div className="config-sub-section">
+                      <h5 className="sub-title">Unit Replacement Value per Asset</h5>
+                      <div className="replacement-grid">
+                        {Object.entries(replacementValues).map(([cat, val]) => (
+                          <div key={cat} className="replacement-item">
+                            <span className="rep-cat-name">{cat.charAt(0).toUpperCase() + cat.slice(1)}</span>
+                            <div className="rep-input-wrap">
+                              <span className="rep-currency-prefix">{currencyLabel.split(' ')[0]}</span>
+                              <input
+                                type="number"
+                                min="0"
+                                step="100000"
+                                value={val}
+                                onChange={(e) => {
+                                  const num = Math.max(0, parseFloat(e.target.value) || 0)
+                                  setReplacementValues({ ...replacementValues, [cat]: num })
+                                }}
+                                className="config-input font-mono rep-input"
+                              />
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* Piecewise Depth-Damage Curve Table */}
+                    <div className="config-sub-section">
+                      <div className="curve-header-row">
+                        <h5 className="sub-title">Depth–Damage Curve (Piecewise Monotonic)</h5>
+                        <button className="btn-add-pt" onClick={handleAddCurvePoint}>+ Add Point</button>
+                      </div>
+                      <table className="curve-table">
+                        <thead>
+                          <tr>
+                            <th>Depth ({assumedDepthUnit.split(' ')[0]})</th>
+                            <th>Damage Ratio (0.0 - 1.0)</th>
+                            <th className="text-right">Action</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {depthCurve.map((pt, idx) => (
+                            <tr key={idx}>
+                              <td>
+                                <input
+                                  type="number"
+                                  min="0"
+                                  step="0.5"
+                                  value={pt.depth}
+                                  onChange={(e) => handleCurveChange(idx, 'depth', parseFloat(e.target.value) || 0)}
+                                  className="curve-input font-mono"
+                                />
+                              </td>
+                              <td>
+                                <input
+                                  type="number"
+                                  min="0"
+                                  max="1"
+                                  step="0.05"
+                                  value={pt.damage_ratio}
+                                  onChange={(e) => handleCurveChange(idx, 'damage_ratio', Math.max(0, Math.min(1, parseFloat(e.target.value) || 0)))}
+                                  className="curve-input font-mono"
+                                />
+                              </td>
+                              <td className="text-right">
+                                {depthCurve.length > 2 && (
+                                  <button className="btn-remove-pt" onClick={() => handleRemoveCurvePoint(idx)}>✕</button>
+                                )}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+
+                    {/* Calculate Button */}
+                    <div className="calculate-action-row">
+                      <button
+                        className={`btn-calculate ${!acknowledgeAssumptions ? 'disabled' : ''}`}
+                        disabled={!acknowledgeAssumptions || damageLoading}
+                        onClick={handleCalculateDamage}
+                      >
+                        {damageLoading ? (
+                          <>
+                            <span className="spinner"></span> Calculating Scenario...
+                          </>
+                        ) : (
+                          '⚡ Calculate Illustrative Loss'
+                        )}
+                      </button>
+                      {!acknowledgeAssumptions && (
+                        <span className="ack-required-hint">⚠️ Check acknowledgement above to enable calculation.</span>
+                      )}
+                    </div>
+
+                    {damageError && <div className="damage-error-box">{damageError}</div>}
+                  </div>
+
+                  {/* Results Section */}
+                  {damageResult && (
+                    <div className="damage-results-section">
+                      <h4 className="results-title">📊 Scenario Estimation Results</h4>
+
+                      {/* Low / Base / High KPI Grid */}
+                      <div className="damage-kpi-grid">
+                        <div className="damage-kpi-card kpi-low">
+                          <span className="damage-kpi-label">Low Estimate (-{damageResult.sensitivity_percentage}%)</span>
+                          <span className="damage-kpi-val font-mono">{currencyLabel.split(' ')[0]} {formatCurrency(damageResult.total_estimates.low_loss)}</span>
+                        </div>
+
+                        <div className="damage-kpi-card kpi-base">
+                          <span className="damage-kpi-label">Base Scenario Estimate</span>
+                          <span className="damage-kpi-val font-mono text-danger">{currencyLabel.split(' ')[0]} {formatCurrency(damageResult.total_estimates.base_loss)}</span>
+                          <span className="damage-kpi-sub">from {damageResult.asset_counts.screening_positive_assets} positive assets</span>
+                        </div>
+
+                        <div className="damage-kpi-card kpi-high">
+                          <span className="damage-kpi-label">High Estimate (+{damageResult.sensitivity_percentage}%)</span>
+                          <span className="damage-kpi-val font-mono">{currencyLabel.split(' ')[0]} {formatCurrency(damageResult.total_estimates.high_loss)}</span>
+                        </div>
+                      </div>
+
+                      {/* Category Breakdown Table */}
+                      <div className="breakdown-section">
+                        <h5 className="sub-title">Category Loss Breakdown</h5>
+                        <table className="breakdown-table damage-table">
+                          <thead>
+                            <tr>
+                              <th>Category</th>
+                              <th className="text-right">Positive</th>
+                              <th className="text-right">Unit Value</th>
+                              <th className="text-right">Base Loss</th>
+                              <th className="text-right">Range (±{damageResult.sensitivity_percentage}%)</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {Object.entries(damageResult.by_category).map(([cat, res]) => (
+                              <tr key={cat}>
+                                <td className="cat-name-cell">
+                                  <span className="cat-dot" />
+                                  <span>{cat.charAt(0).toUpperCase() + cat.slice(1)}</span>
+                                </td>
+                                <td className="text-right font-mono">{res.screening_positive_count} / {res.total_count}</td>
+                                <td className="text-right font-mono text-muted">{formatCurrency(res.unit_replacement_value)}</td>
+                                <td className={`text-right font-mono ${res.base_loss > 0 ? 'text-danger font-bold' : ''}`}>
+                                  {formatCurrency(res.base_loss)}
+                                </td>
+                                <td className="text-right font-mono text-dim">
+                                  {formatCurrency(res.low_loss)} – {formatCurrency(res.high_loss)}
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+
+                      {/* Methodology and Warnings */}
+                      <div className="damage-notes-card">
+                        <span className="note-title">ℹ️ Assumptions & Scope</span>
+                        <p className="note-text">{damageResult.methodology}</p>
+                        <ul className="warnings-list">
+                          {damageResult.warnings.map((w, i) => (
+                            <li key={i}>{w}</li>
+                          ))}
+                        </ul>
+                      </div>
+                    </div>
+                  )}
+                </div>
               </div>
             )}
           </aside>

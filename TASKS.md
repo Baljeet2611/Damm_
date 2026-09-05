@@ -89,7 +89,27 @@ Automated dam-break framework comparing SPH and Delft3D, with inundation, damage
 
 ---
 
-## Phase 6: GIS & Multi-Format Export Pipeline
+## Phase 7: Transparent Illustrative Damage-Scenario Estimation [COMPLETED]
+- [x] Backend Endpoints:
+  - [x] `GET /api/damage/config`: Returns default configuration, assumed depth unit, currency label, replacement values per category, depth-damage curve points, sensitivity percentage, and methodology assumptions.
+  - [x] `POST /api/damage/estimate`: Computes category and total illustrative loss with low/base/high sensitivity estimates based on piecewise linear interpolation of sampled depth on screening-positive assets.
+- [x] Strict Validation & Safeguards:
+  - [x] Reject calculation with HTTP 422 if `acknowledge_unverified_inputs` is not `True`.
+  - [x] Validate replacement values are non-negative.
+  - [x] Validate depth-damage curve is monotonic and strictly ascending in depth with ratios between 0.0 and 1.0 ($\ge 2$ points).
+  - [x] Validate sensitivity percentage is between 0% and 100%.
+  - [x] Exclude road network and human populations/casualties strictly from monetary valuation.
+- [x] Frontend Damage Scenario Panel:
+  - [x] Dedicated "Illustrative Damage Scenario" tab in HUD alongside Layers and Exposure Screening.
+  - [x] Prominent disclaimer banner: *"Illustrative scenario only — not an official loss estimate or emergency decision."*
+  - [x] Calculation disabled until explicit acknowledgement checkbox is checked by user.
+  - [x] Full interactive editing: currency label, assumed depth unit, sensitivity %, replacement value per category, dynamic depth-damage curve table (add/remove points).
+  - [x] Results display: Low / Base / High KPI cards with sensitivity bounds, category loss breakdown table, screening asset counts, and transparent methodology explanation.
+- [x] Complete test suite: 35 backend pytest tests (6 dedicated damage scenario tests) and verified frontend build.
+
+---
+
+## Phase 8: GIS & Multi-Format Export Pipeline
 - [ ] Automated spatial layer exporter:
   * [ ] Export hazard zones and peak depths to ESRI Shapefile (`.shp`, `.shx`, `.dbf`, `.prj`).
   * [ ] Export styled 3D hazard polygons and time-stamped wavefronts to Google Earth KML/KMZ (`.kml`, `.kmz`).
@@ -99,7 +119,7 @@ Automated dam-break framework comparing SPH and Delft3D, with inundation, damage
 
 ---
 
-## Phase 7: Earth Observation & GEE Flood Validation Module
+## Phase 9: Earth Observation & GEE Flood Validation Module
 - [ ] Google Earth Engine (GEE) integration:
   * [ ] Authenticate and query Sentinel-1 SAR GRD collections (C-band VV/VH polarizations) for pre-flood and post-flood dates.
   * [ ] Apply speckle filtering (Lee/Refined Lee) and radiometric terrain correction.
@@ -111,20 +131,18 @@ Automated dam-break framework comparing SPH and Delft3D, with inundation, damage
 
 ---
 
-## Phase 8: Interactive GUI, 3D Terrain & Decision Support Dashboard
+## Phase 10: 3D Terrain & Decision Support Dashboard
 - [ ] Interactive 2D Map View:
-  * [ ] MapLibre GL / Leaflet map canvas with multi-layer overlays (DEM, depth, velocity, arrival, OSM assets, road status).
   * [ ] Temporal playback scrubber showing flood wave propagation over time.
 - [ ] 3D WebGL Terrain Viewer:
   * [ ] Adapt and integrate Three.js terrain rendering from `new.html` to load real Hidkal DEM and flood depth surfaces.
   * [ ] Dynamic color ramp shading, water surface animation, and interactive orbit controls.
 - [ ] Scenario Configuration & Decision Dashboard:
   * [ ] Dam breach parameter configuration panel (breach width, failure duration, initial reservoir level).
-  * [ ] Real-time KPIs: inundated area ($\text{km}^2$), vulnerable population count, severed road length ($\text{km}$), estimated economic loss.
   * [ ] One-click export button for SHP, KML, and executive briefing reports.
 
 ---
 
-## Phase 9: Benchmarking, Validation & Final Packaging
+## Phase 11: Benchmarking, Validation & Final Packaging
 - [ ] End-to-end integration testing on Hidkal case study.
 - [ ] Comprehensive documentation, API guides, and demonstration video / walkthrough.

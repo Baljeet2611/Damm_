@@ -8,6 +8,9 @@ from app.schemas import (
     RasterPointValueResponse,
     RasterLegendResponse,
     ExposureSummaryResponse,
+    DamageConfigResponse,
+    DamageScenarioRequest,
+    DamageScenarioResponse,
 )
 from app.raster_service import (
     list_datasets,
@@ -23,11 +26,15 @@ from app.vector_service import (
     get_exposure_roads,
     get_exposure_summary,
 )
+from app.damage_service import (
+    get_default_damage_config,
+    compute_damage_scenario,
+)
 
 app = FastAPI(
     title="Dam Break Decision Support System API",
-    description="Automated dam-break hydrodynamic inspection, vector overlays, and preliminary inundation exposure analysis API",
-    version="0.6.0",
+    description="Automated dam-break hydrodynamic inspection, vector overlays, preliminary exposure screening, and illustrative damage estimation API",
+    version="0.7.0",
 )
 
 app.add_middleware(
@@ -156,3 +163,25 @@ def get_exposure_summary_endpoint() -> ExposureSummaryResponse:
     Includes scientific disclaimer on unverified sample rasters.
     """
     return get_exposure_summary()
+
+
+# Phase 7: Illustrative Damage Scenario Endpoints
+
+@app.get("/api/damage/config", response_model=DamageConfigResponse)
+def get_damage_config() -> DamageConfigResponse:
+    """
+    Return default editable illustrative damage scenario configuration
+    including assumed depth unit, currency label, replacement values per asset category,
+    depth-damage piecewise curve, sensitivity percentage, and disclaimer.
+    """
+    return get_default_damage_config()
+
+
+@app.post("/api/damage/estimate", response_model=DamageScenarioResponse)
+def post_damage_estimate(request: DamageScenarioRequest) -> DamageScenarioResponse:
+    """
+    Calculate transparent illustrative damage scenario estimation based on
+    Phase 6 preliminary asset screening depths and user-acknowledged input assumptions.
+    Rejects calculation with 422 if acknowledge_unverified_inputs is False.
+    """
+    return compute_damage_scenario(request)
