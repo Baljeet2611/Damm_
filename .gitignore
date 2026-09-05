@@ -57,6 +57,8 @@ data/raw/
 # Processed & Interim Data / Simulation Runs / Exports
 data/processed/
 data/interim/
+data/runtime/
+runtime/
 outputs/
 exports/
 simulations/

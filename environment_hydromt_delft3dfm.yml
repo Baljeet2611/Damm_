@@ -1,0 +1,25 @@
+# Optional standalone Conda environment specification for HydroMT-Delft3D FM model building.
+# Keep this separate from the core 'sih-app' environment to avoid dependency conflicts.
+# Usage:
+#   conda env create -f environment_hydromt_delft3dfm.yml
+#   conda activate hydromt-delft3dfm
+
+name: hydromt-delft3dfm
+channels:
+  - conda-forge
+  - nodefaults
+dependencies:
+  - python=3.10
+  - pip
+  - hydromt>=0.9.0
+  - hydromt_delft3dfm>=0.2.0
+  - geopandas
+  - rasterio
+  - xarray
+  - rioxarray
+  - netcdf4
+  - shapely
+  - pyflwdir
+  - pydantic
+  - pip:
+    - # Optional additional plugin dependencies can be installed here

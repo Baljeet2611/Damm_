@@ -207,3 +207,133 @@ class ExportRequest(BaseModel):
     route_request: Optional[RouteScreeningRequest] = Field(default=None, description="Route screening parameters if layer is route")
 
 
+# Phase 10: Scenario Management Schemas
+
+class ScenarioAssumption(BaseModel):
+    parameter: str
+    value: Any
+    unit: str
+    status: str = Field(
+        default="unverified_illustrative",
+        description="Verification status: unverified_illustrative, unverified_datum, estimated, verified"
+    )
+    note: str = ""
+
+
+class ScenarioCreateRequest(BaseModel):
+    name: str = Field(..., min_length=1, max_length=120, description="Scenario title")
+    description: Optional[str] = Field(default="", max_length=1000)
+    site: str = Field(default="Hidkal Dam, Belagavi, Karnataka", max_length=200)
+    dem_dataset_id: str = Field(default="dem", description="Referenced elevation dataset ID from catalog")
+    crs: str = Field(default="EPSG:4326", description="Horizontal coordinate reference system")
+    breach_width_m: float = Field(default=100.0, ge=1.0, le=5000.0, description="Assumed final breach width in meters")
+    breach_formation_time_hr: float = Field(default=2.0, ge=0.01, le=100.0, description="Assumed breach formation time in hours")
+    assumed_reservoir_level_m: float = Field(default=660.0, ge=0.0, le=5000.0, description="Assumed initial reservoir water level in meters")
+    upstream_boundary_desc: str = Field(default="Dam breach failure hydrograph (illustrative)", max_length=300)
+    downstream_boundary_desc: str = Field(default="Free water-level slope outflow", max_length=300)
+    manning_roughness: float = Field(default=0.035, ge=0.001, le=1.0, description="Assumed uniform Manning bed friction coefficient n")
+    mesh_resolution_m: float = Field(default=50.0, ge=1.0, le=1000.0, description="Target flexible mesh cell size in meters")
+    simulation_duration_hr: float = Field(default=24.0, ge=0.1, le=720.0, description="Total simulation duration in hours")
+    timestep_sec: float = Field(default=1.0, ge=0.001, le=3600.0, description="Target computational time step in seconds")
+    assumptions: Optional[List[ScenarioAssumption]] = None
+
+
+class ScenarioUpdateRequest(BaseModel):
+    name: Optional[str] = Field(default=None, min_length=1, max_length=120)
+    description: Optional[str] = Field(default=None, max_length=1000)
+    site: Optional[str] = Field(default=None, max_length=200)
+    dem_dataset_id: Optional[str] = None
+    crs: Optional[str] = None
+    breach_width_m: Optional[float] = Field(default=None, ge=1.0, le=5000.0)
+    breach_formation_time_hr: Optional[float] = Field(default=None, ge=0.01, le=100.0)
+    assumed_reservoir_level_m: Optional[float] = Field(default=None, ge=0.0, le=5000.0)
+    upstream_boundary_desc: Optional[str] = Field(default=None, max_length=300)
+    downstream_boundary_desc: Optional[str] = Field(default=None, max_length=300)
+    manning_roughness: Optional[float] = Field(default=None, ge=0.001, le=1.0)
+    mesh_resolution_m: Optional[float] = Field(default=None, ge=1.0, le=1000.0)
+    simulation_duration_hr: Optional[float] = Field(default=None, ge=0.1, le=720.0)
+    timestep_sec: Optional[float] = Field(default=None, ge=0.001, le=3600.0)
+    assumptions: Optional[List[ScenarioAssumption]] = None
+
+
+class ScenarioResponse(BaseModel):
+    id: str = Field(..., description="UUID v4 scenario identifier")
+    name: str
+    description: str
+    site: str
+    dem_dataset_id: str
+    crs: str
+    breach_width_m: float
+    breach_formation_time_hr: float
+    assumed_reservoir_level_m: float
+    upstream_boundary_desc: str
+    downstream_boundary_desc: str
+    manning_roughness: float
+    mesh_resolution_m: float
+    simulation_duration_hr: float
+    timestep_sec: float
+    assumptions: List[ScenarioAssumption]
+    created_at: str
+    updated_at: str
+    revision: int
+    archived: bool
+    status: str = Field(
+        ...,
+        description="Scenario status: draft, input_review_required, build_ready, package_built, engine_unavailable, running, completed, failed"
+    )
+    validation_notes: List[str]
+    snapshot_checksum: Optional[str] = None
+
+
+# Phase 11: Delft3D Capabilities & Simulation Schemas
+
+class SimulationCapabilitiesResponse(BaseModel):
+    hydromt_available: bool
+    hydromt_version: Optional[str] = None
+    hydromt_path: Optional[str] = None
+    dflowfm_available: bool
+    execution_enabled: bool
+    engine_executable: Optional[str] = None
+    disclaimer: str
+    guidance: str
+
+
+class ModelPackageResponse(BaseModel):
+    scenario_id: str
+    revision: int
+    package_filename: str
+    package_size_bytes: int
+    created_at: str
+    manifest_checksum: str
+    status: str
+    download_url: str
+    notes: List[str]
+
+
+class SimulationRunRequest(BaseModel):
+    custom_notes: Optional[str] = ""
+
+
+class SimulationRunResponse(BaseModel):
+    run_id: str
+    scenario_id: str
+    scenario_name: str
+    revision: int
+    status: str = Field(..., description="Status: running, completed, failed, engine_unavailable")
+    started_at: str
+    completed_at: Optional[str] = None
+    duration_seconds: Optional[float] = None
+    exit_code: Optional[int] = None
+    log_url: str
+    notes: List[str]
+
+
+class SimulationLogResponse(BaseModel):
+    run_id: str
+    scenario_id: str
+    status: str
+    stdout: str
+    stderr: str
+
+
+

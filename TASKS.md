@@ -155,7 +155,43 @@ Automated dam-break framework comparing SPH and Delft3D, with inundation, damage
 
 ---
 
-## Phase 10: Earth Observation & GEE Flood Validation Module
+## Phase 10: Persistent Scenario Management & Immutable Snapshots [COMPLETED]
+- [x] Backend Scenario Storage Engine (`backend/app/scenario_storage.py`):
+  - [x] Persistent JSON storage in dedicated runtime directory (`SIH_RUNTIME_DIR`), secured via UUID v4 validation and atomic tempfile replacement.
+  - [x] Parametric fields: name, description, site, DEM dataset ID, CRS, breach width (m), breach formation time (hr), pool level (m), boundary descriptors, Manning's $n$, mesh cell size (m), duration (hr), timestep (s).
+  - [x] Assumption verification tracking: Explicit unit tags and status indicators (`unverified_illustrative`, `unverified_datum`, `estimated`, `verified`).
+  - [x] Scientific validation separation: Distinguishes schema validity from verified physics; unverified inputs remain flagged as `input_review_required`.
+  - [x] Immutable snapshots: Computes deterministic SHA-256 digests over configuration and referenced input datasets (`hidkal_dem.tif`).
+  - [x] Lifecycle endpoints: Create, list, get, update (auto-increments revision), clone, archive, and unarchive (non-destructive).
+- [x] Frontend Scenario Manager (`frontend/src/App.tsx`, `App.css`):
+  - [x] Dedicated "🌊 Scenarios" tab in HUD panel.
+  - [x] Scenario creation and editing form with assumption status tags and unit hints.
+  - [x] Scenario cards with revision badges, quick metrics, SHA-256 fingerprint, and action buttons (Edit, Clone, Archive, Build Package, Run).
+  - [x] Scientific validation checklist card highlighting missing prerequisites.
+- [x] Test suite: Comprehensive unit tests (`backend/tests/test_scenario_api.py`) covering CRUD, atomic persistence, revision increments, traversal rejection, and clone/archive workflows.
+
+---
+
+## Phase 11: Honest Delft3D FM Integration & Gated Execution Boundary [COMPLETED]
+- [x] Backend Simulation & Capabilities Service (`backend/app/simulation_service.py`, `app/main.py`):
+  - [x] Capability discovery: `GET /api/simulation/capabilities` detects local HydroMT-Delft3D FM module and D-Flow FM/DIMR solver binary.
+  - [x] Clean environment isolation: Documented `environment_hydromt_delft3dfm.yml` for optional standalone HydroMT model builder environment without modifying `sih-app`.
+  - [x] Draft model package builder: `POST /api/scenarios/{id}/build-package` generates downloadable ZIP package containing immutable `manifest.json`, dataset SHA-256 hashes, draft HydroMT/D-Flow FM configuration templates (`.ini`, `.yaml`), folder hierarchy, and honest `README_REQUIREMENTS.txt`.
+  - [x] Package download endpoint: `GET /api/scenarios/{id}/download-package`.
+  - [x] Gated simulation runner: `POST /api/scenarios/{id}/run` is strictly disabled by default (`ENABLE_DFLOWFM_EXECUTION=false`). Rejects unconfigured executions with HTTP 409 Conflict (`engine_unavailable`). Never fabricates simulation results.
+  - [x] Safe subprocess execution: Argument list invocation (`shell=False`), fixed working directory, timeout handling, and stdout/stderr log capture.
+  - [x] Historical run tracking: `GET /api/runs`, `GET /api/runs/{run_id}`, and `GET /api/runs/{run_id}/logs`.
+- [x] Frontend Capabilities & Simulation Panel:
+  - [x] Live capability status badges for HydroMT Builder and D-Flow FM Engine.
+  - [x] Collapsible setup and environment configuration guide.
+  - [x] "📦 Build Package" action generating draft package ZIP with manifest checksum notification.
+  - [x] Gated "🚀 Run D-Flow FM" button with explanatory disabled state and error messaging.
+  - [x] Simulation execution history table with log viewer modal (stdout/stderr inspection).
+- [x] Test suite: Comprehensive unit and mock integration tests (`backend/tests/test_simulation_api.py`) verifying capabilities, package contents, 409 gating, mock subprocess success/failure/timeout, and log retrieval.
+
+---
+
+## Phase 12: Earth Observation & GEE Flood Validation Module [NEXT]
 - [ ] Google Earth Engine (GEE) integration:
   * [ ] Authenticate and query Sentinel-1 SAR GRD collections (C-band VV/VH polarizations) for pre-flood and post-flood dates.
   * [ ] Apply speckle filtering (Lee/Refined Lee) and radiometric terrain correction.
@@ -167,7 +203,7 @@ Automated dam-break framework comparing SPH and Delft3D, with inundation, damage
 
 ---
 
-## Phase 11: 3D Terrain & Decision Support Dashboard
+## Phase 13: 3D Terrain & Decision Support Dashboard
 - [ ] Interactive 2D Map View:
   * [ ] Temporal playback scrubber showing flood wave propagation over time.
 - [ ] 3D WebGL Terrain Viewer:
@@ -177,9 +213,4 @@ Automated dam-break framework comparing SPH and Delft3D, with inundation, damage
   * [ ] Dam breach parameter configuration panel (breach width, failure duration, initial reservoir level).
   * [ ] One-click export button for SHP, KML, and executive briefing reports.
 
----
-
-## Phase 12: Benchmarking, Validation & Final Packaging
-- [ ] End-to-end integration testing on Hidkal case study.
-- [ ] Comprehensive documentation, API guides, and demonstration video / walkthrough.
 

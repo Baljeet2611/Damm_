@@ -35,6 +35,12 @@ uvicorn app.main:app --reload --port 8000
 - Route Screening: `POST http://localhost:8000/api/routes/screening`
 - Geospatial Layer Export: `GET http://localhost:8000/api/export/{layer}?format={format}&exposure_filter={filter}` (`assets`, `roads`)
 - Screened Route Export: `POST http://localhost:8000/api/export/route` (or `POST http://localhost:8000/api/export`)
+- Scenarios Management: `GET / POST http://localhost:8000/api/scenarios` (Clone, Archive, Update)
+- Simulation Capabilities: `GET http://localhost:8000/api/simulation/capabilities`
+- Delft3D Draft Package Build: `POST http://localhost:8000/api/scenarios/{id}/build-package`
+- Delft3D Draft Package Download: `GET http://localhost:8000/api/scenarios/{id}/download-package`
+- Simulation Execution: `POST http://localhost:8000/api/scenarios/{id}/run` (Gated; requires engine)
+- Simulation Runs History & Logs: `GET http://localhost:8000/api/runs`, `GET http://localhost:8000/api/runs/{run_id}/logs`
 
 ### Registered Dataset IDs
 - `dem` -> `data/raw/data_hidkal/hidkal_dem.tif` (Float32 DEM)
@@ -44,20 +50,18 @@ uvicorn app.main:app --reload --port 8000
 - `assets` -> `data/raw/data_hidkal/hidkal_assets.geojson` (513 OSM infrastructure assets)
 - `roads` -> `data/raw/data_hidkal/hidkal_roads.graphml` (3,084 nodes, 8,047 road edges)
 
-### Road Network Route Screening Module (Phase 8)
-- Dijkstra shortest path routing over directed MultiDiGraph topology weighted by geodesic edge length in meters.
-- Snapping to nearest road network nodes via spherical Haversine distance with configurable threshold (`max_snap_distance_meters`, default 5000 m). Rejects points beyond threshold with HTTP 422.
-- Automatically excludes screening-positive road segments (`exposed == true`) when `avoid_screening_positive` is enabled.
-- Reconstructs continuous LineString route geometries in exact sequence and direction of travel.
-- Prominently labeled with mandatory screening disclaimer ("Screening route only — road closures, bridges, carrying capacity, and live accessibility are not validated").
+### Scenario Management & Snapshot Module (Phase 10)
+- Persistent local scenario storage under runtime directory (`SIH_RUNTIME_DIR`), secured against filesystem traversal via UUID v4 validation and atomic JSON replacement.
+- Parametric modeling fields: breach geometry (width, formation time), reservoir pool level, boundary descriptors, Manning friction $n$, flexible mesh cell size, run duration, and computational timestep.
+- Distinct scientific validation: Separates schema validity from verified physics; unverified inputs remain flagged as `input_review_required`.
+- Immutable snapshots: Computes deterministic SHA-256 digests over configuration parameters and referenced input datasets.
+- Revision history and non-destructive archiving.
 
-### Geospatial Multi-Format Exports Module (Phase 9)
-- Multi-format support: **GeoJSON** (`.geojson`), **Google Earth KML** (`.kml`), and **ESRI Shapefile ZIP** (`.zip`).
-- Strict layer and format whitelisting (`assets`, `roads`, `route`).
-- Exposure status filtering: `all`, `screening_positive`, `not_exposed`, `not_assessed`.
-- Automatic partitioning of mixed geometry types into separated `_points.shp`, `_lines.shp`, and `_polygons.shp` shapefile bundles.
-- Includes complete shapefile component sets (`.shp`, `.shx`, `.dbf`, `.prj`, `.cpg`) and `README_METADATA.txt` detailing column mappings, `EPSG:4326` CRS, and scientific disclaimers.
-- In-memory ZIP buffer creation prevents premature file deletion and race conditions during streaming responses.
+### Delft3D FM Integration & Gated Execution Boundary (Phase 11)
+- Capability discovery: Detects local HydroMT-Delft3D FM and D-Flow FM solver binary availability.
+- Clean environment recipe: Standalone `environment_hydromt_delft3dfm.yml` specification for isolated HydroMT model setup without modifying the core app environment.
+- Draft model package generator: Generates downloadable ZIP bundle containing immutable `manifest.json`, dataset SHA-256 hashes, draft HydroMT/D-Flow FM configuration templates (`.ini`, `.yaml`), folder hierarchy, and `README_REQUIREMENTS.txt` detailing missing real-world inputs.
+- Gated simulation runner: Execution is strictly disabled by default (`ENABLE_DFLOWFM_EXECUTION=false`) and requires server-configured binary paths. Rejects unconfigured runs with HTTP 409 Conflict (`engine_unavailable`). Never fabricates simulation results.
 
 
 ### 3. Frontend Application (React + Vite + TypeScript)

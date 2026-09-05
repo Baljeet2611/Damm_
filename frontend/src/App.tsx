@@ -151,6 +151,74 @@ interface RouteScreeningResult {
   warnings: string[]
 }
 
+// Phase 10 & 11: Scenario Management & Simulation Interfaces
+interface ScenarioAssumption {
+  parameter: string
+  value: any
+  unit: string
+  status: string
+  note: string
+}
+
+interface ScenarioItem {
+  id: string
+  name: string
+  description: string
+  site: string
+  dem_dataset_id: string
+  crs: string
+  breach_width_m: number
+  breach_formation_time_hr: number
+  assumed_reservoir_level_m: number
+  upstream_boundary_desc: string
+  downstream_boundary_desc: string
+  manning_roughness: number
+  mesh_resolution_m: number
+  simulation_duration_hr: number
+  timestep_sec: number
+  assumptions: ScenarioAssumption[]
+  created_at: string
+  updated_at: string
+  revision: number
+  archived: boolean
+  status: string
+  validation_notes: string[]
+  snapshot_checksum?: string
+}
+
+interface SimulationCapabilities {
+  hydromt_available: boolean
+  hydromt_version: string | null
+  hydromt_path: string | null
+  dflowfm_available: boolean
+  execution_enabled: boolean
+  engine_executable: string | null
+  disclaimer: string
+  guidance: string
+}
+
+interface SimulationRunItem {
+  run_id: string
+  scenario_id: string
+  scenario_name: string
+  revision: number
+  status: string
+  started_at: string
+  completed_at?: string
+  duration_seconds?: number
+  exit_code?: number
+  log_url: string
+  notes: string[]
+}
+
+interface SimulationLogs {
+  run_id: string
+  scenario_id: string
+  status: string
+  stdout: string
+  stderr: string
+}
+
 // Hidkal Dam bounding box [minLon, minLat, maxLon, maxLat]
 const HIDKAL_BOUNDS: [number, number, number, number] = [74.60, 16.12, 74.88, 16.32]
 
@@ -186,7 +254,42 @@ function App() {
   const [showRoads, setShowRoads] = useState<boolean>(true)
   const [exposureSummary, setExposureSummary] = useState<ExposureSummary | null>(null)
   const [summaryLoading, setSummaryLoading] = useState<boolean>(false)
-  const [activeTab, setActiveTab] = useState<'layers' | 'exposure' | 'damage' | 'route' | 'export'>('layers')
+  const [activeTab, setActiveTab] = useState<'layers' | 'exposure' | 'damage' | 'route' | 'export' | 'scenarios'>('layers')
+
+  // Phase 10 & 11: Scenario Management & Simulation State
+  const [capabilities, setCapabilities] = useState<SimulationCapabilities | null>(null)
+  const [scenarios, setScenarios] = useState<ScenarioItem[]>([])
+  const [scenariosLoading, setScenariosLoading] = useState<boolean>(false)
+  const [scenarioError, setScenarioError] = useState<string | null>(null)
+  const [includeArchived, setIncludeArchived] = useState<boolean>(false)
+  const [selectedScenarioId, setSelectedScenarioId] = useState<string | null>(null)
+  const [isEditingScenario, setIsEditingScenario] = useState<boolean>(false)
+  const [isCreatingScenario, setIsCreatingScenario] = useState<boolean>(false)
+  const [packageBuilding, setPackageBuilding] = useState<boolean>(false)
+  const [packageSuccessMsg, setPackageSuccessMsg] = useState<string | null>(null)
+  const [runs, setRuns] = useState<SimulationRunItem[]>([])
+  const [runsLoading, setRunsLoading] = useState<boolean>(false)
+  const [runLogsModal, setRunLogsModal] = useState<SimulationLogs | null>(null)
+  const [runExecuting, setRunExecuting] = useState<boolean>(false)
+  const [runError, setRunError] = useState<string | null>(null)
+  const [showSetupGuide, setShowSetupGuide] = useState<boolean>(false)
+
+  const [scenarioForm, setScenarioForm] = useState({
+    name: '',
+    description: '',
+    site: 'Hidkal Dam, Belagavi, Karnataka',
+    dem_dataset_id: 'dem',
+    crs: 'EPSG:4326',
+    breach_width_m: 100.0,
+    breach_formation_time_hr: 2.0,
+    assumed_reservoir_level_m: 660.0,
+    upstream_boundary_desc: 'Dam breach failure hydrograph (illustrative)',
+    downstream_boundary_desc: 'Free water-level slope outflow',
+    manning_roughness: 0.035,
+    mesh_resolution_m: 50.0,
+    simulation_duration_hr: 24.0,
+    timestep_sec: 1.0,
+  })
 
   // Phase 7: Damage Scenario State
   const [damageConfig, setDamageConfig] = useState<DamageConfig | null>(null)
@@ -1031,6 +1134,221 @@ function App() {
     return val.toLocaleString('en-IN', { maximumFractionDigits: 0 })
   }
 
+  // Phase 10 & 11 Action Handlers
+  const fetchCapabilities = () => {
+    fetch(`${apiBaseUrl}/api/simulation/capabilities`)
+      .then((res) => res.json())
+      .then((data: SimulationCapabilities) => setCapabilities(data))
+      .catch(() => {})
+  }
+
+  const fetchScenarios = (archived = includeArchived) => {
+    setScenariosLoading(true)
+    fetch(`${apiBaseUrl}/api/scenarios?include_archived=${archived}`)
+      .then((res) => res.json())
+      .then((data: ScenarioItem[]) => {
+        setScenarios(data)
+        setScenariosLoading(false)
+        if (data.length > 0 && !selectedScenarioId) {
+          setSelectedScenarioId(data[0].id)
+        }
+      })
+      .catch((err) => {
+        setScenarioError(err.message || 'Failed to load scenarios')
+        setScenariosLoading(false)
+      })
+  }
+
+  const fetchRuns = () => {
+    setRunsLoading(true)
+    fetch(`${apiBaseUrl}/api/runs`)
+      .then((res) => res.json())
+      .then((data: SimulationRunItem[]) => {
+        setRuns(data)
+        setRunsLoading(false)
+      })
+      .catch(() => setRunsLoading(false))
+  }
+
+  useEffect(() => {
+    fetchCapabilities()
+    fetchScenarios(false)
+    fetchRuns()
+  }, [apiBaseUrl])
+
+  useEffect(() => {
+    if (activeTab === 'scenarios') {
+      fetchCapabilities()
+      fetchScenarios(includeArchived)
+      fetchRuns()
+    }
+  }, [activeTab, includeArchived])
+
+  const selectedScenario = scenarios.find((s) => s.id === selectedScenarioId) || null
+
+  const handleStartCreateScenario = () => {
+    setIsCreatingScenario(true)
+    setIsEditingScenario(false)
+    setScenarioForm({
+      name: `Hidkal Dam Breach Scenario ${scenarios.length + 1}`,
+      description: 'Parametric breach scenario for far-field inundation screening.',
+      site: 'Hidkal Dam, Belagavi, Karnataka',
+      dem_dataset_id: 'dem',
+      crs: 'EPSG:4326',
+      breach_width_m: 120.0,
+      breach_formation_time_hr: 2.0,
+      assumed_reservoir_level_m: 660.0,
+      upstream_boundary_desc: 'Dam breach failure hydrograph (illustrative)',
+      downstream_boundary_desc: 'Free water-level slope outflow',
+      manning_roughness: 0.035,
+      mesh_resolution_m: 50.0,
+      simulation_duration_hr: 24.0,
+      timestep_sec: 1.0,
+    })
+  }
+
+  const handleStartEditScenario = (sc: ScenarioItem) => {
+    setIsCreatingScenario(false)
+    setIsEditingScenario(true)
+    setSelectedScenarioId(sc.id)
+    setScenarioForm({
+      name: sc.name,
+      description: sc.description,
+      site: sc.site,
+      dem_dataset_id: sc.dem_dataset_id,
+      crs: sc.crs,
+      breach_width_m: sc.breach_width_m,
+      breach_formation_time_hr: sc.breach_formation_time_hr,
+      assumed_reservoir_level_m: sc.assumed_reservoir_level_m,
+      upstream_boundary_desc: sc.upstream_boundary_desc,
+      downstream_boundary_desc: sc.downstream_boundary_desc,
+      manning_roughness: sc.manning_roughness,
+      mesh_resolution_m: sc.mesh_resolution_m,
+      simulation_duration_hr: sc.simulation_duration_hr,
+      timestep_sec: sc.timestep_sec,
+    })
+  }
+
+  const handleSaveScenario = async () => {
+    setScenarioError(null)
+    try {
+      if (isCreatingScenario) {
+        const res = await fetch(`${apiBaseUrl}/api/scenarios`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(scenarioForm),
+        })
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}))
+          throw new Error(err.detail || `Failed to create scenario (HTTP ${res.status})`)
+        }
+        const created: ScenarioItem = await res.json()
+        setIsCreatingScenario(false)
+        fetchScenarios(includeArchived)
+        setSelectedScenarioId(created.id)
+      } else if (isEditingScenario && selectedScenarioId) {
+        const res = await fetch(`${apiBaseUrl}/api/scenarios/${selectedScenarioId}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(scenarioForm),
+        })
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}))
+          throw new Error(err.detail || `Failed to update scenario (HTTP ${res.status})`)
+        }
+        setIsEditingScenario(false)
+        fetchScenarios(includeArchived)
+      }
+    } catch (err: any) {
+      setScenarioError(err.message || 'Scenario save failed')
+    }
+  }
+
+  const handleCloneScenario = async (scId: string) => {
+    setScenarioError(null)
+    try {
+      const res = await fetch(`${apiBaseUrl}/api/scenarios/${scId}/clone`, { method: 'POST' })
+      if (!res.ok) throw new Error(`Clone failed with HTTP ${res.status}`)
+      const cloned: ScenarioItem = await res.json()
+      fetchScenarios(includeArchived)
+      setSelectedScenarioId(cloned.id)
+    } catch (err: any) {
+      setScenarioError(err.message || 'Failed to clone scenario')
+    }
+  }
+
+  const handleArchiveScenario = async (scId: string, archive: boolean) => {
+    setScenarioError(null)
+    try {
+      const endpoint = archive ? 'archive' : 'unarchive'
+      const res = await fetch(`${apiBaseUrl}/api/scenarios/${scId}/${endpoint}`, { method: 'POST' })
+      if (!res.ok) throw new Error(`Archive operation failed with HTTP ${res.status}`)
+      fetchScenarios(includeArchived)
+    } catch (err: any) {
+      setScenarioError(err.message || 'Failed to archive scenario')
+    }
+  }
+
+  const handleBuildPackage = async (scId: string) => {
+    setPackageBuilding(true)
+    setPackageSuccessMsg(null)
+    setScenarioError(null)
+    try {
+      const res = await fetch(`${apiBaseUrl}/api/scenarios/${scId}/build-package`, { method: 'POST' })
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}))
+        throw new Error(err.detail || `Package build failed with HTTP ${res.status}`)
+      }
+      const data = await res.json()
+      setPackageSuccessMsg(`Package built (${(data.package_size_bytes / 1024).toFixed(1)} KB) with SHA-256 manifest.`)
+      fetchScenarios(includeArchived)
+    } catch (err: any) {
+      setScenarioError(err.message || 'Package build failed')
+    } finally {
+      setPackageBuilding(false)
+    }
+  }
+
+  const handleDownloadPackage = (scId: string) => {
+    window.open(`${apiBaseUrl}/api/scenarios/${scId}/download-package`, '_blank')
+  }
+
+  const handleRunSimulation = async (scId: string) => {
+    setRunExecuting(true)
+    setRunError(null)
+    try {
+      const res = await fetch(`${apiBaseUrl}/api/scenarios/${scId}/run`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ custom_notes: 'Triggered from web GUI' }),
+      })
+      if (res.status === 409) {
+        const err = await res.json().catch(() => ({}))
+        throw new Error(err.detail || 'D-Flow FM engine execution is disabled by server policy. Never faking a model run.')
+      }
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}))
+        throw new Error(err.detail || `Run failed with HTTP ${res.status}`)
+      }
+      fetchRuns()
+    } catch (err: any) {
+      setRunError(err.message || 'Simulation execution failed.')
+    } finally {
+      setRunExecuting(false)
+    }
+  }
+
+  const handleViewLogs = async (runId: string) => {
+    try {
+      const res = await fetch(`${apiBaseUrl}/api/runs/${runId}/logs`)
+      if (!res.ok) throw new Error('Failed to fetch run logs')
+      const data: SimulationLogs = await res.json()
+      setRunLogsModal(data)
+    } catch (err) {
+      alert('Could not retrieve execution logs for this run.')
+    }
+  }
+
   return (
     <div className="app-layout">
       {/* Top Navigation & Warning Banner */}
@@ -1113,6 +1431,12 @@ function App() {
                 onClick={() => setActiveTab('export')}
               >
                 💾 Export
+              </button>
+              <button
+                className={`hud-tab-btn ${activeTab === 'scenarios' ? 'active' : ''}`}
+                onClick={() => setActiveTab('scenarios')}
+              >
+                🌊 Scenarios
               </button>
             </div>
 
@@ -2098,11 +2422,430 @@ function App() {
                 </div>
               </div>
             )}
+
+            {/* TAB 6: Scenario Management & Honest Delft3D FM Integration */}
+            {activeTab === 'scenarios' && (
+              <div className="hud-content">
+                <div className="hud-card">
+                  {/* Capabilities & Scientific Boundary Card */}
+                  <div className="hud-card-header">
+                    <h3 className="card-title">🌊 Hydrodynamic Scenario & Delft3D Boundary</h3>
+                  </div>
+
+                  <div className="capabilities-grid">
+                    <div className={`capability-card ${capabilities?.hydromt_available ? 'cap-available' : 'cap-missing'}`}>
+                      <div className="cap-header">
+                        <span className="cap-icon">⚙️</span>
+                        <span className="cap-title">HydroMT Builder</span>
+                      </div>
+                      <span className="cap-badge">
+                        {capabilities?.hydromt_available
+                          ? `Installed (${capabilities.hydromt_version || 'Ready'})`
+                          : 'Not Installed (Template Mode)'}
+                      </span>
+                      <p className="cap-desc">Builds & formats 2D mesh, topography, and boundary config templates.</p>
+                    </div>
+
+                    <div className={`capability-card ${capabilities?.execution_enabled && capabilities?.dflowfm_available ? 'cap-available' : 'cap-disabled'}`}>
+                      <div className="cap-header">
+                        <span className="cap-icon">🚀</span>
+                        <span className="cap-title">D-Flow FM Engine</span>
+                      </div>
+                      <span className="cap-badge">
+                        {capabilities?.execution_enabled && capabilities?.dflowfm_available
+                          ? 'Engine Ready'
+                          : 'Execution Disabled / Unavailable'}
+                      </span>
+                      <p className="cap-desc">Numerical SWE solver. Execution is strictly gated behind server configuration.</p>
+                    </div>
+                  </div>
+
+                  {/* Setup & Boundary Guidance Accordion */}
+                  <div className="guide-accordion-box">
+                    <button
+                      className="btn-toggle-guide"
+                      onClick={() => setShowSetupGuide(!showSetupGuide)}
+                    >
+                      {showSetupGuide ? '▾ Hide Delft3D & HydroMT Setup Instructions' : '▸ Show Delft3D & HydroMT Setup Instructions'}
+                    </button>
+                    {showSetupGuide && (
+                      <div className="guide-content font-mono">
+                        <p><strong>1. Isolated HydroMT Conda Environment:</strong></p>
+                        <pre className="code-snippet">
+conda env create -f environment_hydromt_delft3dfm.yml{'\n'}
+conda activate hydromt-delft3dfm
+                        </pre>
+                        <p><strong>2. Server Simulation Gating (Disabled by Default):</strong></p>
+                        <pre className="code-snippet">
+ENABLE_DFLOWFM_EXECUTION=true{'\n'}
+DFLOWFM_EXECUTABLE=C:\Deltares\dflowfm\bin\dflowfm.exe
+                        </pre>
+                        <p><strong>3. Scientific Transparency:</strong></p>
+                        <p className="guide-note">
+                          Existing sample rasters (depth, velocity, arrival) in this workspace are unverified and of unknown provenance. They are NEVER attributed to Delft3D outputs or attached to simulation runs.
+                        </p>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Scenario Error or Success Banners */}
+                  {scenarioError && <div className="damage-error-box">{scenarioError}</div>}
+                  {packageSuccessMsg && <div className="export-success-box">📦 {packageSuccessMsg}</div>}
+                  {runError && <div className="damage-error-box">{runError}</div>}
+
+                  {/* Scenarios Header & Create Action */}
+                  <div className="scenarios-action-bar">
+                    <div className="scenarios-title-row">
+                      <h4 className="sub-title">Scenarios ({scenarios.length})</h4>
+                      <label className="toggle-archived-label">
+                        <input
+                          type="checkbox"
+                          checked={includeArchived}
+                          onChange={(e) => setIncludeArchived(e.target.checked)}
+                        />
+                        <span>Show Archived</span>
+                      </label>
+                    </div>
+                    {!isCreatingScenario && !isEditingScenario && (
+                      <button className="btn-secondary-action" onClick={handleStartCreateScenario}>
+                        ➕ New Scenario
+                      </button>
+                    )}
+                  </div>
+
+                  {/* Scenario Creator / Editor Form */}
+                  {(isCreatingScenario || isEditingScenario) && (
+                    <div className="scenario-form-card">
+                      <h4 className="results-title">
+                        {isCreatingScenario ? '➕ Create Hydrodynamic Scenario' : '✏️ Edit Scenario Parameters'}
+                      </h4>
+
+                      <div className="form-group">
+                        <label>Scenario Title</label>
+                        <input
+                          type="text"
+                          value={scenarioForm.name}
+                          onChange={(e) => setScenarioForm({ ...scenarioForm, name: e.target.value })}
+                          className="config-input"
+                          placeholder="e.g. Hidkal Sunny Day Breach - High Sensitivity"
+                        />
+                      </div>
+
+                      <div className="form-group">
+                        <label>Description & Notes</label>
+                        <textarea
+                          value={scenarioForm.description}
+                          onChange={(e) => setScenarioForm({ ...scenarioForm, description: e.target.value })}
+                          className="config-input font-sans textarea-field"
+                          placeholder="Operational notes, modeling intent, and boundary assumptions..."
+                          rows={2}
+                        />
+                      </div>
+
+                      <div className="scenario-params-grid">
+                        <div className="config-field">
+                          <label>Breach Width (m)</label>
+                          <input
+                            type="number"
+                            min="5"
+                            max="3000"
+                            step="10"
+                            value={scenarioForm.breach_width_m}
+                            onChange={(e) => setScenarioForm({ ...scenarioForm, breach_width_m: parseFloat(e.target.value) || 100 })}
+                            className="config-input font-mono"
+                          />
+                          <span className="field-unit-tag">Assumed meters (unverified)</span>
+                        </div>
+
+                        <div className="config-field">
+                          <label>Breach Time (hours)</label>
+                          <input
+                            type="number"
+                            min="0.1"
+                            max="72"
+                            step="0.5"
+                            value={scenarioForm.breach_formation_time_hr}
+                            onChange={(e) => setScenarioForm({ ...scenarioForm, breach_formation_time_hr: parseFloat(e.target.value) || 2 })}
+                            className="config-input font-mono"
+                          />
+                          <span className="field-unit-tag">Formation duration</span>
+                        </div>
+
+                        <div className="config-field">
+                          <label>Reservoir Level (m)</label>
+                          <input
+                            type="number"
+                            min="100"
+                            max="2000"
+                            step="1"
+                            value={scenarioForm.assumed_reservoir_level_m}
+                            onChange={(e) => setScenarioForm({ ...scenarioForm, assumed_reservoir_level_m: parseFloat(e.target.value) || 660 })}
+                            className="config-input font-mono"
+                          />
+                          <span className="field-unit-tag">Vertical datum unverified</span>
+                        </div>
+
+                        <div className="config-field">
+                          <label>Manning Roughness n</label>
+                          <input
+                            type="number"
+                            min="0.01"
+                            max="0.2"
+                            step="0.005"
+                            value={scenarioForm.manning_roughness}
+                            onChange={(e) => setScenarioForm({ ...scenarioForm, manning_roughness: parseFloat(e.target.value) || 0.035 })}
+                            className="config-input font-mono"
+                          />
+                          <span className="field-unit-tag">Uniform s/m^(1/3)</span>
+                        </div>
+
+                        <div className="config-field">
+                          <label>Flexible Mesh Target (m)</label>
+                          <input
+                            type="number"
+                            min="10"
+                            max="500"
+                            step="10"
+                            value={scenarioForm.mesh_resolution_m}
+                            onChange={(e) => setScenarioForm({ ...scenarioForm, mesh_resolution_m: parseFloat(e.target.value) || 50 })}
+                            className="config-input font-mono"
+                          />
+                          <span className="field-unit-tag">Target grid cell size</span>
+                        </div>
+
+                        <div className="config-field">
+                          <label>Simulation Duration (hr)</label>
+                          <input
+                            type="number"
+                            min="1"
+                            max="168"
+                            step="6"
+                            value={scenarioForm.simulation_duration_hr}
+                            onChange={(e) => setScenarioForm({ ...scenarioForm, simulation_duration_hr: parseFloat(e.target.value) || 24 })}
+                            className="config-input font-mono"
+                          />
+                          <span className="field-unit-tag">Total run window</span>
+                        </div>
+                      </div>
+
+                      <div className="form-action-row">
+                        <button className="btn-calculate" onClick={handleSaveScenario}>
+                          💾 {isCreatingScenario ? 'Save Scenario' : 'Update Scenario'}
+                        </button>
+                        <button
+                          className="btn-secondary-action"
+                          onClick={() => {
+                            setIsCreatingScenario(false)
+                            setIsEditingScenario(false)
+                          }}
+                        >
+                          ✕ Cancel
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Scenarios List */}
+                  {scenariosLoading ? (
+                    <div className="loading-box"><span className="spinner"></span> Loading scenarios...</div>
+                  ) : scenarios.length === 0 ? (
+                    <div className="empty-state-box">
+                      <p>No scenarios found. Click <strong>➕ New Scenario</strong> to create your first dam breach modeling scenario.</p>
+                    </div>
+                  ) : (
+                    <div className="scenarios-list">
+                      {scenarios.map((sc) => {
+                        const isSelected = selectedScenarioId === sc.id
+                        return (
+                          <div
+                            key={sc.id}
+                            className={`scenario-card ${isSelected ? 'selected' : ''} ${sc.archived ? 'archived' : ''}`}
+                            onClick={() => setSelectedScenarioId(sc.id)}
+                          >
+                            <div className="scenario-card-header">
+                              <div>
+                                <h5 className="scenario-title">{sc.name}</h5>
+                                <span className="scenario-id-text font-mono">ID: {sc.id.slice(0, 8)}... (Rev {sc.revision})</span>
+                              </div>
+                              <div className="scenario-badges">
+                                <span className={`status-badge status-${sc.status === 'package_built' ? 'ok' : 'pending'}`}>
+                                  {sc.status.replace(/_/g, ' ')}
+                                </span>
+                                {sc.archived && <span className="badge-archived">Archived</span>}
+                              </div>
+                            </div>
+
+                            {sc.description && <p className="scenario-desc">{sc.description}</p>}
+
+                            {/* Quick Metrics */}
+                            <div className="scenario-quick-metrics">
+                              <span>📐 Breach: {sc.breach_width_m} m</span>
+                              <span>⏱️ Formation: {sc.breach_formation_time_hr} h</span>
+                              <span>🌊 Stage: {sc.assumed_reservoir_level_m} m</span>
+                              <span>⚡ Manning: {sc.manning_roughness}</span>
+                              <span>🕸️ Mesh: {sc.mesh_resolution_m} m</span>
+                            </div>
+
+                            {/* Snapshot Checksum */}
+                            {sc.snapshot_checksum && (
+                              <div className="checksum-row font-mono">
+                                <span>SHA-256: {sc.snapshot_checksum.slice(0, 16)}...</span>
+                              </div>
+                            )}
+
+                            {/* Action Buttons */}
+                            <div className="scenario-actions" onClick={(e) => e.stopPropagation()}>
+                              <button
+                                className="btn-card-action"
+                                onClick={() => handleStartEditScenario(sc)}
+                                title="Edit scenario parameters"
+                              >
+                                ✏️ Edit
+                              </button>
+                              <button
+                                className="btn-card-action"
+                                onClick={() => handleCloneScenario(sc.id)}
+                                title="Clone scenario copy"
+                              >
+                                📋 Clone
+                              </button>
+                              <button
+                                className="btn-card-action"
+                                onClick={() => handleBuildPackage(sc.id)}
+                                disabled={packageBuilding}
+                                title="Build Delft3D FM configuration package"
+                              >
+                                📦 Build Package
+                              </button>
+                              <button
+                                className="btn-card-action"
+                                onClick={() => handleDownloadPackage(sc.id)}
+                                title="Download draft package ZIP"
+                              >
+                                ⬇️ Download ZIP
+                              </button>
+                              <button
+                                className="btn-card-action"
+                                onClick={() => handleArchiveScenario(sc.id, !sc.archived)}
+                                title={sc.archived ? 'Restore scenario' : 'Archive scenario'}
+                              >
+                                {sc.archived ? '📂 Unarchive' : '📁 Archive'}
+                              </button>
+                              <button
+                                className={`btn-card-action btn-run-action ${(!capabilities?.execution_enabled || !capabilities?.dflowfm_available) ? 'disabled' : ''}`}
+                                disabled={!capabilities?.execution_enabled || !capabilities?.dflowfm_available || runExecuting}
+                                onClick={() => handleRunSimulation(sc.id)}
+                                title={
+                                  capabilities?.execution_enabled && capabilities?.dflowfm_available
+                                    ? 'Execute D-Flow FM simulation'
+                                    : 'D-Flow FM solver execution is disabled or binary missing on server'
+                                }
+                              >
+                                {runExecuting ? '⏳ Running...' : '🚀 Run D-Flow FM'}
+                              </button>
+                            </div>
+                          </div>
+                        )
+                      })}
+                    </div>
+                  )}
+
+                  {/* Selected Scenario Scientific Validation Notes */}
+                  {selectedScenario && (
+                    <div className="scenario-validation-card">
+                      <div className="hud-card-header">
+                        <h4 className="results-title">🔬 Scientific Validation & Input Review</h4>
+                        <span className="status-badge status-warn">Review Required</span>
+                      </div>
+                      <p className="validation-intro">
+                        Schema validation has passed, but the following critical scientific inputs are required before running a certified hydrodynamic simulation:
+                      </p>
+                      <ul className="validation-notes-list">
+                        {selectedScenario.validation_notes.map((note, idx) => (
+                          <li key={idx}>⚠️ {note}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+
+                  {/* Historical Simulation Runs */}
+                  <div className="runs-history-card">
+                    <div className="hud-card-header">
+                      <h4 className="results-title">📋 Simulation Execution History</h4>
+                      <button className="btn-text-action" onClick={fetchRuns}>🔄 Refresh</button>
+                    </div>
+
+                    {runsLoading ? (
+                      <div className="loading-box"><span className="spinner"></span> Loading runs...</div>
+                    ) : runs.length === 0 ? (
+                      <p className="no-runs-text">No simulation runs executed yet. Gated execution is enforced.</p>
+                    ) : (
+                      <div className="runs-table-wrapper">
+                        <table className="breakdown-table runs-table">
+                          <thead>
+                            <tr>
+                              <th>Run ID</th>
+                              <th>Scenario</th>
+                              <th>Status</th>
+                              <th>Started At</th>
+                              <th>Duration</th>
+                              <th className="text-right">Logs</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {runs.map((r) => (
+                              <tr key={r.run_id}>
+                                <td className="font-mono">{r.run_id.slice(0, 8)}...</td>
+                                <td>{r.scenario_name} (r{r.revision})</td>
+                                <td>
+                                  <span className={`status-badge ${r.status === 'completed' ? 'status-ok' : r.status === 'failed' ? 'status-fail' : 'status-pending'}`}>
+                                    {r.status}
+                                  </span>
+                                </td>
+                                <td className="font-mono text-muted">{new Date(r.started_at).toLocaleTimeString()}</td>
+                                <td className="font-mono">{r.duration_seconds != null ? `${r.duration_seconds}s` : 'N/A'}</td>
+                                <td className="text-right">
+                                  <button className="btn-mini-log" onClick={() => handleViewLogs(r.run_id)}>
+                                    📄 Logs
+                                  </button>
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            )}
           </aside>
         )}
       </main>
+
+      {/* Log Viewer Modal */}
+      {runLogsModal && (
+        <div className="modal-backdrop" onClick={() => setRunLogsModal(null)}>
+          <div className="log-modal-card" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h4 className="modal-title">📄 Simulation Logs: {runLogsModal.run_id.slice(0, 8)}...</h4>
+              <button className="btn-close-modal" onClick={() => setRunLogsModal(null)}>✕</button>
+            </div>
+            <div className="modal-body font-mono">
+              <h5 className="log-section-title">STDOUT:</h5>
+              <pre className="log-pre">{runLogsModal.stdout || '(No stdout captured)'}</pre>
+              <h5 className="log-section-title">STDERR:</h5>
+              <pre className="log-pre text-danger">{runLogsModal.stderr || '(No stderr captured)'}</pre>
+            </div>
+            <div className="modal-footer">
+              <button className="btn-secondary-action" onClick={() => setRunLogsModal(null)}>Close</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
 
 export default App
+

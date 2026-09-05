@@ -1,5 +1,6 @@
-from typing import Dict, Any
-from fastapi import FastAPI, Query, Response
+from typing import Dict, Any, List, Optional
+from fastapi import FastAPI, Query, Response, HTTPException
+from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.schemas import (
@@ -15,6 +16,14 @@ from app.schemas import (
     RouteScreeningResponse,
     ExportRouteRequest,
     ExportRequest,
+    ScenarioCreateRequest,
+    ScenarioUpdateRequest,
+    ScenarioResponse,
+    SimulationCapabilitiesResponse,
+    ModelPackageResponse,
+    SimulationRunRequest,
+    SimulationRunResponse,
+    SimulationLogResponse,
 )
 
 from app.raster_service import (
@@ -37,11 +46,28 @@ from app.damage_service import (
 )
 from app.route_service import calculate_screening_route
 from app.export_service import handle_export
+from app.scenario_storage import (
+    list_scenarios,
+    get_scenario,
+    create_scenario,
+    update_scenario,
+    clone_scenario,
+    archive_scenario,
+)
+from app.simulation_service import (
+    detect_capabilities,
+    build_model_package,
+    get_package_zip_path,
+    execute_simulation_run,
+    list_simulation_runs,
+    get_simulation_run,
+    get_simulation_logs,
+)
 
 app = FastAPI(
     title="Dam Break Decision Support System API",
-    description="Automated dam-break hydrodynamic inspection, vector overlays, preliminary exposure screening, and illustrative damage estimation API",
-    version="0.7.0",
+    description="Automated dam-break hydrodynamic inspection, vector overlays, preliminary exposure screening, illustrative damage estimation, scenario management, and Delft3D integration API",
+    version="0.9.0",
 )
 
 app.add_middleware(
@@ -255,5 +281,111 @@ def post_export_custom(request: ExportRequest) -> Response:
         exposure_filter=request.exposure_filter or "all",
         route_request=request.route_request,
     )
+
+
+# Phase 10: Scenario Management Endpoints
+
+@app.get("/api/scenarios", response_model=List[ScenarioResponse])
+def get_scenarios(include_archived: bool = False) -> List[ScenarioResponse]:
+    """List all stored scenarios with snapshot checksums and verification status."""
+    return list_scenarios(include_archived=include_archived)
+
+
+@app.post("/api/scenarios", response_model=ScenarioResponse)
+def post_scenario(request: ScenarioCreateRequest) -> ScenarioResponse:
+    """Create a new dam breach hydrodynamic scenario with UUID v4 and assumption tracking."""
+    return create_scenario(request)
+
+
+@app.get("/api/scenarios/{scenario_id}", response_model=ScenarioResponse)
+def get_scenario_by_id(scenario_id: str) -> ScenarioResponse:
+    """Retrieve details for a specific scenario by UUID."""
+    return get_scenario(scenario_id)
+
+
+@app.put("/api/scenarios/{scenario_id}", response_model=ScenarioResponse)
+def put_scenario_by_id(scenario_id: str, request: ScenarioUpdateRequest) -> ScenarioResponse:
+    """Update an existing scenario, auto-incrementing its revision number."""
+    return update_scenario(scenario_id, request)
+
+
+@app.post("/api/scenarios/{scenario_id}/clone", response_model=ScenarioResponse)
+def post_clone_scenario(scenario_id: str) -> ScenarioResponse:
+    """Clone an existing scenario with a new UUID v4 and revision 1."""
+    return clone_scenario(scenario_id)
+
+
+@app.post("/api/scenarios/{scenario_id}/archive", response_model=ScenarioResponse)
+def post_archive_scenario(scenario_id: str) -> ScenarioResponse:
+    """Mark a scenario as archived without deleting its data."""
+    return archive_scenario(scenario_id, archive=True)
+
+
+@app.post("/api/scenarios/{scenario_id}/unarchive", response_model=ScenarioResponse)
+def post_unarchive_scenario(scenario_id: str) -> ScenarioResponse:
+    """Restore an archived scenario to active status."""
+    return archive_scenario(scenario_id, archive=False)
+
+
+# Phase 11: Delft3D Capabilities & Simulation Endpoints
+
+@app.get("/api/simulation/capabilities", response_model=SimulationCapabilitiesResponse)
+def get_simulation_capabilities() -> SimulationCapabilitiesResponse:
+    """
+    Check local availability of HydroMT-Delft3D FM and D-Flow FM simulation engine.
+    Returns honest availability badges, execution gating status, and setup instructions.
+    """
+    return detect_capabilities()
+
+
+@app.post("/api/scenarios/{scenario_id}/build-package", response_model=ModelPackageResponse)
+def post_build_model_package(scenario_id: str) -> ModelPackageResponse:
+    """
+    Generate downloadable Delft3D FM draft model package ZIP archive containing
+    immutable manifest, SHA-256 checksums, config templates, and requirements documentation.
+    """
+    response, _ = build_model_package(scenario_id)
+    return response
+
+
+@app.get("/api/scenarios/{scenario_id}/download-package")
+def get_download_model_package(scenario_id: str):
+    """Download the built Delft3D FM draft model package ZIP archive."""
+    zip_path = get_package_zip_path(scenario_id)
+    return FileResponse(
+        path=str(zip_path),
+        media_type="application/zip",
+        filename=zip_path.name,
+    )
+
+
+@app.post("/api/scenarios/{scenario_id}/run", response_model=SimulationRunResponse)
+def post_run_simulation(scenario_id: str, request: Optional[SimulationRunRequest] = None) -> SimulationRunResponse:
+    """
+    Execute D-Flow FM simulation strictly gated by server policy.
+    Returns 409 Conflict if execution is disabled or solver binary is missing.
+    Never fakes a simulation run or labels sample rasters as Delft3D output.
+    """
+    notes = request.custom_notes if request else ""
+    return execute_simulation_run(scenario_id, custom_notes=notes or "")
+
+
+@app.get("/api/runs", response_model=List[SimulationRunResponse])
+def get_runs() -> List[SimulationRunResponse]:
+    """List historical simulation runs from runtime storage."""
+    return list_simulation_runs()
+
+
+@app.get("/api/runs/{run_id}", response_model=SimulationRunResponse)
+def get_run_by_id(run_id: str) -> SimulationRunResponse:
+    """Retrieve status and metadata for a specific simulation run."""
+    return get_simulation_run(run_id)
+
+
+@app.get("/api/runs/{run_id}/logs", response_model=SimulationLogResponse)
+def get_run_logs(run_id: str) -> SimulationLogResponse:
+    """Retrieve captured stdout and stderr execution logs for a simulation run."""
+    return get_simulation_logs(run_id)
+
 
 
