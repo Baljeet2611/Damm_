@@ -11,7 +11,12 @@ from app.schemas import (
     DamageConfigResponse,
     DamageScenarioRequest,
     DamageScenarioResponse,
+    RouteScreeningRequest,
+    RouteScreeningResponse,
+    ExportRouteRequest,
+    ExportRequest,
 )
+
 from app.raster_service import (
     list_datasets,
     get_raster_metadata,
@@ -30,6 +35,8 @@ from app.damage_service import (
     get_default_damage_config,
     compute_damage_scenario,
 )
+from app.route_service import calculate_screening_route
+from app.export_service import handle_export
 
 app = FastAPI(
     title="Dam Break Decision Support System API",
@@ -185,3 +192,68 @@ def post_damage_estimate(request: DamageScenarioRequest) -> DamageScenarioRespon
     Rejects calculation with 422 if acknowledge_unverified_inputs is False.
     """
     return compute_damage_scenario(request)
+
+
+# Phase 8: Route Screening Endpoints
+
+@app.post("/api/routes/screening", response_model=RouteScreeningResponse)
+def post_route_screening(request: RouteScreeningRequest) -> RouteScreeningResponse:
+    """
+    Calculate preliminary route screening between start and destination coordinates.
+    Snaps to nearest road network nodes, removes screening-positive (depth > 0 at sample) segments by default,
+    and returns Dijkstra shortest route geometry with segment count and diagnostic warnings.
+    """
+    return calculate_screening_route(request)
+
+
+# Phase 9: Geospatial Export Endpoints
+
+@app.get("/api/export/{layer}")
+def get_export_layer(
+    layer: str,
+    format: str = "geojson",
+    exposure_filter: str = "all",
+) -> Response:
+    """
+    Export whitelisted spatial layer (assets, roads) as GeoJSON, KML, or ESRI Shapefile (ZIP).
+    Route export is not supported via GET; use POST /api/export/route or POST /api/export.
+    Applies exposure filtering (all, screening_positive, not_exposed, not_assessed).
+    Never accepts or exposes arbitrary filesystem paths.
+    """
+    if layer.lower() == "route":
+        from fastapi import HTTPException
+        raise HTTPException(
+            status_code=422,
+            detail="Route export is not supported via GET. Use POST /api/export/route or POST /api/export with RouteScreeningRequest parameters.",
+        )
+    return handle_export(layer=layer, format_type=format, exposure_filter=exposure_filter)
+
+
+@app.post("/api/export/route")
+def post_export_route(request: ExportRouteRequest) -> Response:
+    """
+    Export screened route as GeoJSON, KML, or ESRI Shapefile (ZIP) by recomputing
+    the shortest route from the validated RouteScreeningRequest parameters.
+    """
+    return handle_export(
+        layer="route",
+        format_type=request.format,
+        exposure_filter="all",
+        route_request=request.route_request,
+    )
+
+
+@app.post("/api/export")
+def post_export_custom(request: ExportRequest) -> Response:
+    """
+    Export spatial layer (assets, roads, route) as GeoJSON, KML, or ESRI Shapefile (ZIP).
+    For route export, route_request parameters must be supplied to recompute route.
+    """
+    return handle_export(
+        layer=request.layer,
+        format_type=request.format,
+        exposure_filter=request.exposure_filter or "all",
+        route_request=request.route_request,
+    )
+
+

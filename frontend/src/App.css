@@ -174,10 +174,10 @@
 /* HUD Tab Navigation */
 .hud-tabs {
   display: grid;
-  grid-template-columns: 1fr 1fr 1.25fr;
-  gap: 0.3rem;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 0.2rem;
   background: rgba(15, 23, 42, 0.9);
-  padding: 0.3rem;
+  padding: 0.25rem;
   border-radius: 10px;
   border: 1px solid var(--border-card);
   backdrop-filter: blur(12px);
@@ -187,14 +187,16 @@
   background: transparent;
   border: none;
   color: var(--text-muted);
-  padding: 0.45rem 0.5rem;
+  padding: 0.4rem 0.2rem;
   border-radius: 6px;
-  font-size: 0.76rem;
+  font-size: 0.72rem;
   font-weight: 600;
   cursor: pointer;
   transition: all 0.2s ease;
   white-space: nowrap;
   text-align: center;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .hud-tab-btn:hover {
@@ -207,6 +209,7 @@
   background: rgba(56, 189, 248, 0.15);
   border: 1px solid rgba(56, 189, 248, 0.3);
 }
+
 
 /* Custom Scrollbar for HUD */
 .hud-panel::-webkit-scrollbar {
@@ -1361,6 +1364,522 @@
   word-break: break-word;
 }
 
+/* Pick Mode Banner Floating in Top Center */
+.pick-mode-banner {
+  position: absolute;
+  top: 1rem;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 20;
+  background: rgba(15, 23, 42, 0.94);
+  backdrop-filter: blur(12px);
+  border: 1px solid #38bdf8;
+  box-shadow: 0 0 20px rgba(56, 189, 248, 0.35);
+  color: var(--text-main);
+  padding: 0.5rem 1rem;
+  border-radius: 30px;
+  font-size: 0.8rem;
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  animation: bounce-subtle 2s infinite ease-in-out;
+}
+
+@keyframes bounce-subtle {
+  0%, 100% { transform: translate(-50%, 0); }
+  50% { transform: translate(-50%, -4px); }
+}
+
+.pick-mode-icon {
+  font-size: 1.1rem;
+}
+
+.btn-cancel-pick {
+  background: rgba(239, 68, 68, 0.2);
+  border: 1px solid rgba(239, 68, 68, 0.4);
+  color: #f87171;
+  padding: 0.2rem 0.55rem;
+  border-radius: 12px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.btn-cancel-pick:hover {
+  background: rgba(239, 68, 68, 0.4);
+}
+
+/* Route Pin Markers */
+.route-pin-marker {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  transform: translate(-50%, -100%);
+  cursor: pointer;
+}
+
+.route-pin-marker .pin-icon {
+  font-size: 1.6rem;
+  filter: drop-shadow(0 3px 6px rgba(0, 0, 0, 0.6));
+}
+
+.route-pin-marker .pin-badge {
+  font-size: 0.65rem;
+  font-weight: 700;
+  padding: 0.15rem 0.4rem;
+  border-radius: 4px;
+  margin-top: -0.2rem;
+  box-shadow: 0 2px 5px rgba(0, 0, 0, 0.4);
+}
+
+.pin-start .pin-badge {
+  background: #10b981;
+  color: #ffffff;
+}
+
+.pin-dest .pin-badge {
+  background: #a855f7;
+  color: #ffffff;
+}
+
+/* Phase 8: Route Screening HUD Styles */
+.route-card, .export-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  min-width: 0;
+  box-sizing: border-box;
+  overflow-x: hidden;
+}
+
+.route-body, .export-body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+  min-width: 0;
+  box-sizing: border-box;
+  overflow-x: hidden;
+}
+
+.route-disclaimer-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  background: rgba(14, 165, 233, 0.12);
+  border: 1px solid rgba(56, 189, 248, 0.35);
+  padding: 0.55rem 0.75rem;
+  border-radius: 8px;
+  color: #7dd3fc;
+  font-size: 0.72rem;
+  line-height: 1.4;
+  min-width: 0;
+  box-sizing: border-box;
+}
+
+.route-waypoints-section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  min-width: 0;
+}
+
+.waypoint-box {
+  background: rgba(30, 41, 59, 0.6);
+  border: 1px solid rgba(51, 65, 85, 0.5);
+  border-radius: 8px;
+  padding: 0.6rem 0.75rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  min-width: 0;
+}
+
+.waypoint-start {
+  border-left: 3px solid #10b981;
+}
+
+.waypoint-dest {
+  border-left: 3px solid #a855f7;
+}
+
+.waypoint-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.waypoint-badge {
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+
+.badge-start {
+  color: #34d399;
+}
+
+.badge-dest {
+  color: #c084fc;
+}
+
+.btn-pick-map {
+  background: rgba(56, 189, 248, 0.15);
+  border: 1px solid rgba(56, 189, 248, 0.35);
+  color: var(--accent-cyan);
+  padding: 0.2rem 0.55rem;
+  border-radius: 5px;
+  font-size: 0.68rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.btn-pick-map:hover {
+  background: rgba(56, 189, 248, 0.3);
+}
+
+.btn-pick-map.active-pick {
+  background: #38bdf8;
+  color: #0f172a;
+  box-shadow: 0 0 10px rgba(56, 189, 248, 0.6);
+}
+
+.coord-inputs-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.45rem;
+  min-width: 0;
+}
+
+.coord-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  min-width: 0;
+}
+
+.coord-field label {
+  font-size: 0.65rem;
+  color: var(--text-muted);
+}
+
+.route-options-section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  background: rgba(15, 23, 42, 0.5);
+  border: 1px solid rgba(51, 65, 85, 0.4);
+  border-radius: 8px;
+  padding: 0.65rem 0.75rem;
+  min-width: 0;
+}
+
+.route-option-checkbox {
+  margin-bottom: 0;
+}
+
+.route-results-section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.7rem;
+  border-top: 1px solid rgba(51, 65, 85, 0.5);
+  padding-top: 0.7rem;
+  min-width: 0;
+}
+
+.status-badge {
+  font-size: 0.68rem;
+  font-weight: 700;
+  padding: 0.2rem 0.5rem;
+  border-radius: 4px;
+}
+
+.status-ok {
+  background: rgba(16, 185, 129, 0.2);
+  color: #34d399;
+  border: 1px solid rgba(16, 185, 129, 0.4);
+}
+
+.status-fail {
+  background: rgba(239, 68, 68, 0.2);
+  color: #f87171;
+  border: 1px solid rgba(239, 68, 68, 0.4);
+}
+
+.route-kpi-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.45rem;
+  min-width: 0;
+}
+
+.route-kpi-card {
+  background: rgba(30, 41, 59, 0.7);
+  border: 1px solid rgba(51, 65, 85, 0.6);
+  border-radius: 8px;
+  padding: 0.55rem 0.65rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  min-width: 0;
+}
+
+.text-cyan {
+  color: var(--accent-cyan) !important;
+}
+
+.snap-diagnostics-box {
+  background: rgba(15, 23, 42, 0.6);
+  border: 1px solid rgba(51, 65, 85, 0.4);
+  border-radius: 6px;
+  padding: 0.45rem 0.6rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  font-size: 0.7rem;
+}
+
+.snap-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.snap-label {
+  color: var(--text-muted);
+}
+
+.snap-val {
+  color: var(--text-main);
+}
+
+.route-not-found-box {
+  background: rgba(239, 68, 68, 0.12);
+  border: 1px solid rgba(239, 68, 68, 0.35);
+  border-radius: 6px;
+  padding: 0.55rem 0.7rem;
+  font-size: 0.72rem;
+  color: #fda4af;
+  line-height: 1.4;
+}
+
+.route-not-found-box p {
+  margin: 0;
+}
+
+/* Phase 9: Geospatial Export HUD Styles */
+.export-section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  min-width: 0;
+}
+
+.export-field-label {
+  font-size: 0.74rem;
+  font-weight: 700;
+  color: var(--text-main);
+}
+
+.export-options-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  min-width: 0;
+}
+
+.export-select-btn {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  padding: 0.5rem 0.75rem;
+  background: rgba(30, 41, 59, 0.6);
+  border: 1px solid rgba(51, 65, 85, 0.5);
+  border-radius: 8px;
+  color: var(--text-main);
+  text-align: left;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  min-width: 0;
+}
+
+.export-select-btn:hover {
+  background: rgba(51, 65, 85, 0.8);
+  border-color: rgba(148, 163, 184, 0.4);
+}
+
+.export-select-btn.active {
+  background: rgba(2, 132, 199, 0.2);
+  border-color: var(--accent-cyan);
+  box-shadow: 0 0 10px rgba(56, 189, 248, 0.15);
+}
+
+.export-btn-icon {
+  font-size: 1.15rem;
+}
+
+.export-btn-text {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.export-btn-title {
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--text-main);
+}
+
+.export-btn-sub {
+  font-size: 0.68rem;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.export-route-warning {
+  background: rgba(245, 158, 11, 0.12);
+  border: 1px solid rgba(245, 158, 11, 0.4);
+  padding: 0.45rem 0.65rem;
+  border-radius: 6px;
+  color: #fde68a;
+  font-size: 0.72rem;
+  line-height: 1.35;
+}
+
+.filter-options-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.4rem;
+  min-width: 0;
+}
+
+.filter-select-btn {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  padding: 0.45rem 0.55rem;
+  background: rgba(30, 41, 59, 0.5);
+  border: 1px solid rgba(51, 65, 85, 0.4);
+  border-radius: 6px;
+  color: var(--text-main);
+  text-align: left;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  min-width: 0;
+}
+
+.filter-select-btn:hover {
+  background: rgba(51, 65, 85, 0.7);
+}
+
+.filter-select-btn.active {
+  background: rgba(56, 189, 248, 0.15);
+  border-color: var(--accent-cyan);
+}
+
+.filter-btn-title {
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--text-main);
+}
+
+.filter-btn-sub {
+  font-size: 0.64rem;
+  color: var(--text-muted);
+}
+
+.format-options-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.4rem;
+  min-width: 0;
+}
+
+.format-select-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 0.2rem;
+  padding: 0.55rem 0.4rem;
+  background: rgba(30, 41, 59, 0.5);
+  border: 1px solid rgba(51, 65, 85, 0.4);
+  border-radius: 8px;
+  color: var(--text-main);
+  cursor: pointer;
+  transition: all 0.2s ease;
+  min-width: 0;
+}
+
+.format-select-btn:hover {
+  background: rgba(51, 65, 85, 0.7);
+}
+
+.format-select-btn.active {
+  background: rgba(56, 189, 248, 0.18);
+  border-color: var(--accent-cyan);
+  box-shadow: 0 0 10px rgba(56, 189, 248, 0.2);
+}
+
+.format-title {
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+
+.format-ext {
+  font-family: var(--font-mono);
+  font-size: 0.65rem;
+  color: var(--accent-cyan);
+  background: rgba(56, 189, 248, 0.12);
+  padding: 0.1rem 0.35rem;
+  border-radius: 3px;
+}
+
+.format-desc {
+  font-size: 0.6rem;
+  color: var(--text-muted);
+  line-height: 1.2;
+}
+
+.export-success-box {
+  background: rgba(16, 185, 129, 0.15);
+  border: 1px solid rgba(16, 185, 129, 0.4);
+  color: #34d399;
+  padding: 0.45rem 0.65rem;
+  border-radius: 6px;
+  font-size: 0.73rem;
+  font-weight: 600;
+}
+
+.export-info-card {
+  background: rgba(15, 23, 42, 0.6);
+  border: 1px solid rgba(51, 65, 85, 0.4);
+  border-radius: 8px;
+  padding: 0.6rem 0.75rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.export-specs-list {
+  margin: 0;
+  padding-left: 1.1rem;
+  font-size: 0.67rem;
+  color: var(--text-dim);
+  line-height: 1.4;
+}
+
+.export-specs-list code {
+  font-family: var(--font-mono);
+  color: var(--accent-cyan);
+  background: rgba(56, 189, 248, 0.1);
+  padding: 0.05rem 0.25rem;
+  border-radius: 3px;
+}
+
 /* Responsive Overrides */
 @media (max-width: 768px) {
   .app-header {
@@ -1380,7 +1899,8 @@
     max-height: 55vh;
   }
 
-  .probe-grid, .damage-kpi-grid, .replacement-grid {
+  .probe-grid, .damage-kpi-grid, .replacement-grid, .format-options-grid, .filter-options-grid {
     grid-template-columns: 1fr;
   }
 }
+

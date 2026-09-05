@@ -131,6 +131,26 @@ interface DamageScenarioResult {
   warnings: string[]
 }
 
+// Phase 8: Route Screening Interface
+interface RouteScreeningResult {
+  route_found: boolean
+  geojson: any | null
+  total_distance_meters: number | null
+  total_distance_km: number | null
+  segment_count: number | null
+  start_coords: [number, number]
+  end_coords: [number, number]
+  snapped_start_coords: [number, number] | null
+  snapped_end_coords: [number, number] | null
+  start_snap_distance_meters: number | null
+  end_snap_distance_meters: number | null
+  excluded_edges_count: number
+  avoid_screening_positive: boolean
+  disclaimer: string
+  methodology: string
+  warnings: string[]
+}
+
 // Hidkal Dam bounding box [minLon, minLat, maxLon, maxLat]
 const HIDKAL_BOUNDS: [number, number, number, number] = [74.60, 16.12, 74.88, 16.32]
 
@@ -147,6 +167,10 @@ function App() {
   const markerRef = useRef<Marker | null>(null)
   const popupRef = useRef<Popup | null>(null)
 
+  // Start / Destination Markers
+  const startMarkerRef = useRef<Marker | null>(null)
+  const endMarkerRef = useRef<Marker | null>(null)
+
   const [backendOnline, setBackendOnline] = useState<boolean | null>(null)
   const [datasets, setDatasets] = useState<DatasetInfo[]>([])
   const [selectedLayer, setSelectedLayer] = useState<LayerId>('depth')
@@ -162,7 +186,7 @@ function App() {
   const [showRoads, setShowRoads] = useState<boolean>(true)
   const [exposureSummary, setExposureSummary] = useState<ExposureSummary | null>(null)
   const [summaryLoading, setSummaryLoading] = useState<boolean>(false)
-  const [activeTab, setActiveTab] = useState<'layers' | 'exposure' | 'damage'>('layers')
+  const [activeTab, setActiveTab] = useState<'layers' | 'exposure' | 'damage' | 'route' | 'export'>('layers')
 
   // Phase 7: Damage Scenario State
   const [damageConfig, setDamageConfig] = useState<DamageConfig | null>(null)
@@ -175,6 +199,32 @@ function App() {
   const [damageResult, setDamageResult] = useState<DamageScenarioResult | null>(null)
   const [damageLoading, setDamageLoading] = useState<boolean>(false)
   const [damageError, setDamageError] = useState<string | null>(null)
+
+  // Phase 8: Route Screening State
+  const [startLon, setStartLon] = useState<number>(74.7085)
+  const [startLat, setStartLat] = useState<number>(16.2052)
+  const [endLon, setEndLon] = useState<number>(74.7289)
+  const [endLat, setEndLat] = useState<number>(16.2415)
+  const [avoidScreeningPositive, setAvoidScreeningPositive] = useState<boolean>(true)
+  const [maxSnapDistance, setMaxSnapDistance] = useState<number>(5000)
+  const [routePickMode, setRoutePickMode] = useState<'start' | 'dest' | null>(null)
+  const [routeResult, setRouteResult] = useState<RouteScreeningResult | null>(null)
+  const [routeLoading, setRouteLoading] = useState<boolean>(false)
+  const [routeError, setRouteError] = useState<string | null>(null)
+
+  // Ref to track routePickMode inside map click callbacks
+  const routePickModeRef = useRef<'start' | 'dest' | null>(null)
+  useEffect(() => {
+    routePickModeRef.current = routePickMode
+  }, [routePickMode])
+
+  // Phase 9: Geospatial Export State
+  const [exportLayer, setExportLayer] = useState<'assets' | 'roads' | 'route'>('assets')
+  const [exportFilter, setExportFilter] = useState<'all' | 'screening_positive' | 'not_exposed' | 'not_assessed'>('all')
+  const [exportFormat, setExportFormat] = useState<'geojson' | 'kml' | 'shp'>('geojson')
+  const [exportLoading, setExportLoading] = useState<boolean>(false)
+  const [exportError, setExportError] = useState<string | null>(null)
+  const [exportSuccessMsg, setExportSuccessMsg] = useState<string | null>(null)
 
   const apiBaseUrl = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'
 
@@ -357,6 +407,7 @@ function App() {
 
   // Helper for vector click popup creation
   const handleVectorFeatureClick = useCallback((e: maplibregl.MapMouseEvent & { features?: any[] }) => {
+    if (routePickModeRef.current) return // Requirement 8: Skip popup if in route pick mode
     if (!e.features || e.features.length === 0 || !mapRef.current) return
 
     const feat = e.features[0]
@@ -376,7 +427,7 @@ function App() {
     }
 
     const badgeLabel = isExposed
-      ? 'Screening-positive (depth > 0)'
+      ? 'Screening-positive (depth > 0 at sample)'
       : isAssessed
       ? 'Not exposed at sample'
       : 'Not assessed'
@@ -388,7 +439,7 @@ function App() {
       : 'badge-unassessed'
 
     const depthDisplay = depthVal !== null
-      ? (depthVal > 0 ? `${depthVal.toFixed(2)} (unit unverified)` : '0.00 (unit unverified)')
+      ? (depthVal > 0 ? `${depthVal.toFixed(2)} (unit unverified)` : '0.00 (not exposed at sample)')
       : 'Not assessed'
 
     const htmlContent = `
@@ -406,7 +457,7 @@ function App() {
           <div class="popup-row"><span class="popup-label">Category:</span> <strong class="popup-val">${category.toUpperCase()}</strong></div>
           <div class="popup-row"><span class="popup-label">Flood Depth:</span> <strong class="popup-val ${isExposed ? 'text-danger' : ''}">${depthDisplay}</strong></div>
           <div class="popup-row"><span class="popup-label">Velocity:</span> <strong class="popup-val">${velVal !== null ? `${velVal.toFixed(2)} (unit unverified)` : 'N/A'}</strong></div>
-          <div class="popup-row"><span class="popup-label">Arrival Time:</span> <strong class="popup-val">${arrVal !== null ? `${arrVal.toFixed(2)} (unit unverified)` : 'N/A (unit unverified)'}</strong></div>
+          <div class="popup-row"><span class="popup-label">Arrival Time:</span> <strong class="popup-val">${arrVal !== null ? `${arrVal.toFixed(2)} (unit unverified)` : 'N/A'}</strong></div>
           <div class="popup-row"><span class="popup-label">Sampling Method:</span> <span class="popup-method">${method}</span></div>
         </div>
         <div class="vector-popup-footer">
@@ -452,7 +503,7 @@ function App() {
             'case',
             ['==', ['get', 'exposed'], true],
             '#e11d48', // Exposed = Crimson
-            '#64748b', // Not exposed = Slate
+            '#64748b', // Not exposed at sample = Slate
           ],
           'line-width': [
             'case',
@@ -466,10 +517,10 @@ function App() {
 
       map.on('click', layerId, handleVectorFeatureClick)
       map.on('mouseenter', layerId, () => {
-        map.getCanvas().style.cursor = 'pointer'
+        if (!routePickModeRef.current) map.getCanvas().style.cursor = 'pointer'
       })
       map.on('mouseleave', layerId, () => {
-        map.getCanvas().style.cursor = ''
+        if (!routePickModeRef.current) map.getCanvas().style.cursor = ''
       })
     }
   }, [apiBaseUrl, showRoads, mapLoaded, handleVectorFeatureClick])
@@ -596,13 +647,101 @@ function App() {
     layerIds.forEach((id) => {
       map.on('click', id, handleVectorFeatureClick)
       map.on('mouseenter', id, () => {
-        map.getCanvas().style.cursor = 'pointer'
+        if (!routePickModeRef.current) map.getCanvas().style.cursor = 'pointer'
       })
       map.on('mouseleave', id, () => {
-        map.getCanvas().style.cursor = ''
+        if (!routePickModeRef.current) map.getCanvas().style.cursor = ''
       })
     })
   }, [apiBaseUrl, showAssets, mapLoaded, handleVectorFeatureClick])
+
+  // Update Start & Destination Markers on Map
+  useEffect(() => {
+    const map = mapRef.current
+    if (!map || !mapLoaded) return
+
+    // Start Marker
+    if (!startMarkerRef.current) {
+      const el = document.createElement('div')
+      el.className = 'route-pin-marker pin-start'
+      el.innerHTML = '<span class="pin-icon">📍</span><span class="pin-badge">Start</span>'
+      startMarkerRef.current = new maplibregl.Marker({ element: el })
+        .setLngLat([startLon, startLat])
+        .addTo(map)
+    } else {
+      startMarkerRef.current.setLngLat([startLon, startLat])
+    }
+
+    // Destination Marker
+    if (!endMarkerRef.current) {
+      const el = document.createElement('div')
+      el.className = 'route-pin-marker pin-dest'
+      el.innerHTML = '<span class="pin-icon">🎯</span><span class="pin-badge">Dest</span>'
+      endMarkerRef.current = new maplibregl.Marker({ element: el })
+        .setLngLat([endLon, endLat])
+        .addTo(map)
+    } else {
+      endMarkerRef.current.setLngLat([endLon, endLat])
+    }
+  }, [startLon, startLat, endLon, endLat, mapLoaded])
+
+  // Render Screened Route Line on Map
+  useEffect(() => {
+    const map = mapRef.current
+    if (!map || !mapLoaded) return
+
+    const sourceId = 'screened-route-source'
+    const casingLayerId = 'screened-route-casing'
+    const lineLayerId = 'screened-route-line'
+
+    if (!routeResult || !routeResult.route_found || !routeResult.geojson) {
+      if (map.getLayer(lineLayerId)) map.removeLayer(lineLayerId)
+      if (map.getLayer(casingLayerId)) map.removeLayer(casingLayerId)
+      if (map.getSource(sourceId)) map.removeSource(sourceId)
+      return
+    }
+
+    const geojsonData = {
+      type: 'FeatureCollection',
+      features: [routeResult.geojson],
+    }
+
+    if (!map.getSource(sourceId)) {
+      map.addSource(sourceId, {
+        type: 'geojson',
+        data: geojsonData,
+      })
+    } else {
+      const src = map.getSource(sourceId) as maplibregl.GeoJSONSource
+      src.setData(geojsonData as any)
+    }
+
+    if (!map.getLayer(casingLayerId)) {
+      map.addLayer({
+        id: casingLayerId,
+        type: 'line',
+        source: sourceId,
+        paint: {
+          'line-color': '#0284c7',
+          'line-width': 7,
+          'line-opacity': 0.85,
+        },
+      })
+    }
+
+    if (!map.getLayer(lineLayerId)) {
+      map.addLayer({
+        id: lineLayerId,
+        type: 'line',
+        source: sourceId,
+        paint: {
+          'line-color': '#00f0ff',
+          'line-width': 3.8,
+          'line-opacity': 1.0,
+        },
+      })
+    }
+  }, [routeResult, mapLoaded])
 
   // Fit map to Hidkal bounds
   const fitToHidkal = useCallback(() => {
@@ -616,12 +755,30 @@ function App() {
     )
   }, [])
 
-  // Handle Map Click - Point Inspection Probe (when clicking non-feature canvas)
+  // Handle Map Click - Point Inspection Probe & Route Point Picking (Requirement 8)
   useEffect(() => {
     const map = mapRef.current
     if (!map) return
 
     const handleMapClick = (e: maplibregl.MapMouseEvent) => {
+      const { lng, lat } = e.lngLat
+      const queryLon = Number(lng.toFixed(5))
+      const queryLat = Number(lat.toFixed(5))
+
+      // Requirement 8: If picking route start or destination, set coords and do not trigger probe/popup
+      if (routePickModeRef.current === 'start') {
+        setStartLon(queryLon)
+        setStartLat(queryLat)
+        setRoutePickMode(null)
+        return
+      }
+      if (routePickModeRef.current === 'dest') {
+        setEndLon(queryLon)
+        setEndLat(queryLat)
+        setRoutePickMode(null)
+        return
+      }
+
       // If a vector feature was clicked, don't overwrite with blank probe
       const vectorFeatures = map.queryRenderedFeatures(e.point, {
         layers: ['assets-polygons-fill', 'assets-lines', 'assets-points', 'roads-line'].filter((id) => map.getLayer(id)),
@@ -631,11 +788,7 @@ function App() {
         return
       }
 
-      const { lng, lat } = e.lngLat
-      const queryLon = Number(lng.toFixed(6))
-      const queryLat = Number(lat.toFixed(6))
-
-      // Update or create marker
+      // Update or create probe marker
       if (!markerRef.current) {
         const el = document.createElement('div')
         el.className = 'custom-map-marker'
@@ -766,6 +919,114 @@ function App() {
     setDepthCurve(depthCurve.filter((_, i) => i !== index))
   }
 
+  // Execute Route Screening Calculation
+  const handleCalculateRoute = () => {
+    setRouteLoading(true)
+    setRouteError(null)
+
+    const payload = {
+      start_lon: startLon,
+      start_lat: startLat,
+      end_lon: endLon,
+      end_lat: endLat,
+      avoid_screening_positive: avoidScreeningPositive,
+      max_snap_distance_meters: maxSnapDistance,
+    }
+
+    fetch(`${apiBaseUrl}/api/routes/screening`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    })
+      .then(async (res) => {
+        if (!res.ok) {
+          const errData = await res.json().catch(() => ({}))
+          throw new Error(errData.detail || `Routing error (HTTP ${res.status})`)
+        }
+        return res.json() as Promise<RouteScreeningResult>
+      })
+      .then((data) => {
+        setRouteResult(data)
+        setRouteLoading(false)
+      })
+      .catch((err) => {
+        setRouteError(err.message || 'Route screening failed.')
+        setRouteLoading(false)
+      })
+  }
+
+  const handleClearRoute = () => {
+    setRouteResult(null)
+    setRouteError(null)
+  }
+
+  // Execute Geospatial Export Download
+  const handleDownloadExport = async () => {
+    setExportLoading(true)
+    setExportError(null)
+    setExportSuccessMsg(null)
+
+    try {
+      let url = ''
+      let options: RequestInit = {}
+
+      if (exportLayer === 'route') {
+        if (!routeResult || !routeResult.route_found) {
+          throw new Error('Please calculate a valid screening route in the Route tab first.')
+        }
+        url = `${apiBaseUrl}/api/export/route`
+        options = {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            format: exportFormat,
+            route_request: {
+              start_lon: startLon,
+              start_lat: startLat,
+              end_lon: endLon,
+              end_lat: endLat,
+              avoid_screening_positive: avoidScreeningPositive,
+              max_snap_distance_meters: maxSnapDistance,
+            },
+          }),
+        }
+      } else {
+        url = `${apiBaseUrl}/api/export/${exportLayer}?format=${exportFormat}&exposure_filter=${exportFilter}`
+        options = { method: 'GET' }
+      }
+
+      const res = await fetch(url, options)
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}))
+        throw new Error(errData.detail || `Export failed with HTTP ${res.status}`)
+      }
+
+      // Read filename from Content-Disposition header
+      const disp = res.headers.get('Content-Disposition')
+      let filename = `dam_break_${exportLayer}_${exportFilter}.${exportFormat === 'shp' ? 'zip' : exportFormat}`
+      if (disp && disp.includes('filename=')) {
+        const match = disp.match(/filename="?([^";]+)"?/)
+        if (match && match[1]) filename = match[1]
+      }
+
+      const blob = await res.blob()
+      const blobUrl = window.URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = blobUrl
+      a.download = filename
+      document.body.appendChild(a)
+      a.click()
+      document.body.removeChild(a)
+      window.URL.revokeObjectURL(blobUrl)
+
+      setExportSuccessMsg(`Successfully downloaded ${filename}`)
+    } catch (err: any) {
+      setExportError(err.message || 'Export generation failed')
+    } finally {
+      setExportLoading(false)
+    }
+  }
+
   const formatCurrency = (val: number) => {
     return val.toLocaleString('en-IN', { maximumFractionDigits: 0 })
   }
@@ -807,10 +1068,21 @@ function App() {
       <main className="map-workspace">
         <div ref={mapContainerRef} className="map-canvas" id="map-container" />
 
+        {/* Route Picking Mode Indicator Banner */}
+        {routePickMode && (
+          <div className="pick-mode-banner">
+            <span className="pick-mode-icon">📍</span>
+            <span>
+              Click on the map to place <strong>{routePickMode === 'start' ? 'Start Point (Green)' : 'Destination Point (Purple)'}</strong>
+            </span>
+            <button className="btn-cancel-pick" onClick={() => setRoutePickMode(null)}>✕ Cancel</button>
+          </div>
+        )}
+
         {/* Floating Sidebar / Control HUD */}
         {sidebarOpen && (
           <aside className="hud-panel">
-            {/* Panel Tab Navigation */}
+            {/* Panel Tab Navigation (5 Tabs) */}
             <div className="hud-tabs">
               <button
                 className={`hud-tab-btn ${activeTab === 'layers' ? 'active' : ''}`}
@@ -828,10 +1100,23 @@ function App() {
                 className={`hud-tab-btn ${activeTab === 'damage' ? 'active' : ''}`}
                 onClick={() => setActiveTab('damage')}
               >
-                💰 Damage Scenario
+                💰 Damage
+              </button>
+              <button
+                className={`hud-tab-btn ${activeTab === 'route' ? 'active' : ''}`}
+                onClick={() => setActiveTab('route')}
+              >
+                🛣️ Route
+              </button>
+              <button
+                className={`hud-tab-btn ${activeTab === 'export' ? 'active' : ''}`}
+                onClick={() => setActiveTab('export')}
+              >
+                💾 Export
               </button>
             </div>
 
+            {/* TAB 1: Hydrodynamic & Vector Layers */}
             {activeTab === 'layers' && (
               <>
                 {/* Vector Overlays Toggle Card */}
@@ -873,7 +1158,7 @@ function App() {
                   <div className="vector-style-key">
                     <div className="style-key-item">
                       <span className="style-chip chip-exposed" />
-                      <span>Screening-positive (depth &gt; 0)</span>
+                      <span>Screening-positive (depth &gt; 0 at sample)</span>
                     </div>
                     <div className="style-key-item">
                       <span className="style-chip chip-safe" />
@@ -976,10 +1261,10 @@ function App() {
 
                       {/* Transparency note */}
                       <div className="transparency-note">
-                        {selectedLayer === 'depth' && 'ℹ️ Dry cells (depth = 0, unit unverified) are rendered transparent.'}
-                        {selectedLayer === 'velocity' && 'ℹ️ Zero velocity cells (0, unit unverified) are rendered transparent.'}
-                        {selectedLayer === 'arrival' && 'ℹ️ Unflooded cells (+9999 / -9999, unit unverified) are rendered transparent.'}
-                        {selectedLayer === 'dem' && 'ℹ️ NoData / outside cells are rendered transparent.'}
+                        {selectedLayer === 'depth' && 'ℹ️ Zero depth cells (not exposed at sample) are rendered transparent.'}
+                        {selectedLayer === 'velocity' && 'ℹ️ Zero velocity cells are rendered transparent.'}
+                        {selectedLayer === 'arrival' && 'ℹ️ NoData arrival cells (+9999 / -9999) are rendered transparent.'}
+                        {selectedLayer === 'dem' && 'ℹ️ NoData / outside domain cells are rendered transparent.'}
                       </div>
                     </div>
                   ) : (
@@ -1032,9 +1317,9 @@ function App() {
                               {probe.values.depth?.value != null
                                 ? probe.values.depth.value > 0
                                   ? `${probe.values.depth.value.toFixed(2)} (unit unverified)`
-                                  : '0.00 (unit unverified)'
+                                  : '0.00 (not exposed)'
                                 : probe.values.depth?.is_nodata
-                                ? 'NoData / Dry'
+                                ? 'NoData'
                                 : 'N/A'}
                             </div>
                           </div>
@@ -1064,7 +1349,7 @@ function App() {
                               {probe.values.arrival?.value != null
                                 ? `${probe.values.arrival.value.toFixed(2)} (unit unverified)`
                                 : probe.values.arrival?.is_nodata
-                                ? 'Unflooded'
+                                ? 'Not assessed'
                                 : 'N/A'}
                             </div>
                           </div>
@@ -1080,8 +1365,8 @@ function App() {
               </>
             )}
 
+            {/* TAB 2: Exposure Summary */}
             {activeTab === 'exposure' && (
-              /* Exposure Summary Card */
               <div className="hud-card exposure-summary-card">
                 <div className="hud-card-header">
                   <h3>Preliminary Exposure Screening Summary</h3>
@@ -1195,8 +1480,8 @@ function App() {
               </div>
             )}
 
+            {/* TAB 3: Damage Scenario Estimation */}
             {activeTab === 'damage' && (
-              /* Phase 7: Illustrative Damage Scenario Panel */
               <div className="hud-card damage-card">
                 <div className="hud-card-header">
                   <h3>Illustrative Damage Scenario</h3>
@@ -1436,6 +1721,380 @@ function App() {
                       </div>
                     </div>
                   )}
+                </div>
+              </div>
+            )}
+
+            {/* TAB 4: Route Screening (Phase 8) */}
+            {activeTab === 'route' && (
+              <div className="hud-card route-card">
+                <div className="hud-card-header">
+                  <h3>Road Network Route Screening</h3>
+                  <button className="btn-fit" onClick={handleClearRoute} title="Clear calculated route">
+                    ✕ Clear
+                  </button>
+                </div>
+
+                <div className="route-body">
+                  {/* Prominent Mandatory Disclaimer Banner */}
+                  <div className="route-disclaimer-banner">
+                    <span className="disclaimer-icon">⚠️</span>
+                    <p className="disclaimer-text">
+                      <strong>Preliminary screening route only.</strong> Road closures, structural bridge integrity, carrying capacity, and live traffic are not validated. Not an official emergency evacuation route.
+                    </p>
+                  </div>
+
+                  {/* Waypoint Coordinates Card */}
+                  <div className="route-waypoints-section">
+                    <h4 className="config-section-title">📍 Origin & Destination Points</h4>
+
+                    {/* Start Waypoint */}
+                    <div className="waypoint-box waypoint-start">
+                      <div className="waypoint-header">
+                        <span className="waypoint-badge badge-start">📍 Start Point</span>
+                        <button
+                          className={`btn-pick-map ${routePickMode === 'start' ? 'active-pick' : ''}`}
+                          onClick={() => setRoutePickMode(routePickMode === 'start' ? null : 'start')}
+                        >
+                          {routePickMode === 'start' ? '🎯 Click Map...' : '📍 Set on Map'}
+                        </button>
+                      </div>
+                      <div className="coord-inputs-grid">
+                        <div className="coord-field">
+                          <label>Longitude (°E)</label>
+                          <input
+                            type="number"
+                            step="0.0001"
+                            value={startLon}
+                            onChange={(e) => setStartLon(parseFloat(e.target.value) || 0)}
+                            className="config-input font-mono"
+                          />
+                        </div>
+                        <div className="coord-field">
+                          <label>Latitude (°N)</label>
+                          <input
+                            type="number"
+                            step="0.0001"
+                            value={startLat}
+                            onChange={(e) => setStartLat(parseFloat(e.target.value) || 0)}
+                            className="config-input font-mono"
+                          />
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Destination Waypoint */}
+                    <div className="waypoint-box waypoint-dest">
+                      <div className="waypoint-header">
+                        <span className="waypoint-badge badge-dest">🎯 Destination Point</span>
+                        <button
+                          className={`btn-pick-map ${routePickMode === 'dest' ? 'active-pick' : ''}`}
+                          onClick={() => setRoutePickMode(routePickMode === 'dest' ? null : 'dest')}
+                        >
+                          {routePickMode === 'dest' ? '🎯 Click Map...' : '📍 Set on Map'}
+                        </button>
+                      </div>
+                      <div className="coord-inputs-grid">
+                        <div className="coord-field">
+                          <label>Longitude (°E)</label>
+                          <input
+                            type="number"
+                            step="0.0001"
+                            value={endLon}
+                            onChange={(e) => setEndLon(parseFloat(e.target.value) || 0)}
+                            className="config-input font-mono"
+                          />
+                        </div>
+                        <div className="coord-field">
+                          <label>Latitude (°N)</label>
+                          <input
+                            type="number"
+                            step="0.0001"
+                            value={endLat}
+                            onChange={(e) => setEndLat(parseFloat(e.target.value) || 0)}
+                            className="config-input font-mono"
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Routing Options */}
+                  <div className="route-options-section">
+                    <label className="toggle-checkbox-row route-option-checkbox">
+                      <input
+                        type="checkbox"
+                        checked={avoidScreeningPositive}
+                        onChange={(e) => setAvoidScreeningPositive(e.target.checked)}
+                      />
+                      <div className="toggle-label-content">
+                        <span className="toggle-title">🚫 Avoid screening-positive (depth &gt; 0 at sample) roads</span>
+                        <span className="toggle-desc">Excludes road edges with depth &gt; 0 in sample raster</span>
+                      </div>
+                    </label>
+
+                    <div className="config-field">
+                      <label>Max Snap Distance to Road Network (meters)</label>
+                      <input
+                        type="number"
+                        min="100"
+                        max="20000"
+                        step="500"
+                        value={maxSnapDistance}
+                        onChange={(e) => setMaxSnapDistance(Math.max(100, parseFloat(e.target.value) || 5000))}
+                        className="config-input font-mono"
+                      />
+                    </div>
+                  </div>
+
+                  {/* Calculate Action Button */}
+                  <div className="calculate-action-row">
+                    <button
+                      className="btn-calculate"
+                      disabled={routeLoading}
+                      onClick={handleCalculateRoute}
+                    >
+                      {routeLoading ? (
+                        <>
+                          <span className="spinner"></span> Computing Screening Route...
+                        </>
+                      ) : (
+                        '🛣️ Screen Shortest Traversable Route'
+                      )}
+                    </button>
+                  </div>
+
+                  {routeError && <div className="damage-error-box">{routeError}</div>}
+
+                  {/* Route Screening Results Summary */}
+                  {routeResult && (
+                    <div className="route-results-section">
+                      <div className="hud-card-header">
+                        <h4 className="results-title">
+                          {routeResult.route_found ? '✅ Route Screened Successfully' : '⚠️ No Traversable Route Found'}
+                        </h4>
+                        <span className={`status-badge ${routeResult.route_found ? 'status-ok' : 'status-fail'}`}>
+                          {routeResult.route_found ? 'Traversable' : 'Blocked'}
+                        </span>
+                      </div>
+
+                      {routeResult.route_found ? (
+                        <>
+                          {/* Route KPI Stat Cards */}
+                          <div className="route-kpi-grid">
+                            <div className="route-kpi-card">
+                              <span className="kpi-title">Total Distance</span>
+                              <div className="kpi-value-row">
+                                <span className="kpi-num text-cyan">{routeResult.total_distance_km}</span>
+                                <span className="kpi-total">km</span>
+                              </div>
+                              <span className="kpi-sub">
+                                ({routeResult.total_distance_meters?.toLocaleString()} m)
+                              </span>
+                            </div>
+
+                            <div className="route-kpi-card">
+                              <span className="kpi-title">Road Segments</span>
+                              <div className="kpi-value-row">
+                                <span className="kpi-num">{routeResult.segment_count}</span>
+                                <span className="kpi-total">edges</span>
+                              </div>
+                              <span className="kpi-sub">
+                                {routeResult.excluded_edges_count} screening-positive (depth &gt; 0 at sample) excluded
+                              </span>
+                            </div>
+                          </div>
+
+                          {/* Node Snapping Breakdown */}
+                          <div className="breakdown-section">
+                            <h5 className="sub-title">Node Snapping Diagnostics</h5>
+                            <div className="snap-diagnostics-box">
+                              <div className="snap-row">
+                                <span className="snap-label">Start Point Snap:</span>
+                                <span className="snap-val font-mono">{routeResult.start_snap_distance_meters} m</span>
+                              </div>
+                              <div className="snap-row">
+                                <span className="snap-label">Destination Snap:</span>
+                                <span className="snap-val font-mono">{routeResult.end_snap_distance_meters} m</span>
+                              </div>
+                              <div className="snap-row">
+                                <span className="snap-label">Excluded Edges (depth &gt; 0 at sample):</span>
+                                <span className="snap-val font-mono text-danger">{routeResult.excluded_edges_count} segments</span>
+                              </div>
+                            </div>
+                          </div>
+                        </>
+                      ) : (
+                        <div className="route-not-found-box">
+                          <p>
+                            No clear road path could connect the snapped start and destination nodes without traversing screening-positive (depth &gt; 0 at sample) road segments. Try unchecking <em>"Avoid screening-positive roads"</em> to inspect shortest geometric connection.
+                          </p>
+                        </div>
+                      )}
+
+                      {/* Warnings and Methodology */}
+                      {routeResult.warnings && routeResult.warnings.length > 0 && (
+                        <div className="damage-notes-card">
+                          <span className="note-title">⚠️ Route Warnings & Notes</span>
+                          <ul className="warnings-list">
+                            {routeResult.warnings.map((w, idx) => (
+                              <li key={idx}>{w}</li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* TAB 5: Geospatial Exports (Phase 9) */}
+            {activeTab === 'export' && (
+              <div className="hud-card export-card">
+                <div className="hud-card-header">
+                  <h3>Geospatial Data Exports</h3>
+                  <span className="legend-tag">MULTI-FORMAT</span>
+                </div>
+
+                <div className="export-body">
+                  {/* Export Layer Selector */}
+                  <div className="export-section">
+                    <label className="export-field-label">1. Select Target Layer</label>
+                    <div className="export-options-grid">
+                      <button
+                        className={`export-select-btn ${exportLayer === 'assets' ? 'active' : ''}`}
+                        onClick={() => setExportLayer('assets')}
+                      >
+                        <span className="export-btn-icon">🏛️</span>
+                        <div className="export-btn-text">
+                          <span className="export-btn-title">Infrastructure Assets</span>
+                          <span className="export-btn-sub">Buildings, Hospitals, Settlements (513)</span>
+                        </div>
+                      </button>
+
+                      <button
+                        className={`export-select-btn ${exportLayer === 'roads' ? 'active' : ''}`}
+                        onClick={() => setExportLayer('roads')}
+                      >
+                        <span className="export-btn-icon">🛣️</span>
+                        <div className="export-btn-text">
+                          <span className="export-btn-title">Road Network Graph</span>
+                          <span className="export-btn-sub">8,047 road network segments</span>
+                        </div>
+                      </button>
+
+                      <button
+                        className={`export-select-btn ${exportLayer === 'route' ? 'active' : ''}`}
+                        onClick={() => setExportLayer('route')}
+                      >
+                        <span className="export-btn-icon">🚗</span>
+                        <div className="export-btn-text">
+                          <span className="export-btn-title">Screened Route</span>
+                          <span className="export-btn-sub">
+                            {routeResult?.route_found ? `${routeResult.total_distance_km} km calculated route` : 'Requires calculated route'}
+                          </span>
+                        </div>
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Route Status Callout if Route Layer Selected */}
+                  {exportLayer === 'route' && (!routeResult || !routeResult.route_found) && (
+                    <div className="export-route-warning">
+                      <span>⚠️ No calculated route found. Please calculate a route in the <strong>Route</strong> tab before exporting.</span>
+                    </div>
+                  )}
+
+                  {/* Exposure Status Filter (only for assets and roads) */}
+                  {exportLayer !== 'route' && (
+                    <div className="export-section">
+                      <label className="export-field-label">2. Exposure Status Filter</label>
+                      <div className="filter-options-grid">
+                        {[
+                          { id: 'all', label: 'All Features', desc: 'Complete dataset' },
+                          { id: 'screening_positive', label: 'Screening-positive Only', desc: 'Depth > 0 in sample raster' },
+                          { id: 'not_exposed', label: 'Not Exposed at Sample Only', desc: 'Assessed with zero depth' },
+                          { id: 'not_assessed', label: 'Not Assessed Only', desc: 'Outside domain extent' },
+                        ].map((item) => (
+                          <button
+                            key={item.id}
+                            className={`filter-select-btn ${exportFilter === item.id ? 'active' : ''}`}
+                            onClick={() => setExportFilter(item.id as any)}
+                          >
+                            <span className="filter-btn-title">{item.label}</span>
+                            <span className="filter-btn-sub">{item.desc}</span>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Format Selector */}
+                  <div className="export-section">
+                    <label className="export-field-label">
+                      {exportLayer === 'route' ? '2. Select Export Format' : '3. Select Export Format'}
+                    </label>
+                    <div className="format-options-grid">
+                      <button
+                        className={`format-select-btn ${exportFormat === 'geojson' ? 'active' : ''}`}
+                        onClick={() => setExportFormat('geojson')}
+                      >
+                        <span className="format-title">GeoJSON</span>
+                        <span className="format-ext">.geojson</span>
+                        <span className="format-desc">Standard web GIS GeoJSON FeatureCollection</span>
+                      </button>
+
+                      <button
+                        className={`format-select-btn ${exportFormat === 'kml' ? 'active' : ''}`}
+                        onClick={() => setExportFormat('kml')}
+                      >
+                        <span className="format-title">Google Earth KML</span>
+                        <span className="format-ext">.kml</span>
+                        <span className="format-desc">Styled placemarks with attribute metadata</span>
+                      </button>
+
+                      <button
+                        className={`format-select-btn ${exportFormat === 'shp' ? 'active' : ''}`}
+                        onClick={() => setExportFormat('shp')}
+                      >
+                        <span className="format-title">ESRI Shapefile ZIP</span>
+                        <span className="format-ext">.zip</span>
+                        <span className="format-desc">Multi-geometry partition + README_METADATA.txt</span>
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Download Trigger Button */}
+                  <div className="calculate-action-row">
+                    <button
+                      className={`btn-calculate ${(exportLayer === 'route' && (!routeResult || !routeResult.route_found)) ? 'disabled' : ''}`}
+                      disabled={exportLoading || (exportLayer === 'route' && (!routeResult || !routeResult.route_found))}
+                      onClick={handleDownloadExport}
+                    >
+                      {exportLoading ? (
+                        <>
+                          <span className="spinner"></span> Generating Package...
+                        </>
+                      ) : (
+                        `💾 Download ${exportLayer.toUpperCase()} (${exportFormat.toUpperCase()})`
+                      )}
+                    </button>
+                  </div>
+
+                  {exportSuccessMsg && <div className="export-success-box">✅ {exportSuccessMsg}</div>}
+                  {exportError && <div className="damage-error-box">{exportError}</div>}
+
+                  {/* Package Metadata Summary */}
+                  <div className="export-info-card">
+                    <span className="note-title">ℹ️ Export Specifications</span>
+                    <ul className="export-specs-list">
+                      <li><strong>CRS:</strong> WGS84 Longitude/Latitude (<code>EPSG:4326</code>)</li>
+                      <li><strong>Shapefile Bundles:</strong> Zipped archive includes complete <code>.shp</code>, <code>.shx</code>, <code>.dbf</code>, <code>.prj</code>, <code>.cpg</code> sets.</li>
+                      <li><strong>Mixed Geometries:</strong> Automatically split into separated <code>_points.shp</code>, <code>_lines.shp</code>, and <code>_polygons.shp</code>.</li>
+                      <li><strong>Audit Metadata:</strong> Every ZIP package includes a <code>README_METADATA.txt</code> containing column mappings and scientific screening disclaimers.</li>
+                    </ul>
+                  </div>
                 </div>
               </div>
             )}

@@ -32,6 +32,9 @@ uvicorn app.main:app --reload --port 8000
 - Exposure Screening Summary: `http://localhost:8000/api/exposure/summary`
 - Damage Scenario Default Config: `http://localhost:8000/api/damage/config`
 - Damage Scenario Estimation: `POST http://localhost:8000/api/damage/estimate`
+- Route Screening: `POST http://localhost:8000/api/routes/screening`
+- Geospatial Layer Export: `GET http://localhost:8000/api/export/{layer}?format={format}&exposure_filter={filter}` (`assets`, `roads`)
+- Screened Route Export: `POST http://localhost:8000/api/export/route` (or `POST http://localhost:8000/api/export`)
 
 ### Registered Dataset IDs
 - `dem` -> `data/raw/data_hidkal/hidkal_dem.tif` (Float32 DEM)
@@ -41,12 +44,21 @@ uvicorn app.main:app --reload --port 8000
 - `assets` -> `data/raw/data_hidkal/hidkal_assets.geojson` (513 OSM infrastructure assets)
 - `roads` -> `data/raw/data_hidkal/hidkal_roads.graphml` (3,084 nodes, 8,047 road edges)
 
-### Illustrative Damage Scenario Module (Phase 7)
-- Purely illustrative screening tool: does not represent actual loss, official risk, casualties, or validated predictions.
-- Requires explicit user acknowledgement (`acknowledge_unverified_inputs == true`) before calculation.
-- Editable parameters: currency label, assumed depth unit, category replacement values, piecewise monotonic depth-damage curve, and sensitivity percentage ($\pm X\%$).
-- Piecewise linear interpolation of damage ratios applied to screening-positive asset sampled depths.
-- Roads and human casualties are strictly excluded from monetary valuation.
+### Road Network Route Screening Module (Phase 8)
+- Dijkstra shortest path routing over directed MultiDiGraph topology weighted by geodesic edge length in meters.
+- Snapping to nearest road network nodes via spherical Haversine distance with configurable threshold (`max_snap_distance_meters`, default 5000 m). Rejects points beyond threshold with HTTP 422.
+- Automatically excludes screening-positive road segments (`exposed == true`) when `avoid_screening_positive` is enabled.
+- Reconstructs continuous LineString route geometries in exact sequence and direction of travel.
+- Prominently labeled with mandatory screening disclaimer ("Screening route only — road closures, bridges, carrying capacity, and live accessibility are not validated").
+
+### Geospatial Multi-Format Exports Module (Phase 9)
+- Multi-format support: **GeoJSON** (`.geojson`), **Google Earth KML** (`.kml`), and **ESRI Shapefile ZIP** (`.zip`).
+- Strict layer and format whitelisting (`assets`, `roads`, `route`).
+- Exposure status filtering: `all`, `screening_positive`, `not_exposed`, `not_assessed`.
+- Automatic partitioning of mixed geometry types into separated `_points.shp`, `_lines.shp`, and `_polygons.shp` shapefile bundles.
+- Includes complete shapefile component sets (`.shp`, `.shx`, `.dbf`, `.prj`, `.cpg`) and `README_METADATA.txt` detailing column mappings, `EPSG:4326` CRS, and scientific disclaimers.
+- In-memory ZIP buffer creation prevents premature file deletion and race conditions during streaming responses.
+
 
 ### 3. Frontend Application (React + Vite + TypeScript)
 ```powershell

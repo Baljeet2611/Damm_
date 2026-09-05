@@ -1,5 +1,6 @@
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, List, Tuple
 from pydantic import BaseModel, Field
+
 
 
 class DatasetResponse(BaseModel):
@@ -155,3 +156,54 @@ class DamageScenarioResponse(BaseModel):
     asset_counts: AssetCountSummary
     by_category: Dict[str, CategoryDamageResult]
     warnings: List[str]
+
+
+# Phase 8: Route Screening Schemas
+
+class RouteScreeningRequest(BaseModel):
+    start_lon: float = Field(..., ge=-180.0, le=180.0, description="Start longitude in decimal degrees")
+    start_lat: float = Field(..., ge=-90.0, le=90.0, description="Start latitude in decimal degrees")
+    end_lon: float = Field(..., ge=-180.0, le=180.0, description="Destination longitude in decimal degrees")
+    end_lat: float = Field(..., ge=-90.0, le=90.0, description="Destination latitude in decimal degrees")
+    avoid_screening_positive: bool = Field(default=True, description="Remove screening-positive (depth > 0 at sample) road segments from routing graph")
+    max_snap_distance_meters: float = Field(
+        default=5000.0,
+        ge=10.0,
+        le=50000.0,
+        description="Maximum allowed snapping distance in meters to nearest road network node. Points exceeding this are rejected.",
+    )
+
+
+class RouteScreeningResponse(BaseModel):
+    route_found: bool
+    geojson: Optional[Dict[str, Any]] = None
+    total_distance_meters: Optional[float] = None
+    total_distance_km: Optional[float] = None
+    segment_count: Optional[int] = None
+    start_coords: Tuple[float, float]
+    end_coords: Tuple[float, float]
+    snapped_start_coords: Optional[Tuple[float, float]] = None
+    snapped_end_coords: Optional[Tuple[float, float]] = None
+    start_snap_distance_meters: Optional[float] = None
+    end_snap_distance_meters: Optional[float] = None
+    excluded_edges_count: int
+    avoid_screening_positive: bool
+    disclaimer: str
+    methodology: str
+    warnings: List[str]
+
+
+# Phase 9: Geospatial Export Schemas
+
+class ExportRouteRequest(BaseModel):
+    format: str = Field(default="geojson", description="Export format: geojson, kml, or shp")
+    route_request: RouteScreeningRequest = Field(..., description="Route screening parameters to compute route for export")
+
+
+class ExportRequest(BaseModel):
+    layer: str = Field(..., description="Target layer: assets, roads, or route")
+    format: str = Field(default="geojson", description="Export format: geojson, kml, or shp")
+    exposure_filter: Optional[str] = Field(default="all", description="Exposure filter: all, screening_positive, not_exposed, not_assessed")
+    route_request: Optional[RouteScreeningRequest] = Field(default=None, description="Route screening parameters if layer is route")
+
+

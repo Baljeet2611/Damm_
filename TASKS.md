@@ -109,17 +109,53 @@ Automated dam-break framework comparing SPH and Delft3D, with inundation, damage
 
 ---
 
-## Phase 8: GIS & Multi-Format Export Pipeline
-- [ ] Automated spatial layer exporter:
-  * [ ] Export hazard zones and peak depths to ESRI Shapefile (`.shp`, `.shx`, `.dbf`, `.prj`).
-  * [ ] Export styled 3D hazard polygons and time-stamped wavefronts to Google Earth KML/KMZ (`.kml`, `.kmz`).
-  * [ ] Export vector layers to open OGC GeoPackage (`.gpkg`).
-  * [ ] Export Cloud-Optimized GeoTIFFs (COG) with pyramids for rapid web mapping.
-- [ ] Automated PDF / Markdown summary report generator (flood extent, affected population, disrupted roads, damage tally).
+## Phase 8: Preliminary Road Network Route Screening [COMPLETED]
+- [x] Backend Routing Engine (`backend/app/route_service.py`):
+  - [x] Load road network from OSMnx GraphML (`hidkal_roads.graphml`) and synchronize with exposure screening results from `vector_service.get_exposure_roads()`.
+  - [x] Graph topology: Respect directed `MultiDiGraph` and extract edge geometries in travel direction order.
+  - [x] Stable edge key matching: Match exposure screening results using `(u, v, key)` tuples, never list indices.
+  - [x] Spatial node lookup: Nearest node snapping using great-circle Haversine spherical distance calculation.
+  - [x] Validation: Coordinate bounds validation ([-180, 180], [-90, 90]) and configurable `max_snap_distance_meters` (default 5000m) with 422 rejection when points exceed threshold.
+  - [x] Filtered Dijkstra shortest-path routing avoiding edges marked `exposed == True` when `avoid_screening_positive` is enabled.
+  - [x] Fallback handling: Returns `route_found: False` with diagnostic warnings if no traversable path exists without routing over screening-positive (depth > 0 at sample) edges.
+  - [x] Metric calculations: Geodesic route distance (meters and km), segment count, snap distances, and excluded screening-positive (depth > 0 at sample) edge counts.
+  - [x] Disclaimers & metadata: Includes scientific screening disclaimer ("Screening route only — road closures, bridges, carrying capacity, and live accessibility are not validated").
+- [x] Frontend Route Screening Panel (`frontend/src/App.tsx`, `App.css`):
+  - [x] Dedicated "🛣️ Route" tab in HUD panel.
+  - [x] Coordinate input fields with interactive map picking ("📍 Set on Map" for Start and Destination).
+  - [x] Map click interception: Picking mode banner appears, map click sets waypoint and dismisses banner without triggering point probe or vector popups.
+  - [x] Start Pin (Green) and Destination Pin (Purple) markers rendered on MapLibre map.
+  - [x] Glowing cyan route LineString layer with dark blue casing rendered above base map.
+  - [x] Route result card with status badge, distance KPIs, segment count, snap distances, and warnings list.
+- [x] Test suite: Comprehensive unit and integration tests (`backend/tests/test_route_api.py`) covering snapping, edge exclusion, fallback diagnostics, and real Hidkal road routing.
 
 ---
 
-## Phase 9: Earth Observation & GEE Flood Validation Module
+## Phase 9: Geospatial Multi-Format Exports Pipeline [COMPLETED]
+- [x] Backend Export Engine (`backend/app/export_service.py`, `app/main.py`):
+  - [x] Endpoints:
+    - `GET /api/export/{layer}` (whitelisted: `assets`, `roads`; applies `exposure_filter`: `all`, `screening_positive`, `not_exposed`, `not_assessed`).
+    - `POST /api/export/route` and `POST /api/export` (recomputes screened route from validated `RouteScreeningRequest`).
+  - [x] GeoJSON Exporter: Formatted GeoJSON FeatureCollection stream with content disposition attachment headers.
+  - [x] Google Earth KML Exporter: Well-formed XML-escaped Placemarks with extended attribute data tables, custom styling, and disclaimer headers.
+  - [x] ESRI Shapefile Zipped Archive Exporter:
+    - GeoPandas GeoDataFrame export into in-memory ZIP buffer before temporary directory cleanup to avoid streaming race conditions.
+    - Mixed geometry partitioning: Automatically splits assets into `_points.shp`, `_lines.shp`, and `_polygons.shp`.
+    - Complete shapefile sidecars: `.shp`, `.shx`, `.dbf`, `.prj` (`EPSG:4326`), `.cpg` (`UTF-8`).
+    - Attribute sanitization: Deterministic column name shortening ($\le 10$ chars), safe serialization of nested dicts/lists to JSON strings, and string truncation to 254 chars.
+    - Detailed `README_METADATA.txt` packaged inside every ZIP with attribute field mappings, CRS specification, and unverified data disclaimers.
+  - [x] Security & Safeguards: Strict layer whitelisting, format validation, and explicit 422 rejection of GET route requests.
+- [x] Frontend Geospatial Export Panel:
+  - [x] Dedicated "💾 Export" tab in HUD panel.
+  - [x] Layer selector (Infrastructure Assets, Road Network, Screened Route with prerequisite validation).
+  - [x] Exposure status filter selector (All, Screening-positive, Not Exposed at Sample, Not Assessed).
+  - [x] Format selector (GeoJSON, KML, Shapefile ZIP).
+  - [x] Browser blob download trigger with loading spinner, success confirmation badge, and error notifications.
+- [x] Test suite: Comprehensive unit and integration tests (`backend/tests/test_export_api.py`) validating GeoJSON, KML XML structure, Shapefile ZIP internal files, and metadata generation.
+
+---
+
+## Phase 10: Earth Observation & GEE Flood Validation Module
 - [ ] Google Earth Engine (GEE) integration:
   * [ ] Authenticate and query Sentinel-1 SAR GRD collections (C-band VV/VH polarizations) for pre-flood and post-flood dates.
   * [ ] Apply speckle filtering (Lee/Refined Lee) and radiometric terrain correction.
@@ -131,7 +167,7 @@ Automated dam-break framework comparing SPH and Delft3D, with inundation, damage
 
 ---
 
-## Phase 10: 3D Terrain & Decision Support Dashboard
+## Phase 11: 3D Terrain & Decision Support Dashboard
 - [ ] Interactive 2D Map View:
   * [ ] Temporal playback scrubber showing flood wave propagation over time.
 - [ ] 3D WebGL Terrain Viewer:
@@ -143,6 +179,7 @@ Automated dam-break framework comparing SPH and Delft3D, with inundation, damage
 
 ---
 
-## Phase 11: Benchmarking, Validation & Final Packaging
+## Phase 12: Benchmarking, Validation & Final Packaging
 - [ ] End-to-end integration testing on Hidkal case study.
 - [ ] Comprehensive documentation, API guides, and demonstration video / walkthrough.
+
