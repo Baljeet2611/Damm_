@@ -41,6 +41,11 @@ uvicorn app.main:app --reload --port 8000
 - Delft3D Draft Package Download: `GET http://localhost:8000/api/scenarios/{id}/download-package`
 - Simulation Execution: `POST http://localhost:8000/api/scenarios/{id}/run` (Gated; requires engine)
 - Simulation Runs History & Logs: `GET http://localhost:8000/api/runs`, `GET http://localhost:8000/api/runs/{run_id}/logs`
+- PySPH Capabilities: `GET http://localhost:8000/api/sph/capabilities`
+- PySPH Package Build & Download: `POST /api/scenarios/{id}/build-sph-package`, `GET /api/scenarios/{id}/download-sph-package`
+- PySPH Simulation Run & Logs: `POST /api/scenarios/{id}/run-sph` (Gated), `GET /api/sph-runs`, `GET /api/sph-runs/{run_id}/logs`
+- Multi-Engine Comparison: `GET /api/comparison/readiness`, `GET /api/comparison/methodology`, `POST /api/comparison/compare`
+- Google Earth Engine Connector: `GET /api/gee/capabilities`, `GET /api/gee/datasets`, `POST /api/gee/export-plan`
 
 ### Registered Dataset IDs
 - `dem` -> `data/raw/data_hidkal/hidkal_dem.tif` (Float32 DEM)
@@ -62,6 +67,12 @@ uvicorn app.main:app --reload --port 8000
 - Clean environment recipe: Standalone `environment_hydromt_delft3dfm.yml` specification for isolated HydroMT model setup without modifying the core app environment.
 - Draft model package generator: Generates downloadable ZIP bundle containing immutable `manifest.json`, dataset SHA-256 hashes, draft HydroMT/D-Flow FM configuration templates (`.ini`, `.yaml`), folder hierarchy, and `README_REQUIREMENTS.txt` detailing missing real-world inputs.
 - Gated simulation runner: Execution is strictly disabled by default (`ENABLE_DFLOWFM_EXECUTION=false`) and requires server-configured binary paths. Rejects unconfigured runs with HTTP 409 Conflict (`engine_unavailable`). Never fabricates simulation results.
+
+### SPH Solver, Comparison Boundary & GEE Connector (Phase 12)
+- **PySPH Lagrangian Particle Solver**: Dedicated `environment_pysph.yml` specification; capability discovery; downloadable 2D column collapse benchmark package (`dam_break_2d_pysph.py`, SHA-256 manifest, requirements); strictly gated subprocess execution (`ENABLE_PYSPH_EXECUTION=false`).
+- **Multi-Engine Hydrodynamic Comparison**: Dynamic common grid alignment in temporary memory; quantitative spatial metrics ($IoU$, $CSI$, Area $\Delta \text{km}^2$) and error statistics ($MAE$, $RMSE$, Mean Bias); structured 5-dimension methodology comparison matrix (Eulerian SWE vs Lagrangian Navier-Stokes).
+- **Google Earth Engine (GEE) Connector**: Dedicated `environment_gee.yml`; server-side ADC authentication (`GEE_PROJECT_ID`); whitelisted datasets (`Sentinel-1 SAR GRD`, `GPM IMERG`, `JRC Global Surface Water`); candidate water-change observation plan generator with cloud task gating (`ENABLE_GEE_TASKS=false`).
+
 
 
 ### 3. Frontend Application (React + Vite + TypeScript)

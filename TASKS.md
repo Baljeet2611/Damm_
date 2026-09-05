@@ -191,19 +191,38 @@ Automated dam-break framework comparing SPH and Delft3D, with inundation, damage
 
 ---
 
-## Phase 12: Earth Observation & GEE Flood Validation Module [NEXT]
-- [ ] Google Earth Engine (GEE) integration:
-  * [ ] Authenticate and query Sentinel-1 SAR GRD collections (C-band VV/VH polarizations) for pre-flood and post-flood dates.
-  * [ ] Apply speckle filtering (Lee/Refined Lee) and radiometric terrain correction.
-  * [ ] Execute adaptive thresholding (Otsu method / bimodal distribution split) to delineate actual observed surface water.
-- [ ] Calibration and validation analytics:
-  * [ ] Overlay satellite-derived flood extent against model-simulated flood footprints.
-  * [ ] Compute classification confusion matrix: True Positive (Hit), False Positive (Overprediction), False Negative (Underprediction).
-  * [ ] Calculate critical success index ($CSI$), intersection over union ($IoU$), and Cohen's Kappa ($\kappa$).
+## Phase 12: SPH Integration, Multi-Engine Comparison & Earth Engine Connector [COMPLETED]
+- [x] PySPH Solver Adapter & Package Builder (`backend/app/sph_service.py`, `environment_pysph.yml`):
+  - [x] Isolated PySPH environment specification (`environment_pysph.yml`) without polluting base `sih-app`.
+  - [x] Capability detection: `GET /api/sph/capabilities` detects PySPH module and executable status.
+  - [x] Draft benchmark package generator: `POST /api/scenarios/{id}/build-sph-package` generates ZIP with 2D column collapse benchmark script (`dam_break_2d_pysph.py`), config JSON, SHA-256 manifest, and `README_SPH_REQUIREMENTS.txt`.
+  - [x] Download endpoint: `GET /api/scenarios/{id}/download-sph-package`.
+  - [x] Gated simulation execution: `POST /api/scenarios/{id}/run-sph` (gated behind `ENABLE_PYSPH_EXECUTION=false`, returns 409 Conflict if disabled).
+  - [x] PySPH historical run tracking & log viewer: `GET /api/sph-runs`, `GET /api/sph-runs/{run_id}`, `GET /api/sph-runs/{run_id}/logs`.
+  - [x] Explicit laboratory benchmark vs. regional 3D river scale separation disclaimers.
+- [x] Multi-Engine Benchmark & Hydrodynamic Comparison Boundary (`backend/app/comparison_service.py`):
+  - [x] Readiness evaluation: `GET /api/comparison/readiness` verifies presence of completed Delft3D and PySPH runs with verified physical unit manifests.
+  - [x] Dynamic spatial alignment: `POST /api/comparison/compare` reprojects raster outputs onto common evaluation grid in temporary memory.
+  - [x] Quantitative metrics: Computes Extent IoU (Jaccard), Critical Success Index (CSI / Threat Score), Area Difference ($\text{km}^2$), Depth / Velocity MAE, RMSE, Mean Bias.
+  - [x] Honest failure states: Returns status `comparison_unavailable` with explicit blocker lists when runs are missing or unverified.
+  - [x] Architectural methodology matrix: `GET /api/comparison/methodology` detailing physical equations (SWE vs Navier-Stokes), discretization, wave breaking, and compute scale limitations.
+- [x] Google Earth Engine (GEE) Connector Service (`backend/app/gee_service.py`, `environment_gee.yml`):
+  - [x] Isolated Earth Engine environment specification (`environment_gee.yml`).
+  - [x] Capabilities & strict ADC authentication: `GET /api/gee/capabilities` checking GCP Application Default Credentials and `GEE_PROJECT_ID`. Never accepts tokens over HTTP.
+  - [x] Whitelisted collections: `COPERNICUS/S1_GRD` (Sentinel-1 SAR), `NASA/GPM_L3/IMERG_V07` (GPM IMERG), `JRC/GSW1_4/GlobalSurfaceWater` (JRC Surface Water).
+  - [x] Dataset catalog endpoint: `GET /api/gee/datasets` and `GET /api/gee/datasets/{dataset_id}`.
+  - [x] Observation export plan generator: `POST /api/gee/export-plan` creating dry-run candidate observation plans with speckle and resolution disclaimers, gated behind `ENABLE_GEE_TASKS=false`.
+- [x] Frontend Multi-Engine & Satellite Dashboard (`frontend/src/App.tsx`, `App.css`):
+  - [x] Responsive 4-way sub-navigation bar inside "🌊 Scenarios & Simulation" tab:
+    - [x] `Delft3D FM (SWE)`: HydroMT builder, scenario parameter editor, package download, gated simulation runner, run history.
+    - [x] `PySPH Solver`: Benchmark parameter controls (particle spacing, time step), package generator, gated execution, SPH run logs.
+    - [x] `Comparison`: Run pairing selector, spatial overlap KPIs, depth/velocity error metrics, and physical methodology comparison matrix.
+    - [x] `Earth Engine`: Approved satellite collection selector, ROI & date range configuration, candidate water-change observation plan generator.
+- [x] Test suite: Comprehensive pytest suites (`test_sph_api.py`, `test_comparison_api.py`, `test_gee_api.py`) with 79 passing tests verifying zero-trust gating, mocked subprocess execution, spatial alignment, and GEE dry-run plans.
 
 ---
 
-## Phase 13: 3D Terrain & Decision Support Dashboard
+## Phase 13: 3D Terrain & Decision Support Dashboard [NEXT]
 - [ ] Interactive 2D Map View:
   * [ ] Temporal playback scrubber showing flood wave propagation over time.
 - [ ] 3D WebGL Terrain Viewer:
@@ -212,5 +231,6 @@ Automated dam-break framework comparing SPH and Delft3D, with inundation, damage
 - [ ] Scenario Configuration & Decision Dashboard:
   * [ ] Dam breach parameter configuration panel (breach width, failure duration, initial reservoir level).
   * [ ] One-click export button for SHP, KML, and executive briefing reports.
+
 
 

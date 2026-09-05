@@ -89,3 +89,42 @@ To construct a rigorous, operational dam-break modeling and impact analysis pipe
 * **Sentinel-2 Multi-Spectral Instrument (MSI)**:
   * *Provider*: ESA Copernicus via GEE.
   * *Data*: 10 m optical bands (B2, B3, B4, B8) for NDWI (Normalized Difference Water Index) and MNDWI when cloud-free imagery is available during post-flood recession.
+
+---
+
+## 4. Optional Google Earth Engine (GEE) Sources (Phase 12)
+
+The platform provides an optional, read-only connector boundary for querying Google Earth Engine (GEE) catalogs.
+
+> [!IMPORTANT]
+> **Repository Storage & Security Statement**:
+> No Google Earth Engine credentials, service account private keys, access tokens, satellite imagery, or derived Earth Engine raster products are stored, cached, or tracked in this repository. All queries execute strictly against external Google Earth Engine APIs on demand when initialized.
+
+### 4.1 Supported Earth Engine Datasets
+
+#### 1. `COPERNICUS/S1_GRD`
+* **Official Dataset ID**: `COPERNICUS/S1_GRD`
+* **Provider**: European Space Agency (ESA) / European Commission Copernicus Programme via Google Earth Engine.
+* **Intended Limited Use**: Sentinel-1 SAR observation; candidate water-change observation only, not flood depth or hydrodynamic prediction. Serves for screening backscatter anomalies and candidate surface water changes over the domain bounding box and selected date window.
+* **Status**: External, not downloaded, not authenticated and not used in current results.
+* **Authentication Requirement**: Earth Engine access and Google Cloud project authentication required (`ee.Initialize(project=...)` or user Web/gcloud authentication).
+* **Acquisition Timestamp**: Acquisition timestamp (orbit pass date/time and granule start time) must be explicitly reported when queried.
+* **Scientific Limitations & Validation Requirement**: C-band Synthetic Aperture Radar (SAR) backscatter intensity is sensitive to surface roughness, wind roughening, vegetation canopy, radar shadow, and terrain layover. It detects potential specular reflection changes and cannot measure flood inundation depth, velocity vectors, wave arrival time, or breach outflow hydrographs. Must be validated against high-resolution ground truth, DEM slope masking, and in-situ stream gauges. Cannot replace hydrodynamic simulation.
+
+#### 2. `NASA/GPM_L3/IMERG_V07`
+* **Official Dataset ID**: `NASA/GPM_L3/IMERG_V07`
+* **Provider**: NASA Goddard Space Flight Center (GSFC) / Precipitation Measurement Missions (PMM) via Google Earth Engine.
+* **Intended Limited Use**: Satellite precipitation estimate; not dam-break discharge or inundation output. Used strictly for regional antecedent rainfall context and basin storm screening.
+* **Status**: External, not downloaded, not authenticated and not used in current results.
+* **Authentication Requirement**: Earth Engine access and Google Cloud project authentication required.
+* **Acquisition Timestamp**: Acquisition timestamp (precipitation accumulation period start and end timestamps) must be explicitly reported when queried.
+* **Scientific Limitations & Validation Requirement**: IMERG V07 provides gridded multi-satellite precipitation estimates at ~0.1° (~10 km) spatial resolution. These estimates carry satellite sensor calibration uncertainties and spatial smoothing; they do not represent dam-break discharge, reservoir breach outflow, or hydrodynamic flood propagation. Must be calibrated against IMD/CWC rain gauge observations and hydrological catchment models.
+
+#### 3. `JRC/GSW1_4/GlobalSurfaceWater`
+* **Official Dataset ID**: `JRC/GSW1_4/GlobalSurfaceWater`
+* **Provider**: European Commission Joint Research Centre (JRC) via Google Earth Engine.
+* **Intended Limited Use**: Historical surface-water baseline covering 1984–2021; not current flooding. Used strictly to establish multi-decadal baseline permanent water occurrence, seasonality, and recurrence thresholds.
+* **Status**: External, not downloaded, not authenticated and not used in current results.
+* **Authentication Requirement**: Earth Engine access and Google Cloud project authentication required.
+* **Acquisition Timestamp**: Acquisition temporal window (1984–2021 multi-decadal archive) and record metadata timestamps must be explicitly reported when queried.
+* **Scientific Limitations & Validation Requirement**: Based on historical 30 m Landsat archive observations spanning 1984 through 2021; it does not capture current, real-time, or event-specific dam-break inundation. Valid solely for distinguishing pre-existing permanent water bodies from transient flood extent. Requires contemporary high-resolution optical/SAR validation.

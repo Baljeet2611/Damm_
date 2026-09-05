@@ -336,4 +336,165 @@ class SimulationLogResponse(BaseModel):
     stderr: str
 
 
+# Phase 12: SPH (PySPH) Schemas
+
+class SPHCapabilitiesResponse(BaseModel):
+    pysph_available: bool
+    pysph_version: Optional[str] = None
+    pysph_path: Optional[str] = None
+    execution_enabled: bool
+    engine_executable: Optional[str] = None
+    disclaimer: str
+    guidance: str
+
+
+class SPHPackageResponse(BaseModel):
+    scenario_id: str
+    revision: int
+    package_filename: str
+    package_size_bytes: int
+    created_at: str
+    manifest_checksum: str
+    status: str
+    download_url: str
+    benchmark_type: str = "2d_dam_break_benchmark"
+    notes: List[str]
+
+
+class SPHRunRequest(BaseModel):
+    custom_notes: Optional[str] = ""
+    particle_spacing_m: float = Field(default=0.5, ge=0.01, le=10.0, description="Initial particle spacing dx in meters")
+    time_step_sec: float = Field(default=0.0001, ge=0.000001, le=0.1, description="Adaptive time step in seconds")
+
+
+class SPHRunResponse(BaseModel):
+    run_id: str
+    scenario_id: str
+    scenario_name: str
+    revision: int
+    status: str = Field(..., description="Status: running, completed, failed, engine_unavailable")
+    started_at: str
+    completed_at: Optional[str] = None
+    duration_seconds: Optional[float] = None
+    exit_code: Optional[int] = None
+    log_url: str
+    output_manifest_url: Optional[str] = None
+    notes: List[str]
+
+
+# Phase 12: Delft3D vs SPH Comparison Schemas
+
+class ComparisonRunSummary(BaseModel):
+    run_id: str
+    scenario_id: str
+    scenario_name: str
+    engine: str
+    status: str
+    completed_at: Optional[str] = None
+    has_depth_raster: bool
+    has_velocity_raster: bool
+    units_verified: bool
+
+
+class ComparisonReadinessResponse(BaseModel):
+    delft3d_completed_runs: List[ComparisonRunSummary]
+    sph_completed_runs: List[ComparisonRunSummary]
+    comparison_ready: bool
+    blocker_reason: Optional[str] = None
+    methodology_summary: str
+
+
+class ComparisonRequest(BaseModel):
+    delft3d_run_id: str
+    sph_run_id: str
+    reproject_crs: Optional[str] = "EPSG:4326"
+
+
+class RasterMetricStats(BaseModel):
+    parameter: str
+    unit: str
+    valid_cells: int
+    mae: float
+    rmse: float
+    mean_bias: float
+    max_delta: float
+
+
+class ComparisonResponse(BaseModel):
+    delft3d_run_id: str
+    sph_run_id: str
+    status: str = Field(..., description="completed or comparison_unavailable")
+    common_crs: str
+    common_grid_shape: Tuple[int, int]
+    valid_overlap_cells: int
+    overlap_area_km2: float
+    extent_iou: float
+    critical_success_index: float
+    projected_area_diff_km2: float
+    depth_stats: Optional[RasterMetricStats] = None
+    velocity_stats: Optional[RasterMetricStats] = None
+    arrival_stats: Optional[RasterMetricStats] = None
+    notes: List[str]
+    blockers: List[str]
+
+
+class MethodologyComparisonResponse(BaseModel):
+    comparison_matrix: List[Dict[str, Any]]
+    scale_limitations: str
+    disclaimer: str
+
+
+# Phase 12: Google Earth Engine (GEE) Schemas
+
+class GEECapabilitiesResponse(BaseModel):
+    gee_available: bool
+    authenticated: bool
+    project_id: Optional[str] = None
+    auth_mode: str
+    tasks_enabled: bool
+    whitelisted_collections: List[str]
+    disclaimer: str
+    guidance: str
+
+
+class GEEDatasetInfo(BaseModel):
+    id: str
+    title: str
+    provider: str
+    type: str
+    temporal_range: str
+    spatial_resolution: str
+    bands: List[str]
+    usage_guidance: str
+    disclaimer: str
+
+
+class GEEExportPlanRequest(BaseModel):
+    dataset_id: str
+    start_date: str
+    end_date: str
+    roi_min_lon: float = Field(default=74.60, ge=-180.0, le=180.0)
+    roi_min_lat: float = Field(default=16.12, ge=-90.0, le=90.0)
+    roi_max_lon: float = Field(default=74.88, ge=-180.0, le=180.0)
+    roi_max_lat: float = Field(default=16.32, ge=-90.0, le=90.0)
+    target_scale_meters: float = Field(default=30.0, ge=10.0, le=5000.0)
+    max_pixels: int = Field(default=10000000, le=10000000)
+
+
+class GEEExportPlanResponse(BaseModel):
+    task_id: str
+    dataset_id: str
+    status: str
+    date_range: Tuple[str, str]
+    roi_bounds: Tuple[float, float, float, float]
+    estimated_pixels: int
+    target_scale_meters: float
+    candidate_observation_label: str
+    acquisition_timestamps: List[str]
+    cloud_task_submitted: bool
+    notes: List[str]
+    disclaimer: str
+
+
+
 

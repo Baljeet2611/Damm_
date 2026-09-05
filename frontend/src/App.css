@@ -2349,6 +2349,146 @@
   justify-content: flex-end;
 }
 
+/* Phase 12: Multi-Engine Subnavigation & Comparison Dashboard */
+.scenario-subnav {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.35rem;
+  background: rgba(15, 23, 42, 0.8);
+  border: 1px solid rgba(51, 65, 85, 0.6);
+  border-radius: 8px;
+  padding: 0.25rem;
+  margin-bottom: 0.75rem;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+@container (min-width: 520px) {
+  .scenario-subnav {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}
+
+.scenario-subtab-btn {
+  min-width: 0;
+  width: 100%;
+  box-sizing: border-box;
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--text-dim);
+  padding: 0.45rem 0.35rem;
+  border-radius: 6px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.3rem;
+  transition: all 0.2s ease;
+  white-space: normal;
+  text-align: center;
+  line-height: 1.25;
+  overflow: visible;
+}
+
+.scenario-subtab-btn span {
+  min-width: 0;
+  overflow: visible;
+  white-space: normal;
+}
+
+.scenario-subtab-btn:hover {
+  color: var(--text-main);
+  background: rgba(51, 65, 85, 0.4);
+}
+
+.scenario-subtab-btn.active {
+  background: rgba(14, 165, 233, 0.18);
+  border-color: rgba(56, 189, 248, 0.5);
+  color: #38bdf8;
+  box-shadow: 0 0 10px rgba(56, 189, 248, 0.2);
+}
+
+.sph-config-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 0.5rem;
+  margin-top: 0.5rem;
+}
+
+.comparison-selection-card {
+  background: rgba(15, 23, 42, 0.7);
+  border: 1px solid rgba(51, 65, 85, 0.5);
+  border-radius: 8px;
+  padding: 0.75rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.comparison-selectors-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.5rem;
+}
+
+.comparison-table-wrapper {
+  overflow-x: auto;
+  margin-top: 0.5rem;
+  border-radius: 6px;
+  border: 1px solid rgba(51, 65, 85, 0.5);
+}
+
+.comparison-matrix-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.7rem;
+  text-align: left;
+}
+
+.comparison-matrix-table th {
+  background: rgba(30, 41, 59, 0.9);
+  color: var(--accent-cyan);
+  padding: 0.5rem;
+  border-bottom: 1px solid rgba(51, 65, 85, 0.6);
+  font-weight: 700;
+}
+
+.comparison-matrix-table td {
+  padding: 0.5rem;
+  border-bottom: 1px solid rgba(51, 65, 85, 0.3);
+  color: var(--text-main);
+  vertical-align: top;
+  line-height: 1.35;
+}
+
+.comparison-matrix-table tr:nth-child(even) {
+  background: rgba(15, 23, 42, 0.4);
+}
+
+.gee-dataset-card {
+  background: rgba(15, 23, 42, 0.6);
+  border: 1px solid rgba(51, 65, 85, 0.5);
+  border-radius: 8px;
+  padding: 0.65rem;
+  margin-top: 0.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.gee-plan-result-card {
+  background: rgba(16, 185, 129, 0.08);
+  border: 1px solid rgba(16, 185, 129, 0.35);
+  border-radius: 8px;
+  padding: 0.75rem;
+  margin-top: 0.6rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
 /* Responsive Overrides */
 @media (max-width: 768px) {
   .app-header {
@@ -2368,9 +2508,7 @@
     max-height: 55vh;
   }
 
-  .probe-grid, .damage-kpi-grid, .replacement-grid, .format-options-grid, .filter-options-grid, .capabilities-grid, .scenario-params-grid {
+  .probe-grid, .damage-kpi-grid, .replacement-grid, .format-options-grid, .filter-options-grid, .capabilities-grid, .scenario-params-grid, .sph-config-grid, .comparison-selectors-row {
     grid-template-columns: 1fr;
   }
 }
-
-

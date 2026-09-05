@@ -219,6 +219,132 @@ interface SimulationLogs {
   stderr: string
 }
 
+// Phase 12: SPH Interfaces
+interface SPHCapabilities {
+  pysph_available: boolean
+  pysph_version: string | null
+  pysph_path: string | null
+  execution_enabled: boolean
+  engine_executable: string | null
+  disclaimer: string
+  guidance: string
+}
+
+interface SPHRunItem {
+  run_id: string
+  scenario_id: string
+  scenario_name: string
+  revision: number
+  status: string
+  started_at: string
+  completed_at?: string
+  duration_seconds?: number
+  exit_code?: number
+  log_url: string
+  notes: string[]
+}
+
+// Phase 12: Comparison Interfaces
+interface ComparisonRunSummary {
+  run_id: string
+  scenario_id: string
+  scenario_name: string
+  engine: string
+  status: string
+  completed_at?: string
+  has_depth_raster: boolean
+  has_velocity_raster: boolean
+  units_verified: boolean
+}
+
+interface ComparisonReadiness {
+  delft3d_completed_runs: ComparisonRunSummary[]
+  sph_completed_runs: ComparisonRunSummary[]
+  comparison_ready: boolean
+  blocker_reason?: string
+  methodology_summary: string
+}
+
+interface RasterMetricStats {
+  parameter: string
+  unit: string
+  valid_cells: number
+  mae: number
+  rmse: number
+  mean_bias: number
+  max_delta: number
+}
+
+interface ComparisonResult {
+  delft3d_run_id: string
+  sph_run_id: string
+  status: string
+  common_crs: string
+  common_grid_shape: [number, number]
+  valid_overlap_cells: number
+  overlap_area_km2: number
+  extent_iou: number
+  critical_success_index: number
+  projected_area_diff_km2: number
+  depth_stats?: RasterMetricStats | null
+  velocity_stats?: RasterMetricStats | null
+  arrival_stats?: RasterMetricStats | null
+  notes: string[]
+  blockers: string[]
+}
+
+interface MethodologyMatrixRow {
+  dimension: string
+  delft3d_fm: string
+  pysph: string
+  operational_implication: string
+}
+
+interface MethodologyComparison {
+  comparison_matrix: MethodologyMatrixRow[]
+  scale_limitations: string
+  disclaimer: string
+}
+
+// Phase 12: Google Earth Engine Interfaces
+interface GEECapabilities {
+  gee_available: boolean
+  authenticated: boolean
+  project_id: string | null
+  auth_mode: string
+  tasks_enabled: boolean
+  whitelisted_collections: string[]
+  disclaimer: string
+  guidance: string
+}
+
+interface GEEDatasetInfo {
+  id: string
+  title: string
+  provider: string
+  type: string
+  temporal_range: string
+  spatial_resolution: string
+  bands: string[]
+  usage_guidance: string
+  disclaimer: string
+}
+
+interface GEEExportPlan {
+  task_id: string
+  dataset_id: string
+  status: string
+  date_range: [string, string]
+  roi_bounds: [number, number, number, number]
+  estimated_pixels: number
+  target_scale_meters: number
+  candidate_observation_label: string
+  acquisition_timestamps: string[]
+  cloud_task_submitted: boolean
+  notes: string[]
+  disclaimer: string
+}
+
 // Hidkal Dam bounding box [minLon, minLat, maxLon, maxLat]
 const HIDKAL_BOUNDS: [number, number, number, number] = [74.60, 16.12, 74.88, 16.32]
 
@@ -273,6 +399,44 @@ function App() {
   const [runExecuting, setRunExecuting] = useState<boolean>(false)
   const [runError, setRunError] = useState<string | null>(null)
   const [showSetupGuide, setShowSetupGuide] = useState<boolean>(false)
+
+  // Phase 12: Sub-tabs within Scenarios & Simulation
+  const [scenarioSubTab, setScenarioSubTab] = useState<'delft3d' | 'sph' | 'comparison' | 'gee'>('delft3d')
+
+  // Phase 12: SPH State
+  const [sphCapabilities, setSphCapabilities] = useState<SPHCapabilities | null>(null)
+  const [sphRuns, setSphRuns] = useState<SPHRunItem[]>([])
+  const [sphRunsLoading, setSphRunsLoading] = useState<boolean>(false)
+  const [sphBuildingScenarioId, setSphBuildingScenarioId] = useState<string | null>(null)
+  const [sphRunningScenarioId, setSphRunningScenarioId] = useState<string | null>(null)
+  const [sphPackageSuccessMsg, setSphPackageSuccessMsg] = useState<string | null>(null)
+  const [sphError, setSphError] = useState<string | null>(null)
+  const [sphParticleSpacing, setSphParticleSpacing] = useState<number>(0.5)
+  const [sphTimeStep, setSphTimeStep] = useState<number>(0.0001)
+  const [sphNotes, setSphNotes] = useState<string>('')
+  const [showSphGuide, setShowSphGuide] = useState<boolean>(false)
+
+  // Phase 12: Comparison State
+  const [comparisonReadiness, setComparisonReadiness] = useState<ComparisonReadiness | null>(null)
+  const [methodologyMatrix, setMethodologyMatrix] = useState<MethodologyComparison | null>(null)
+  const [selectedDelftRunId, setSelectedDelftRunId] = useState<string>('')
+  const [selectedSphRunId, setSelectedSphRunId] = useState<string>('')
+  const [comparisonResult, setComparisonResult] = useState<ComparisonResult | null>(null)
+  const [comparisonLoading, setComparisonLoading] = useState<boolean>(false)
+  const [comparisonError, setComparisonError] = useState<string | null>(null)
+
+  // Phase 12: Earth Engine State
+  const [geeCapabilities, setGeeCapabilities] = useState<GEECapabilities | null>(null)
+  const [geeDatasets, setGeeDatasets] = useState<GEEDatasetInfo[]>([])
+  const [selectedGeeDatasetId, setSelectedGeeDatasetId] = useState<string>('COPERNICUS/S1_GRD')
+  const [geeStartDate, setGeeStartDate] = useState<string>('2024-07-01')
+  const [geeEndDate, setGeeEndDate] = useState<string>('2024-07-15')
+  const [geeScaleMeters, setGeeScaleMeters] = useState<number>(30.0)
+  const [geeExportPlan, setGeeExportPlan] = useState<GEEExportPlan | null>(null)
+  const [geeLoading, setGeeLoading] = useState<boolean>(false)
+  const [geeError, setGeeError] = useState<string | null>(null)
+  const [showGeeGuide, setShowGeeGuide] = useState<boolean>(false)
+
 
   const [scenarioForm, setScenarioForm] = useState({
     name: '',
@@ -1170,10 +1334,234 @@ function App() {
       .catch(() => setRunsLoading(false))
   }
 
+  // Phase 12: SPH Fetchers & Handlers
+  const fetchSphCapabilities = () => {
+    fetch(`${apiBaseUrl}/api/sph/capabilities`)
+      .then((res) => res.json())
+      .then((data: SPHCapabilities) => setSphCapabilities(data))
+      .catch(() => {})
+  }
+
+  const fetchSphRuns = () => {
+    setSphRunsLoading(true)
+    fetch(`${apiBaseUrl}/api/sph-runs`)
+      .then((res) => res.json())
+      .then((data: SPHRunItem[]) => {
+        setSphRuns(data)
+        setSphRunsLoading(false)
+      })
+      .catch(() => setSphRunsLoading(false))
+  }
+
+  const handleBuildSphPackage = async (scId: string) => {
+    setSphBuildingScenarioId(scId)
+    setSphPackageSuccessMsg(null)
+    setSphError(null)
+    try {
+      const res = await fetch(`${apiBaseUrl}/api/scenarios/${scId}/build-sph-package`, { method: 'POST' })
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}))
+        throw new Error(err.detail || `SPH package build failed (HTTP ${res.status})`)
+      }
+      const data = await res.json()
+      setSphPackageSuccessMsg(`PySPH package generated (${(data.package_size_bytes / 1024).toFixed(1)} KB) with SHA-256 manifest.`)
+      fetchScenarios(includeArchived)
+    } catch (err: any) {
+      setSphError(err.message || 'SPH package build failed')
+    } finally {
+      setSphBuildingScenarioId(null)
+    }
+  }
+
+  const handleDownloadSphPackage = (scId: string) => {
+    window.open(`${apiBaseUrl}/api/scenarios/${scId}/download-sph-package`, '_blank')
+  }
+
+  const handleRunSph = async (scId: string) => {
+    setSphRunningScenarioId(scId)
+    setSphError(null)
+    try {
+      const res = await fetch(`${apiBaseUrl}/api/scenarios/${scId}/run-sph`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          custom_notes: sphNotes || 'Triggered from web GUI',
+          particle_spacing_m: Number(sphParticleSpacing),
+          time_step_sec: Number(sphTimeStep),
+        }),
+      })
+      if (res.status === 409) {
+        const err = await res.json().catch(() => ({}))
+        throw new Error(err.detail || 'PySPH execution is disabled by server policy. Never faking a model run.')
+      }
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}))
+        throw new Error(err.detail || `SPH run failed (HTTP ${res.status})`)
+      }
+      fetchSphRuns()
+    } catch (err: any) {
+      setSphError(err.message || 'SPH execution failed.')
+    } finally {
+      setSphRunningScenarioId(null)
+    }
+  }
+
+  const handleViewSphLogs = async (runId: string) => {
+    try {
+      const res = await fetch(`${apiBaseUrl}/api/sph-runs/${runId}/logs`)
+      if (!res.ok) throw new Error('Failed to fetch SPH run logs')
+      const data: SimulationLogs = await res.json()
+      setRunLogsModal(data)
+    } catch (err) {
+      alert('Could not retrieve execution logs for this SPH run.')
+    }
+  }
+
+  // Phase 12: Comparison Fetchers & Handlers
+  const fetchComparisonReadiness = () => {
+    fetch(`${apiBaseUrl}/api/comparison/readiness`)
+      .then((res) => res.json())
+      .then((data: ComparisonReadiness) => setComparisonReadiness(data))
+      .catch(() => {})
+  }
+
+  const fetchMethodologyMatrix = () => {
+    fetch(`${apiBaseUrl}/api/comparison/methodology`)
+      .then((res) => res.json())
+      .then((data: MethodologyComparison) => setMethodologyMatrix(data))
+      .catch(() => {})
+  }
+
+  const handleRunComparison = async () => {
+    const selectedDelftRun = runs.find((r) => r.run_id === selectedDelftRunId)
+    const selectedSphRun = sphRuns.find((r) => r.run_id === selectedSphRunId)
+    const isDelftCompleted = selectedDelftRun?.status === 'completed'
+    const isSphCompleted = selectedSphRun?.status === 'completed'
+    const isDelftManifestVerified = Boolean(
+      comparisonReadiness?.delft3d_completed_runs?.some(
+        (r) => r.run_id === selectedDelftRunId && r.units_verified
+      )
+    )
+    const isSphManifestVerified = Boolean(
+      comparisonReadiness?.sph_completed_runs?.some(
+        (r) => r.run_id === selectedSphRunId && r.units_verified
+      )
+    )
+
+    if (!comparisonReadiness?.comparison_ready) {
+      setComparisonError(
+        comparisonReadiness?.blocker_reason ||
+          'Comparison readiness check failed. Verified completed runs required.'
+      )
+      return
+    }
+    if (!selectedDelftRunId || !selectedSphRunId) {
+      setComparisonError('Please select both a Delft3D FM run and a PySPH run to compare.')
+      return
+    }
+    if (!isDelftCompleted || !isSphCompleted) {
+      setComparisonError('Both selected Delft3D and PySPH runs must be in completed status.')
+      return
+    }
+    if (!isDelftManifestVerified || !isSphManifestVerified) {
+      setComparisonError('Verified compatible manifests with calibrated units are unavailable.')
+      return
+    }
+
+    setComparisonLoading(true)
+    setComparisonError(null)
+    setComparisonResult(null)
+    try {
+      const res = await fetch(`${apiBaseUrl}/api/comparison/compare`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          delft3d_run_id: selectedDelftRunId,
+          sph_run_id: selectedSphRunId,
+          reproject_crs: 'EPSG:4326',
+        }),
+      })
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}))
+        throw new Error(err.detail || `Comparison request failed (HTTP ${res.status})`)
+      }
+      const data: ComparisonResult = await res.json()
+      setComparisonResult(data)
+    } catch (err: any) {
+      setComparisonError(err.message || 'Failed to execute hydrodynamic comparison.')
+    } finally {
+      setComparisonLoading(false)
+    }
+  }
+
+  // Phase 12: Earth Engine Fetchers & Handlers
+  const fetchGeeCapabilities = () => {
+    fetch(`${apiBaseUrl}/api/gee/capabilities`)
+      .then((res) => res.json())
+      .then((data: GEECapabilities) => setGeeCapabilities(data))
+      .catch(() => {})
+  }
+
+  const fetchGeeDatasets = () => {
+    fetch(`${apiBaseUrl}/api/gee/datasets`)
+      .then((res) => res.json())
+      .then((data: GEEDatasetInfo[]) => setGeeDatasets(data))
+      .catch(() => {})
+  }
+
+  const handleCreateGeePlan = async () => {
+    if (!geeCapabilities?.gee_available) {
+      setGeeError('Earth Engine Python API (earthengine-api) is not installed on the server.')
+      return
+    }
+    if (!geeCapabilities?.authenticated) {
+      setGeeError(
+        'Earth Engine authentication is unavailable. Application Default Credentials (ADC) or GEE_PROJECT_ID required.'
+      )
+      return
+    }
+
+    setGeeLoading(true)
+    setGeeError(null)
+    setGeeExportPlan(null)
+    try {
+      const res = await fetch(`${apiBaseUrl}/api/gee/export-plan`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          dataset_id: selectedGeeDatasetId,
+          start_date: geeStartDate,
+          end_date: geeEndDate,
+          roi_min_lon: 74.60,
+          roi_min_lat: 16.12,
+          roi_max_lon: 74.88,
+          roi_max_lat: 16.32,
+          target_scale_meters: Number(geeScaleMeters),
+        }),
+      })
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}))
+        throw new Error(err.detail || `GEE export plan failed (HTTP ${res.status})`)
+      }
+      const data: GEEExportPlan = await res.json()
+      setGeeExportPlan(data)
+    } catch (err: any) {
+      setGeeError(err.message || 'Failed to generate Earth Engine export plan.')
+    } finally {
+      setGeeLoading(false)
+    }
+  }
+
   useEffect(() => {
     fetchCapabilities()
     fetchScenarios(false)
     fetchRuns()
+    fetchSphCapabilities()
+    fetchSphRuns()
+    fetchComparisonReadiness()
+    fetchMethodologyMatrix()
+    fetchGeeCapabilities()
+    fetchGeeDatasets()
   }, [apiBaseUrl])
 
   useEffect(() => {
@@ -1181,8 +1569,15 @@ function App() {
       fetchCapabilities()
       fetchScenarios(includeArchived)
       fetchRuns()
+      fetchSphCapabilities()
+      fetchSphRuns()
+      fetchComparisonReadiness()
+      fetchMethodologyMatrix()
+      fetchGeeCapabilities()
+      fetchGeeDatasets()
     }
-  }, [activeTab, includeArchived])
+  }, [activeTab, includeArchived, scenarioSubTab])
+
 
   const selectedScenario = scenarios.find((s) => s.id === selectedScenarioId) || null
 
@@ -2423,399 +2818,1118 @@ function App() {
               </div>
             )}
 
-            {/* TAB 6: Scenario Management & Honest Delft3D FM Integration */}
+            {/* TAB 6: Scenario Management, PySPH, Comparison & Earth Engine Integration */}
             {activeTab === 'scenarios' && (
               <div className="hud-content">
                 <div className="hud-card">
-                  {/* Capabilities & Scientific Boundary Card */}
-                  <div className="hud-card-header">
-                    <h3 className="card-title">🌊 Hydrodynamic Scenario & Delft3D Boundary</h3>
-                  </div>
-
-                  <div className="capabilities-grid">
-                    <div className={`capability-card ${capabilities?.hydromt_available ? 'cap-available' : 'cap-missing'}`}>
-                      <div className="cap-header">
-                        <span className="cap-icon">⚙️</span>
-                        <span className="cap-title">HydroMT Builder</span>
-                      </div>
-                      <span className="cap-badge">
-                        {capabilities?.hydromt_available
-                          ? `Installed (${capabilities.hydromt_version || 'Ready'})`
-                          : 'Not Installed (Template Mode)'}
-                      </span>
-                      <p className="cap-desc">Builds & formats 2D mesh, topography, and boundary config templates.</p>
-                    </div>
-
-                    <div className={`capability-card ${capabilities?.execution_enabled && capabilities?.dflowfm_available ? 'cap-available' : 'cap-disabled'}`}>
-                      <div className="cap-header">
-                        <span className="cap-icon">🚀</span>
-                        <span className="cap-title">D-Flow FM Engine</span>
-                      </div>
-                      <span className="cap-badge">
-                        {capabilities?.execution_enabled && capabilities?.dflowfm_available
-                          ? 'Engine Ready'
-                          : 'Execution Disabled / Unavailable'}
-                      </span>
-                      <p className="cap-desc">Numerical SWE solver. Execution is strictly gated behind server configuration.</p>
-                    </div>
-                  </div>
-
-                  {/* Setup & Boundary Guidance Accordion */}
-                  <div className="guide-accordion-box">
+                  {/* Phase 12: Sub-tab Navigation Bar */}
+                  <div className="scenario-subnav">
                     <button
-                      className="btn-toggle-guide"
-                      onClick={() => setShowSetupGuide(!showSetupGuide)}
+                      className={`scenario-subtab-btn ${scenarioSubTab === 'delft3d' ? 'active' : ''}`}
+                      onClick={() => setScenarioSubTab('delft3d')}
                     >
-                      {showSetupGuide ? '▾ Hide Delft3D & HydroMT Setup Instructions' : '▸ Show Delft3D & HydroMT Setup Instructions'}
+                      <span>🌊 Delft3D FM (SWE)</span>
                     </button>
-                    {showSetupGuide && (
-                      <div className="guide-content font-mono">
-                        <p><strong>1. Isolated HydroMT Conda Environment:</strong></p>
-                        <pre className="code-snippet">
+                    <button
+                      className={`scenario-subtab-btn ${scenarioSubTab === 'sph' ? 'active' : ''}`}
+                      onClick={() => setScenarioSubTab('sph')}
+                    >
+                      <span>🔬 PySPH Solver</span>
+                    </button>
+                    <button
+                      className={`scenario-subtab-btn ${scenarioSubTab === 'comparison' ? 'active' : ''}`}
+                      onClick={() => setScenarioSubTab('comparison')}
+                    >
+                      <span>⚔️ Comparison</span>
+                    </button>
+                    <button
+                      className={`scenario-subtab-btn ${scenarioSubTab === 'gee' ? 'active' : ''}`}
+                      onClick={() => setScenarioSubTab('gee')}
+                    >
+                      <span>🛰️ Earth Engine</span>
+                    </button>
+                  </div>
+
+                  {/* ============================================================ */}
+                  {/* SUB-TAB 1: Delft3D FM (SWE) Scenario Management */}
+                  {/* ============================================================ */}
+                  {scenarioSubTab === 'delft3d' && (
+                    <>
+                      <div className="hud-card-header">
+                        <h3 className="card-title">🌊 Hydrodynamic Scenario & Delft3D Boundary</h3>
+                      </div>
+
+                      <div className="capabilities-grid">
+                        <div className={`capability-card ${capabilities?.hydromt_available ? 'cap-available' : 'cap-missing'}`}>
+                          <div className="cap-header">
+                            <span className="cap-icon">⚙️</span>
+                            <span className="cap-title">HydroMT Builder</span>
+                          </div>
+                          <span className="cap-badge">
+                            {capabilities?.hydromt_available
+                              ? `Installed (${capabilities.hydromt_version || 'Ready'})`
+                              : 'Not Installed (Template Mode)'}
+                          </span>
+                          <p className="cap-desc">Builds & formats 2D mesh, topography, and boundary config templates.</p>
+                        </div>
+
+                        <div className={`capability-card ${capabilities?.execution_enabled && capabilities?.dflowfm_available ? 'cap-available' : 'cap-disabled'}`}>
+                          <div className="cap-header">
+                            <span className="cap-icon">🚀</span>
+                            <span className="cap-title">D-Flow FM Engine</span>
+                          </div>
+                          <span className="cap-badge">
+                            {capabilities?.execution_enabled && capabilities?.dflowfm_available
+                              ? 'Engine Ready'
+                              : 'Execution Disabled / Unavailable'}
+                          </span>
+                          <p className="cap-desc">Numerical SWE solver. Execution is strictly gated behind server configuration.</p>
+                        </div>
+                      </div>
+
+                      {/* Setup & Boundary Guidance Accordion */}
+                      <div className="guide-accordion-box">
+                        <button
+                          className="btn-toggle-guide"
+                          onClick={() => setShowSetupGuide(!showSetupGuide)}
+                        >
+                          {showSetupGuide ? '▾ Hide Delft3D & HydroMT Setup Instructions' : '▸ Show Delft3D & HydroMT Setup Instructions'}
+                        </button>
+                        {showSetupGuide && (
+                          <div className="guide-content font-mono">
+                            <p><strong>1. Isolated HydroMT Conda Environment:</strong></p>
+                            <pre className="code-snippet">
 conda env create -f environment_hydromt_delft3dfm.yml{'\n'}
 conda activate hydromt-delft3dfm
-                        </pre>
-                        <p><strong>2. Server Simulation Gating (Disabled by Default):</strong></p>
-                        <pre className="code-snippet">
+                            </pre>
+                            <p><strong>2. Server Simulation Gating (Disabled by Default):</strong></p>
+                            <pre className="code-snippet">
 ENABLE_DFLOWFM_EXECUTION=true{'\n'}
 DFLOWFM_EXECUTABLE=C:\Deltares\dflowfm\bin\dflowfm.exe
-                        </pre>
-                        <p><strong>3. Scientific Transparency:</strong></p>
-                        <p className="guide-note">
-                          Existing sample rasters (depth, velocity, arrival) in this workspace are unverified and of unknown provenance. They are NEVER attributed to Delft3D outputs or attached to simulation runs.
-                        </p>
-                      </div>
-                    )}
-                  </div>
-
-                  {/* Scenario Error or Success Banners */}
-                  {scenarioError && <div className="damage-error-box">{scenarioError}</div>}
-                  {packageSuccessMsg && <div className="export-success-box">📦 {packageSuccessMsg}</div>}
-                  {runError && <div className="damage-error-box">{runError}</div>}
-
-                  {/* Scenarios Header & Create Action */}
-                  <div className="scenarios-action-bar">
-                    <div className="scenarios-title-row">
-                      <h4 className="sub-title">Scenarios ({scenarios.length})</h4>
-                      <label className="toggle-archived-label">
-                        <input
-                          type="checkbox"
-                          checked={includeArchived}
-                          onChange={(e) => setIncludeArchived(e.target.checked)}
-                        />
-                        <span>Show Archived</span>
-                      </label>
-                    </div>
-                    {!isCreatingScenario && !isEditingScenario && (
-                      <button className="btn-secondary-action" onClick={handleStartCreateScenario}>
-                        ➕ New Scenario
-                      </button>
-                    )}
-                  </div>
-
-                  {/* Scenario Creator / Editor Form */}
-                  {(isCreatingScenario || isEditingScenario) && (
-                    <div className="scenario-form-card">
-                      <h4 className="results-title">
-                        {isCreatingScenario ? '➕ Create Hydrodynamic Scenario' : '✏️ Edit Scenario Parameters'}
-                      </h4>
-
-                      <div className="form-group">
-                        <label>Scenario Title</label>
-                        <input
-                          type="text"
-                          value={scenarioForm.name}
-                          onChange={(e) => setScenarioForm({ ...scenarioForm, name: e.target.value })}
-                          className="config-input"
-                          placeholder="e.g. Hidkal Sunny Day Breach - High Sensitivity"
-                        />
+                            </pre>
+                            <p><strong>3. Scientific Transparency:</strong></p>
+                            <p className="guide-note">
+                              Existing sample rasters (depth, velocity, arrival) in this workspace are unverified and of unknown provenance. They are NEVER attributed to Delft3D outputs or attached to simulation runs.
+                            </p>
+                          </div>
+                        )}
                       </div>
 
-                      <div className="form-group">
-                        <label>Description & Notes</label>
-                        <textarea
-                          value={scenarioForm.description}
-                          onChange={(e) => setScenarioForm({ ...scenarioForm, description: e.target.value })}
-                          className="config-input font-sans textarea-field"
-                          placeholder="Operational notes, modeling intent, and boundary assumptions..."
-                          rows={2}
-                        />
+                      {/* Scenario Error or Success Banners */}
+                      {scenarioError && <div className="damage-error-box">{scenarioError}</div>}
+                      {packageSuccessMsg && <div className="export-success-box">📦 {packageSuccessMsg}</div>}
+                      {runError && <div className="damage-error-box">{runError}</div>}
+
+                      {/* Scenarios Header & Create Action */}
+                      <div className="scenarios-action-bar">
+                        <div className="scenarios-title-row">
+                          <h4 className="sub-title">Scenarios ({scenarios.length})</h4>
+                          <label className="toggle-archived-label">
+                            <input
+                              type="checkbox"
+                              checked={includeArchived}
+                              onChange={(e) => setIncludeArchived(e.target.checked)}
+                            />
+                            <span>Show Archived</span>
+                          </label>
+                        </div>
+                        {!isCreatingScenario && !isEditingScenario && (
+                          <button className="btn-secondary-action" onClick={handleStartCreateScenario}>
+                            ➕ New Scenario
+                          </button>
+                        )}
                       </div>
 
-                      <div className="scenario-params-grid">
-                        <div className="config-field">
-                          <label>Breach Width (m)</label>
-                          <input
-                            type="number"
-                            min="5"
-                            max="3000"
-                            step="10"
-                            value={scenarioForm.breach_width_m}
-                            onChange={(e) => setScenarioForm({ ...scenarioForm, breach_width_m: parseFloat(e.target.value) || 100 })}
-                            className="config-input font-mono"
-                          />
-                          <span className="field-unit-tag">Assumed meters (unverified)</span>
+                      {/* Scenario Creator / Editor Form */}
+                      {(isCreatingScenario || isEditingScenario) && (
+                        <div className="scenario-form-card">
+                          <h4 className="results-title">
+                            {isCreatingScenario ? '➕ Create Hydrodynamic Scenario' : '✏️ Edit Scenario Parameters'}
+                          </h4>
+
+                          <div className="form-group">
+                            <label>Scenario Title</label>
+                            <input
+                              type="text"
+                              value={scenarioForm.name}
+                              onChange={(e) => setScenarioForm({ ...scenarioForm, name: e.target.value })}
+                              className="config-input"
+                              placeholder="e.g. Hidkal Sunny Day Breach - High Sensitivity"
+                            />
+                          </div>
+
+                          <div className="form-group">
+                            <label>Description & Notes</label>
+                            <textarea
+                              value={scenarioForm.description}
+                              onChange={(e) => setScenarioForm({ ...scenarioForm, description: e.target.value })}
+                              className="config-input font-sans textarea-field"
+                              placeholder="Operational notes, modeling intent, and boundary assumptions..."
+                              rows={2}
+                            />
+                          </div>
+
+                          <div className="scenario-params-grid">
+                            <div className="config-field">
+                              <label>Breach Width (m)</label>
+                              <input
+                                type="number"
+                                min="5"
+                                max="3000"
+                                step="10"
+                                value={scenarioForm.breach_width_m}
+                                onChange={(e) => setScenarioForm({ ...scenarioForm, breach_width_m: parseFloat(e.target.value) || 100 })}
+                                className="config-input font-mono"
+                              />
+                              <span className="field-unit-tag">Assumed meters (unverified)</span>
+                            </div>
+
+                            <div className="config-field">
+                              <label>Breach Time (hours)</label>
+                              <input
+                                type="number"
+                                min="0.1"
+                                max="72"
+                                step="0.5"
+                                value={scenarioForm.breach_formation_time_hr}
+                                onChange={(e) => setScenarioForm({ ...scenarioForm, breach_formation_time_hr: parseFloat(e.target.value) || 2 })}
+                                className="config-input font-mono"
+                              />
+                              <span className="field-unit-tag">Formation duration</span>
+                            </div>
+
+                            <div className="config-field">
+                              <label>Reservoir Level (m)</label>
+                              <input
+                                type="number"
+                                min="100"
+                                max="2000"
+                                step="1"
+                                value={scenarioForm.assumed_reservoir_level_m}
+                                onChange={(e) => setScenarioForm({ ...scenarioForm, assumed_reservoir_level_m: parseFloat(e.target.value) || 660 })}
+                                className="config-input font-mono"
+                              />
+                              <span className="field-unit-tag">Vertical datum unverified</span>
+                            </div>
+
+                            <div className="config-field">
+                              <label>Manning Roughness n</label>
+                              <input
+                                type="number"
+                                min="0.01"
+                                max="0.2"
+                                step="0.005"
+                                value={scenarioForm.manning_roughness}
+                                onChange={(e) => setScenarioForm({ ...scenarioForm, manning_roughness: parseFloat(e.target.value) || 0.035 })}
+                                className="config-input font-mono"
+                              />
+                              <span className="field-unit-tag">Uniform s/m^(1/3)</span>
+                            </div>
+
+                            <div className="config-field">
+                              <label>Flexible Mesh Target (m)</label>
+                              <input
+                                type="number"
+                                min="10"
+                                max="500"
+                                step="10"
+                                value={scenarioForm.mesh_resolution_m}
+                                onChange={(e) => setScenarioForm({ ...scenarioForm, mesh_resolution_m: parseFloat(e.target.value) || 50 })}
+                                className="config-input font-mono"
+                              />
+                              <span className="field-unit-tag">Target grid cell size</span>
+                            </div>
+
+                            <div className="config-field">
+                              <label>Simulation Duration (hr)</label>
+                              <input
+                                type="number"
+                                min="1"
+                                max="168"
+                                step="6"
+                                value={scenarioForm.simulation_duration_hr}
+                                onChange={(e) => setScenarioForm({ ...scenarioForm, simulation_duration_hr: parseFloat(e.target.value) || 24 })}
+                                className="config-input font-mono"
+                              />
+                              <span className="field-unit-tag">Total run window</span>
+                            </div>
+                          </div>
+
+                          <div className="form-action-row">
+                            <button className="btn-calculate" onClick={handleSaveScenario}>
+                              💾 {isCreatingScenario ? 'Save Scenario' : 'Update Scenario'}
+                            </button>
+                            <button
+                              className="btn-secondary-action"
+                              onClick={() => {
+                                setIsCreatingScenario(false)
+                                setIsEditingScenario(false)
+                              }}
+                            >
+                              ✕ Cancel
+                            </button>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Scenarios List */}
+                      {scenariosLoading ? (
+                        <div className="loading-box"><span className="spinner"></span> Loading scenarios...</div>
+                      ) : scenarios.length === 0 ? (
+                        <div className="empty-state-box">
+                          <p>No scenarios found. Click <strong>➕ New Scenario</strong> to create your first dam breach modeling scenario.</p>
+                        </div>
+                      ) : (
+                        <div className="scenarios-list">
+                          {scenarios.map((sc) => {
+                            const isSelected = selectedScenarioId === sc.id
+                            return (
+                              <div
+                                key={sc.id}
+                                className={`scenario-card ${isSelected ? 'selected' : ''} ${sc.archived ? 'archived' : ''}`}
+                                onClick={() => setSelectedScenarioId(sc.id)}
+                              >
+                                <div className="scenario-card-header">
+                                  <div>
+                                    <h5 className="scenario-title">{sc.name}</h5>
+                                    <span className="scenario-id-text font-mono">ID: {sc.id.slice(0, 8)}... (Rev {sc.revision})</span>
+                                  </div>
+                                  <div className="scenario-badges">
+                                    <span className={`status-badge status-${sc.status === 'package_built' ? 'ok' : 'pending'}`}>
+                                      {sc.status.replace(/_/g, ' ')}
+                                    </span>
+                                    {sc.archived && <span className="badge-archived">Archived</span>}
+                                  </div>
+                                </div>
+
+                                {sc.description && <p className="scenario-desc">{sc.description}</p>}
+
+                                {/* Quick Metrics */}
+                                <div className="scenario-quick-metrics">
+                                  <span>📐 Breach: {sc.breach_width_m} m</span>
+                                  <span>⏱️ Formation: {sc.breach_formation_time_hr} h</span>
+                                  <span>🌊 Stage: {sc.assumed_reservoir_level_m} m</span>
+                                  <span>⚡ Manning: {sc.manning_roughness}</span>
+                                  <span>🕸️ Mesh: {sc.mesh_resolution_m} m</span>
+                                </div>
+
+                                {/* Snapshot Checksum */}
+                                {sc.snapshot_checksum && (
+                                  <div className="checksum-row font-mono">
+                                    <span>SHA-256: {sc.snapshot_checksum.slice(0, 16)}...</span>
+                                  </div>
+                                )}
+
+                                {/* Action Buttons */}
+                                <div className="scenario-actions" onClick={(e) => e.stopPropagation()}>
+                                  <button
+                                    className="btn-card-action"
+                                    onClick={() => handleStartEditScenario(sc)}
+                                    title="Edit scenario parameters"
+                                  >
+                                    ✏️ Edit
+                                  </button>
+                                  <button
+                                    className="btn-card-action"
+                                    onClick={() => handleCloneScenario(sc.id)}
+                                    title="Clone scenario copy"
+                                  >
+                                    📋 Clone
+                                  </button>
+                                  <button
+                                    className="btn-card-action"
+                                    onClick={() => handleBuildPackage(sc.id)}
+                                    disabled={packageBuilding}
+                                    title="Build Delft3D FM configuration package"
+                                  >
+                                    📦 Build Package
+                                  </button>
+                                  <button
+                                    className="btn-card-action"
+                                    onClick={() => handleDownloadPackage(sc.id)}
+                                    title="Download draft package ZIP"
+                                  >
+                                    ⬇️ Download ZIP
+                                  </button>
+                                  <button
+                                    className="btn-card-action"
+                                    onClick={() => handleArchiveScenario(sc.id, !sc.archived)}
+                                    title={sc.archived ? 'Restore scenario' : 'Archive scenario'}
+                                  >
+                                    {sc.archived ? '📂 Unarchive' : '📁 Archive'}
+                                  </button>
+                                  <button
+                                    className={`btn-card-action btn-run-action ${(!capabilities?.execution_enabled || !capabilities?.dflowfm_available) ? 'disabled' : ''}`}
+                                    disabled={!capabilities?.execution_enabled || !capabilities?.dflowfm_available || runExecuting}
+                                    onClick={() => handleRunSimulation(sc.id)}
+                                    title={
+                                      capabilities?.execution_enabled && capabilities?.dflowfm_available
+                                        ? 'Execute D-Flow FM simulation'
+                                        : 'D-Flow FM solver execution is disabled or binary missing on server'
+                                    }
+                                  >
+                                    {runExecuting ? '⏳ Running...' : '🚀 Run D-Flow FM'}
+                                  </button>
+                                </div>
+                              </div>
+                            )
+                          })}
+                        </div>
+                      )}
+
+                      {/* Selected Scenario Scientific Validation Notes */}
+                      {selectedScenario && (
+                        <div className="scenario-validation-card">
+                          <div className="hud-card-header">
+                            <h4 className="results-title">🔬 Scientific Validation & Input Review</h4>
+                            <span className="status-badge status-warn">Review Required</span>
+                          </div>
+                          <p className="validation-intro">
+                            Schema validation has passed, but the following critical scientific inputs are required before running a certified hydrodynamic simulation:
+                          </p>
+                          <ul className="validation-notes-list">
+                            {selectedScenario.validation_notes.map((note, idx) => (
+                              <li key={idx}>⚠️ {note}</li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
+
+                      {/* Historical Simulation Runs */}
+                      <div className="runs-history-card">
+                        <div className="hud-card-header">
+                          <h4 className="results-title">📋 Simulation Execution History</h4>
+                          <button className="btn-text-action" onClick={fetchRuns}>🔄 Refresh</button>
                         </div>
 
-                        <div className="config-field">
-                          <label>Breach Time (hours)</label>
-                          <input
-                            type="number"
-                            min="0.1"
-                            max="72"
-                            step="0.5"
-                            value={scenarioForm.breach_formation_time_hr}
-                            onChange={(e) => setScenarioForm({ ...scenarioForm, breach_formation_time_hr: parseFloat(e.target.value) || 2 })}
-                            className="config-input font-mono"
-                          />
-                          <span className="field-unit-tag">Formation duration</span>
-                        </div>
-
-                        <div className="config-field">
-                          <label>Reservoir Level (m)</label>
-                          <input
-                            type="number"
-                            min="100"
-                            max="2000"
-                            step="1"
-                            value={scenarioForm.assumed_reservoir_level_m}
-                            onChange={(e) => setScenarioForm({ ...scenarioForm, assumed_reservoir_level_m: parseFloat(e.target.value) || 660 })}
-                            className="config-input font-mono"
-                          />
-                          <span className="field-unit-tag">Vertical datum unverified</span>
-                        </div>
-
-                        <div className="config-field">
-                          <label>Manning Roughness n</label>
-                          <input
-                            type="number"
-                            min="0.01"
-                            max="0.2"
-                            step="0.005"
-                            value={scenarioForm.manning_roughness}
-                            onChange={(e) => setScenarioForm({ ...scenarioForm, manning_roughness: parseFloat(e.target.value) || 0.035 })}
-                            className="config-input font-mono"
-                          />
-                          <span className="field-unit-tag">Uniform s/m^(1/3)</span>
-                        </div>
-
-                        <div className="config-field">
-                          <label>Flexible Mesh Target (m)</label>
-                          <input
-                            type="number"
-                            min="10"
-                            max="500"
-                            step="10"
-                            value={scenarioForm.mesh_resolution_m}
-                            onChange={(e) => setScenarioForm({ ...scenarioForm, mesh_resolution_m: parseFloat(e.target.value) || 50 })}
-                            className="config-input font-mono"
-                          />
-                          <span className="field-unit-tag">Target grid cell size</span>
-                        </div>
-
-                        <div className="config-field">
-                          <label>Simulation Duration (hr)</label>
-                          <input
-                            type="number"
-                            min="1"
-                            max="168"
-                            step="6"
-                            value={scenarioForm.simulation_duration_hr}
-                            onChange={(e) => setScenarioForm({ ...scenarioForm, simulation_duration_hr: parseFloat(e.target.value) || 24 })}
-                            className="config-input font-mono"
-                          />
-                          <span className="field-unit-tag">Total run window</span>
-                        </div>
+                        {runsLoading ? (
+                          <div className="loading-box"><span className="spinner"></span> Loading runs...</div>
+                        ) : runs.length === 0 ? (
+                          <p className="no-runs-text">No simulation runs executed yet. Gated execution is enforced.</p>
+                        ) : (
+                          <div className="runs-table-wrapper">
+                            <table className="breakdown-table runs-table">
+                              <thead>
+                                <tr>
+                                  <th>Run ID</th>
+                                  <th>Scenario</th>
+                                  <th>Status</th>
+                                  <th>Started At</th>
+                                  <th>Duration</th>
+                                  <th className="text-right">Logs</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {runs.map((r) => (
+                                  <tr key={r.run_id}>
+                                    <td className="font-mono">{r.run_id.slice(0, 8)}...</td>
+                                    <td>{r.scenario_name} (r{r.revision})</td>
+                                    <td>
+                                      <span className={`status-badge ${r.status === 'completed' ? 'status-ok' : r.status === 'failed' ? 'status-fail' : 'status-pending'}`}>
+                                        {r.status}
+                                      </span>
+                                    </td>
+                                    <td className="font-mono text-muted">{new Date(r.started_at).toLocaleTimeString()}</td>
+                                    <td className="font-mono">{r.duration_seconds != null ? `${r.duration_seconds}s` : 'N/A'}</td>
+                                    <td className="text-right">
+                                      <button className="btn-mini-log" onClick={() => handleViewLogs(r.run_id)}>
+                                        📄 Logs
+                                      </button>
+                                    </td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        )}
                       </div>
-
-                      <div className="form-action-row">
-                        <button className="btn-calculate" onClick={handleSaveScenario}>
-                          💾 {isCreatingScenario ? 'Save Scenario' : 'Update Scenario'}
-                        </button>
-                        <button
-                          className="btn-secondary-action"
-                          onClick={() => {
-                            setIsCreatingScenario(false)
-                            setIsEditingScenario(false)
-                          }}
-                        >
-                          ✕ Cancel
-                        </button>
-                      </div>
-                    </div>
+                    </>
                   )}
 
-                  {/* Scenarios List */}
-                  {scenariosLoading ? (
-                    <div className="loading-box"><span className="spinner"></span> Loading scenarios...</div>
-                  ) : scenarios.length === 0 ? (
-                    <div className="empty-state-box">
-                      <p>No scenarios found. Click <strong>➕ New Scenario</strong> to create your first dam breach modeling scenario.</p>
-                    </div>
-                  ) : (
-                    <div className="scenarios-list">
-                      {scenarios.map((sc) => {
-                        const isSelected = selectedScenarioId === sc.id
-                        return (
-                          <div
-                            key={sc.id}
-                            className={`scenario-card ${isSelected ? 'selected' : ''} ${sc.archived ? 'archived' : ''}`}
-                            onClick={() => setSelectedScenarioId(sc.id)}
-                          >
+                  {/* ============================================================ */}
+                  {/* SUB-TAB 2: PySPH Mesh-Free Particle Solver (Benchmark Mode) */}
+                  {/* ============================================================ */}
+                  {scenarioSubTab === 'sph' && (
+                    <>
+                      <div className="hud-card-header">
+                        <h3 className="card-title">🔬 PySPH Lagrangian Particle Solver</h3>
+                        <span className="legend-tag">WCSPH BENCHMARK</span>
+                      </div>
+
+                      {/* SPH Capability Card */}
+                      <div className="capabilities-grid">
+                        <div className={`capability-card ${sphCapabilities?.pysph_available ? 'cap-available' : 'cap-missing'}`}>
+                          <div className="cap-header">
+                            <span className="cap-icon">🌊</span>
+                            <span className="cap-title">PySPH Solver Engine</span>
+                          </div>
+                          <span className="cap-badge">
+                            {sphCapabilities?.pysph_available
+                              ? `Installed (${sphCapabilities.pysph_version || 'Ready'})`
+                              : 'Not Installed (Template Generator Mode)'}
+                          </span>
+                          <p className="cap-desc">Lagrangian Smoothed Particle Hydrodynamics for violent free-surface wave impact.</p>
+                        </div>
+
+                        <div className={`capability-card ${sphCapabilities?.execution_enabled && sphCapabilities?.engine_executable ? 'cap-available' : 'cap-disabled'}`}>
+                          <div className="cap-header">
+                            <span className="cap-icon">⚙️</span>
+                            <span className="cap-title">Execution Policy</span>
+                          </div>
+                          <span className="cap-badge">
+                            {sphCapabilities?.execution_enabled && sphCapabilities?.engine_executable
+                              ? 'Execution Enabled'
+                              : 'Gated / Disabled by Default'}
+                          </span>
+                          <p className="cap-desc">Single-node SPH solver execution is gated behind ENABLE_PYSPH_EXECUTION=true.</p>
+                        </div>
+                      </div>
+
+                      {/* Setup & Scale Boundary Accordion */}
+                      <div className="guide-accordion-box">
+                        <button
+                          className="btn-toggle-guide"
+                          onClick={() => setShowSphGuide(!showSphGuide)}
+                        >
+                          {showSphGuide ? '▾ Hide PySPH Setup & Scale Limitations' : '▸ Show PySPH Setup & Scale Limitations'}
+                        </button>
+                        {showSphGuide && (
+                          <div className="guide-content font-mono">
+                            <p><strong>1. Dedicated PySPH Conda Environment:</strong></p>
+                            <pre className="code-snippet">
+conda env create -f environment_pysph.yml{'\n'}
+conda activate sih-pysph
+                            </pre>
+                            <p><strong>2. Server Simulation Gating:</strong></p>
+                            <pre className="code-snippet">
+ENABLE_PYSPH_EXECUTION=true{'\n'}
+PYSPH_PYTHON_PATH=C:\Users\anuru\miniforge3\envs\sih-pysph\python.exe
+                            </pre>
+                            <p><strong>3. Fundamental Scale Separation Disclaimer:</strong></p>
+                            <p className="guide-note">
+                              PySPH benchmark mode models near-field 2D column collapse laboratory experiments (&lt; 10m).
+                              Regional river flood routing (&gt; 25km) requires Eulerian SWE solvers (Delft3D-FM) due to computational particle limits (O(N·k) neighbor search).
+                            </p>
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Banners */}
+                      {sphError && <div className="damage-error-box">{sphError}</div>}
+                      {sphPackageSuccessMsg && <div className="export-success-box">📦 {sphPackageSuccessMsg}</div>}
+
+                      {/* SPH Benchmark Configuration */}
+                      <div className="scenario-form-card">
+                        <h4 className="results-title">⚙️ Benchmark Numerical Discretization</h4>
+                        <div className="sph-config-grid">
+                          <div className="config-field">
+                            <label>Initial Particle Spacing dx (m)</label>
+                            <input
+                              type="number"
+                              min="0.05"
+                              max="5.0"
+                              step="0.05"
+                              value={sphParticleSpacing}
+                              onChange={(e) => setSphParticleSpacing(parseFloat(e.target.value) || 0.5)}
+                              className="config-input font-mono"
+                            />
+                            <span className="field-unit-tag">Lower = higher particle count</span>
+                          </div>
+
+                          <div className="config-field">
+                            <label>Adaptive Time Step dt (sec)</label>
+                            <input
+                              type="number"
+                              min="0.00001"
+                              max="0.01"
+                              step="0.0001"
+                              value={sphTimeStep}
+                              onChange={(e) => setSphTimeStep(parseFloat(e.target.value) || 0.0001)}
+                              className="config-input font-mono"
+                            />
+                            <span className="field-unit-tag">CFL numerical stability bound</span>
+                          </div>
+                        </div>
+
+                        <div className="form-group" style={{ marginTop: '0.4rem' }}>
+                          <label>Simulation Run Notes</label>
+                          <input
+                            type="text"
+                            value={sphNotes}
+                            onChange={(e) => setSphNotes(e.target.value)}
+                            className="config-input font-sans"
+                            placeholder="Optional operator notes for SPH execution manifest..."
+                          />
+                        </div>
+                      </div>
+
+                      {/* SPH Scenario Packaging & Run List */}
+                      <div className="scenarios-action-bar">
+                        <h4 className="sub-title">Generate SPH Benchmark Package for Scenario:</h4>
+                      </div>
+
+                      <div className="scenarios-list">
+                        {scenarios.filter((s) => !s.archived).map((sc) => (
+                          <div key={sc.id} className="scenario-card">
                             <div className="scenario-card-header">
                               <div>
                                 <h5 className="scenario-title">{sc.name}</h5>
-                                <span className="scenario-id-text font-mono">ID: {sc.id.slice(0, 8)}... (Rev {sc.revision})</span>
+                                <span className="scenario-id-text font-mono">ID: {sc.id.slice(0, 8)}...</span>
                               </div>
-                              <div className="scenario-badges">
-                                <span className={`status-badge status-${sc.status === 'package_built' ? 'ok' : 'pending'}`}>
-                                  {sc.status.replace(/_/g, ' ')}
-                                </span>
-                                {sc.archived && <span className="badge-archived">Archived</span>}
-                              </div>
+                              <span className="status-badge status-ok">WCSPH 2D</span>
                             </div>
 
-                            {sc.description && <p className="scenario-desc">{sc.description}</p>}
+                            <p className="scenario-desc">{sc.description || 'Parametric dam breach scenario.'}</p>
 
-                            {/* Quick Metrics */}
-                            <div className="scenario-quick-metrics">
-                              <span>📐 Breach: {sc.breach_width_m} m</span>
-                              <span>⏱️ Formation: {sc.breach_formation_time_hr} h</span>
-                              <span>🌊 Stage: {sc.assumed_reservoir_level_m} m</span>
-                              <span>⚡ Manning: {sc.manning_roughness}</span>
-                              <span>🕸️ Mesh: {sc.mesh_resolution_m} m</span>
-                            </div>
-
-                            {/* Snapshot Checksum */}
-                            {sc.snapshot_checksum && (
-                              <div className="checksum-row font-mono">
-                                <span>SHA-256: {sc.snapshot_checksum.slice(0, 16)}...</span>
-                              </div>
-                            )}
-
-                            {/* Action Buttons */}
                             <div className="scenario-actions" onClick={(e) => e.stopPropagation()}>
                               <button
                                 className="btn-card-action"
-                                onClick={() => handleStartEditScenario(sc)}
-                                title="Edit scenario parameters"
+                                onClick={() => handleBuildSphPackage(sc.id)}
+                                disabled={sphBuildingScenarioId === sc.id}
+                                title="Build standalone PySPH package"
                               >
-                                ✏️ Edit
+                                {sphBuildingScenarioId === sc.id ? '⏳ Building...' : '📦 Build SPH Package'}
                               </button>
                               <button
                                 className="btn-card-action"
-                                onClick={() => handleCloneScenario(sc.id)}
-                                title="Clone scenario copy"
+                                onClick={() => handleDownloadSphPackage(sc.id)}
+                                title="Download SPH package ZIP"
                               >
-                                📋 Clone
+                                ⬇️ Download SPH ZIP
                               </button>
                               <button
-                                className="btn-card-action"
-                                onClick={() => handleBuildPackage(sc.id)}
-                                disabled={packageBuilding}
-                                title="Build Delft3D FM configuration package"
-                              >
-                                📦 Build Package
-                              </button>
-                              <button
-                                className="btn-card-action"
-                                onClick={() => handleDownloadPackage(sc.id)}
-                                title="Download draft package ZIP"
-                              >
-                                ⬇️ Download ZIP
-                              </button>
-                              <button
-                                className="btn-card-action"
-                                onClick={() => handleArchiveScenario(sc.id, !sc.archived)}
-                                title={sc.archived ? 'Restore scenario' : 'Archive scenario'}
-                              >
-                                {sc.archived ? '📂 Unarchive' : '📁 Archive'}
-                              </button>
-                              <button
-                                className={`btn-card-action btn-run-action ${(!capabilities?.execution_enabled || !capabilities?.dflowfm_available) ? 'disabled' : ''}`}
-                                disabled={!capabilities?.execution_enabled || !capabilities?.dflowfm_available || runExecuting}
-                                onClick={() => handleRunSimulation(sc.id)}
+                                className={`btn-card-action btn-run-action ${(!sphCapabilities?.execution_enabled || !sphCapabilities?.engine_executable) ? 'disabled' : ''}`}
+                                disabled={!sphCapabilities?.execution_enabled || !sphCapabilities?.engine_executable || sphRunningScenarioId === sc.id}
+                                onClick={() => handleRunSph(sc.id)}
                                 title={
-                                  capabilities?.execution_enabled && capabilities?.dflowfm_available
-                                    ? 'Execute D-Flow FM simulation'
-                                    : 'D-Flow FM solver execution is disabled or binary missing on server'
+                                  sphCapabilities?.execution_enabled
+                                    ? 'Execute PySPH simulation run'
+                                    : 'PySPH execution is disabled on server'
                                 }
                               >
-                                {runExecuting ? '⏳ Running...' : '🚀 Run D-Flow FM'}
+                                {sphRunningScenarioId === sc.id ? '⏳ Simulating...' : '🚀 Run PySPH'}
                               </button>
                             </div>
                           </div>
-                        )
-                      })}
-                    </div>
-                  )}
-
-                  {/* Selected Scenario Scientific Validation Notes */}
-                  {selectedScenario && (
-                    <div className="scenario-validation-card">
-                      <div className="hud-card-header">
-                        <h4 className="results-title">🔬 Scientific Validation & Input Review</h4>
-                        <span className="status-badge status-warn">Review Required</span>
-                      </div>
-                      <p className="validation-intro">
-                        Schema validation has passed, but the following critical scientific inputs are required before running a certified hydrodynamic simulation:
-                      </p>
-                      <ul className="validation-notes-list">
-                        {selectedScenario.validation_notes.map((note, idx) => (
-                          <li key={idx}>⚠️ {note}</li>
                         ))}
-                      </ul>
-                    </div>
+                      </div>
+
+                      {/* PySPH Historical Runs */}
+                      <div className="runs-history-card">
+                        <div className="hud-card-header">
+                          <h4 className="results-title">📋 PySPH Execution History</h4>
+                          <button className="btn-text-action" onClick={fetchSphRuns}>🔄 Refresh</button>
+                        </div>
+
+                        {sphRunsLoading ? (
+                          <div className="loading-box"><span className="spinner"></span> Loading SPH runs...</div>
+                        ) : sphRuns.length === 0 ? (
+                          <p className="no-runs-text">No SPH runs executed yet. Gated execution is enforced.</p>
+                        ) : (
+                          <div className="runs-table-wrapper">
+                            <table className="breakdown-table runs-table">
+                              <thead>
+                                <tr>
+                                  <th>Run ID</th>
+                                  <th>Scenario</th>
+                                  <th>Status</th>
+                                  <th>Started At</th>
+                                  <th>Duration</th>
+                                  <th className="text-right">Logs</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {sphRuns.map((r) => (
+                                  <tr key={r.run_id}>
+                                    <td className="font-mono">{r.run_id.slice(0, 8)}...</td>
+                                    <td>{r.scenario_name}</td>
+                                    <td>
+                                      <span className={`status-badge ${r.status === 'completed' ? 'status-ok' : r.status === 'failed' ? 'status-fail' : 'status-pending'}`}>
+                                        {r.status}
+                                      </span>
+                                    </td>
+                                    <td className="font-mono text-muted">{new Date(r.started_at).toLocaleTimeString()}</td>
+                                    <td className="font-mono">{r.duration_seconds != null ? `${r.duration_seconds}s` : 'N/A'}</td>
+                                    <td className="text-right">
+                                      <button className="btn-mini-log" onClick={() => handleViewSphLogs(r.run_id)}>
+                                        📄 Logs
+                                      </button>
+                                    </td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        )}
+                      </div>
+                    </>
                   )}
 
-                  {/* Historical Simulation Runs */}
-                  <div className="runs-history-card">
-                    <div className="hud-card-header">
-                      <h4 className="results-title">📋 Simulation Execution History</h4>
-                      <button className="btn-text-action" onClick={fetchRuns}>🔄 Refresh</button>
-                    </div>
-
-                    {runsLoading ? (
-                      <div className="loading-box"><span className="spinner"></span> Loading runs...</div>
-                    ) : runs.length === 0 ? (
-                      <p className="no-runs-text">No simulation runs executed yet. Gated execution is enforced.</p>
-                    ) : (
-                      <div className="runs-table-wrapper">
-                        <table className="breakdown-table runs-table">
-                          <thead>
-                            <tr>
-                              <th>Run ID</th>
-                              <th>Scenario</th>
-                              <th>Status</th>
-                              <th>Started At</th>
-                              <th>Duration</th>
-                              <th className="text-right">Logs</th>
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {runs.map((r) => (
-                              <tr key={r.run_id}>
-                                <td className="font-mono">{r.run_id.slice(0, 8)}...</td>
-                                <td>{r.scenario_name} (r{r.revision})</td>
-                                <td>
-                                  <span className={`status-badge ${r.status === 'completed' ? 'status-ok' : r.status === 'failed' ? 'status-fail' : 'status-pending'}`}>
-                                    {r.status}
-                                  </span>
-                                </td>
-                                <td className="font-mono text-muted">{new Date(r.started_at).toLocaleTimeString()}</td>
-                                <td className="font-mono">{r.duration_seconds != null ? `${r.duration_seconds}s` : 'N/A'}</td>
-                                <td className="text-right">
-                                  <button className="btn-mini-log" onClick={() => handleViewLogs(r.run_id)}>
-                                    📄 Logs
-                                  </button>
-                                </td>
-                              </tr>
-                            ))}
-                          </tbody>
-                        </table>
+                  {/* ============================================================ */}
+                  {/* SUB-TAB 3: Multi-Engine Benchmark & Hydrodynamic Comparison */}
+                  {/* ============================================================ */}
+                  {scenarioSubTab === 'comparison' && (
+                    <>
+                      <div className="hud-card-header">
+                        <h3 className="card-title">⚔️ Delft3D FM vs PySPH Comparison</h3>
+                        <span className={`status-badge ${comparisonReadiness?.comparison_ready ? 'status-ok' : 'status-warn'}`}>
+                          {comparisonReadiness?.comparison_ready ? 'COMPARISON READY' : 'BENCHMARK PENDING'}
+                        </span>
                       </div>
-                    )}
-                  </div>
+
+                      {/* Scientific Boundary Notice */}
+                      <div className="damage-notes-card">
+                        <span className="note-title">🔬 Scientific Comparison Boundary</span>
+                        <p className="note-text">
+                          {comparisonReadiness?.methodology_summary ||
+                            'Compares Eulerian 2D shallow water hydrodynamic results against Lagrangian mesh-free SPH particle distributions resampled to a common grid.'}
+                        </p>
+                        {comparisonReadiness?.blocker_reason && (
+                          <p className="note-text text-danger" style={{ marginTop: '0.35rem' }}>
+                            <strong>Pending Requirement:</strong> {comparisonReadiness.blocker_reason}
+                          </p>
+                        )}
+                      </div>
+
+                      {/* Comparison Run Selector */}
+                      <div className="comparison-selection-card">
+                        <h4 className="results-title">1. Select Completed Runs to Compare</h4>
+                        <div className="comparison-selectors-row">
+                          <div className="config-field">
+                            <label>Delft3D Flexible Mesh Run</label>
+                            <select
+                              className="config-input font-mono"
+                              value={selectedDelftRunId}
+                              onChange={(e) => setSelectedDelftRunId(e.target.value)}
+                            >
+                              <option value="">-- Select Delft3D Run --</option>
+                              {runs.map((r) => (
+                                <option key={r.run_id} value={r.run_id}>
+                                  {r.scenario_name} ({r.run_id.slice(0, 8)}...) - {r.status}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+
+                          <div className="config-field">
+                            <label>PySPH Lagrangian Run</label>
+                            <select
+                              className="config-input font-mono"
+                              value={selectedSphRunId}
+                              onChange={(e) => setSelectedSphRunId(e.target.value)}
+                            >
+                              <option value="">-- Select PySPH Run --</option>
+                              {sphRuns.map((r) => (
+                                <option key={r.run_id} value={r.run_id}>
+                                  {r.scenario_name} ({r.run_id.slice(0, 8)}...) - {r.status}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+                        </div>
+
+                        {(() => {
+                          const selectedDelftRun = runs.find((r) => r.run_id === selectedDelftRunId)
+                          const selectedSphRun = sphRuns.find((r) => r.run_id === selectedSphRunId)
+                          const isDelftCompleted = selectedDelftRun?.status === 'completed'
+                          const isSphCompleted = selectedSphRun?.status === 'completed'
+                          const isDelftManifestVerified = Boolean(
+                            comparisonReadiness?.delft3d_completed_runs?.some(
+                              (r) => r.run_id === selectedDelftRunId && r.units_verified
+                            )
+                          )
+                          const isSphManifestVerified = Boolean(
+                            comparisonReadiness?.sph_completed_runs?.some(
+                              (r) => r.run_id === selectedSphRunId && r.units_verified
+                            )
+                          )
+                          const isReady = Boolean(comparisonReadiness?.comparison_ready)
+
+                          const isButtonDisabled =
+                            comparisonLoading ||
+                            !isReady ||
+                            !selectedDelftRunId ||
+                            !selectedSphRunId ||
+                            !isDelftCompleted ||
+                            !isSphCompleted ||
+                            !isDelftManifestVerified ||
+                            !isSphManifestVerified
+
+                          let blockerMessage = ''
+                          if (!isReady && comparisonReadiness?.blocker_reason) {
+                            blockerMessage = comparisonReadiness.blocker_reason
+                          } else if (!selectedDelftRunId || !selectedSphRunId) {
+                            blockerMessage = 'Select both a Delft3D FM and PySPH run to enable comparison.'
+                          } else if (!isDelftCompleted || !isSphCompleted) {
+                            blockerMessage = 'Both selected runs must be in completed status.'
+                          } else if (!isDelftManifestVerified || !isSphManifestVerified) {
+                            blockerMessage = 'Verified compatible manifests with calibrated units are unavailable for selected runs.'
+                          }
+
+                          return (
+                            <>
+                              <button
+                                className={`btn-calculate ${isButtonDisabled ? 'disabled' : ''}`}
+                                onClick={handleRunComparison}
+                                disabled={isButtonDisabled}
+                                title={blockerMessage || 'Compare Hydrodynamic Outputs'}
+                              >
+                                {comparisonLoading
+                                  ? '⏳ Aligning Grids & Computing Metrics...'
+                                  : '⚔️ Compare Hydrodynamic Outputs'}
+                              </button>
+
+                              {isButtonDisabled && blockerMessage && (
+                                <div className="damage-notes-card" style={{ marginTop: '0.4rem' }}>
+                                  <span className="note-title text-danger">⛔ Comparison Blocked:</span>
+                                  <p className="note-text text-danger">{blockerMessage}</p>
+                                </div>
+                              )}
+                            </>
+                          )
+                        })()}
+                      </div>
+
+                      {comparisonError && <div className="damage-error-box">{comparisonError}</div>}
+
+                      {/* Quantitative Comparison Results */}
+                      {comparisonResult && (
+                        <div className="damage-results-section">
+                          <h4 className="results-title">
+                            📊 Quantitative Spatial Comparison ({comparisonResult.status === 'completed' ? 'Verified Match' : 'Comparison Unavailable'})
+                          </h4>
+
+                          {comparisonResult.blockers && comparisonResult.blockers.length > 0 && (
+                            <div className="damage-error-box">
+                              <span className="note-title">⛔ Comparison Blockers:</span>
+                              <ul className="warnings-list">
+                                {comparisonResult.blockers.map((b, idx) => (
+                                  <li key={idx}>{b}</li>
+                                ))}
+                              </ul>
+                            </div>
+                          )}
+
+                          {comparisonResult.status === 'completed' && (
+                            <>
+                              <div className="damage-kpi-grid">
+                                <div className="damage-kpi-card kpi-base">
+                                  <span className="damage-kpi-label">Extent IoU (Jaccard)</span>
+                                  <span className="damage-kpi-val font-mono">{(comparisonResult.extent_iou * 100).toFixed(1)}%</span>
+                                  <span className="damage-kpi-sub">Spatial overlap match</span>
+                                </div>
+
+                                <div className="damage-kpi-card">
+                                  <span className="damage-kpi-label">Critical Success Index</span>
+                                  <span className="damage-kpi-val font-mono">{(comparisonResult.critical_success_index * 100).toFixed(1)}%</span>
+                                  <span className="damage-kpi-sub">Threat Score</span>
+                                </div>
+
+                                <div className="damage-kpi-card">
+                                  <span className="damage-kpi-label">Area Difference</span>
+                                  <span className="damage-kpi-val font-mono">{comparisonResult.projected_area_diff_km2.toFixed(3)} km²</span>
+                                  <span className="damage-kpi-sub">Overlap: {comparisonResult.overlap_area_km2.toFixed(3)} km²</span>
+                                </div>
+                              </div>
+
+                              {comparisonResult.depth_stats && (
+                                <div className="damage-notes-card">
+                                  <span className="note-title">🌊 Water Depth (m) Error Metrics</span>
+                                  <div className="damage-kpi-grid">
+                                    <div className="damage-kpi-card">
+                                      <span className="damage-kpi-label">Mean Absolute Error</span>
+                                      <span className="damage-kpi-val font-mono">{comparisonResult.depth_stats.mae} m</span>
+                                    </div>
+                                    <div className="damage-kpi-card">
+                                      <span className="damage-kpi-label">RMSE</span>
+                                      <span className="damage-kpi-val font-mono">{comparisonResult.depth_stats.rmse} m</span>
+                                    </div>
+                                    <div className="damage-kpi-card">
+                                      <span className="damage-kpi-label">Mean Bias</span>
+                                      <span className="damage-kpi-val font-mono">{comparisonResult.depth_stats.mean_bias} m</span>
+                                    </div>
+                                  </div>
+                                </div>
+                              )}
+                            </>
+                          )}
+                        </div>
+                      )}
+
+                      {/* Methodology Matrix Accordion */}
+                      {methodologyMatrix && (
+                        <div className="runs-history-card">
+                          <h4 className="results-title">🏛️ Hydrodynamic Architectural Comparison Matrix</h4>
+                          <div className="comparison-table-wrapper">
+                            <table className="comparison-matrix-table">
+                              <thead>
+                                <tr>
+                                  <th>Evaluation Dimension</th>
+                                  <th>Delft3D Flexible Mesh (SWE)</th>
+                                  <th>PySPH Particle Solver (WCSPH)</th>
+                                  <th>Operational Guidance</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {methodologyMatrix.comparison_matrix.map((row, idx) => (
+                                  <tr key={idx}>
+                                    <td><strong>{row.dimension}</strong></td>
+                                    <td>{row.delft3d_fm}</td>
+                                    <td>{row.pysph}</td>
+                                    <td className="text-muted">{row.operational_implication}</td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        </div>
+                      )}
+                    </>
+                  )}
+
+                  {/* ============================================================ */}
+                  {/* SUB-TAB 4: Google Earth Engine Satellite Connector */}
+                  {/* ============================================================ */}
+                  {scenarioSubTab === 'gee' && (
+                    <>
+                      <div className="hud-card-header">
+                        <h3 className="card-title">🛰️ Google Earth Engine Connector</h3>
+                        <span className={`status-badge ${geeCapabilities?.authenticated ? 'status-ok' : 'status-warn'}`}>
+                          {geeCapabilities?.authenticated ? 'ADC AUTHENTICATED' : 'OFFLINE / DRY RUN'}
+                        </span>
+                      </div>
+
+                      {/* Capabilities Card */}
+                      <div className="capabilities-grid">
+                        <div className={`capability-card ${geeCapabilities?.gee_available ? 'cap-available' : 'cap-missing'}`}>
+                          <div className="cap-header">
+                            <span className="cap-icon">🛰️</span>
+                            <span className="cap-title">Earth Engine API</span>
+                          </div>
+                          <span className="cap-badge">
+                            {geeCapabilities?.gee_available ? 'API Installed' : 'earthengine-api Not Installed'}
+                          </span>
+                          <p className="cap-desc">Cloud earth observation catalog connector.</p>
+                        </div>
+
+                        <div className={`capability-card ${geeCapabilities?.authenticated ? 'cap-available' : 'cap-disabled'}`}>
+                          <div className="cap-header">
+                            <span className="cap-icon">🔑</span>
+                            <span className="cap-title">Authentication Mode</span>
+                          </div>
+                          <span className="cap-badge">
+                            {geeCapabilities?.authenticated ? geeCapabilities.auth_mode : 'Unauthenticated (Dry Run Mode)'}
+                          </span>
+                          <p className="cap-desc">Server-side Application Default Credentials (ADC) enforcement.</p>
+                        </div>
+                      </div>
+
+                      {/* GEE Setup Accordion */}
+                      <div className="guide-accordion-box">
+                        <button
+                          className="btn-toggle-guide"
+                          onClick={() => setShowGeeGuide(!showGeeGuide)}
+                        >
+                          {showGeeGuide ? '▾ Hide Earth Engine Setup Instructions' : '▸ Show Earth Engine Setup Instructions'}
+                        </button>
+                        {showGeeGuide && (
+                          <div className="guide-content font-mono">
+                            <p><strong>1. Dedicated Earth Engine Conda Environment:</strong></p>
+                            <pre className="code-snippet">
+conda env create -f environment_gee.yml{'\n'}
+conda activate sih-gee
+                            </pre>
+                            <p><strong>2. Authenticate with Google Cloud CLI:</strong></p>
+                            <pre className="code-snippet">
+earthengine authenticate{'\n'}
+set GEE_PROJECT_ID=my-dam-hazard-project
+                            </pre>
+                            <p><strong>3. Security Notice:</strong></p>
+                            <p className="guide-note">
+                              The web application never accepts or stores credentials or bearer tokens over HTTP. All background cloud export tasks are disabled by default (ENABLE_GEE_TASKS=false).
+                            </p>
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Dataset Selector */}
+                      <div className="scenario-form-card">
+                        <h4 className="results-title">📡 Select Approved Satellite Collection</h4>
+                        <div className="form-group">
+                          <label>Whitelisted Earth Engine Dataset</label>
+                          <select
+                            className="config-input font-mono"
+                            value={selectedGeeDatasetId}
+                            onChange={(e) => setSelectedGeeDatasetId(e.target.value)}
+                          >
+                            {geeDatasets.map((ds) => (
+                              <option key={ds.id} value={ds.id}>
+                                {ds.title} ({ds.id})
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+
+                        {/* Active Dataset Metadata */}
+                        {(() => {
+                          const activeDs = geeDatasets.find((d) => d.id === selectedGeeDatasetId)
+                          if (!activeDs) return null
+                          return (
+                            <div className="gee-dataset-card">
+                              <span className="note-title">ℹ️ {activeDs.title}</span>
+                              <p className="note-text"><strong>Provider:</strong> {activeDs.provider}</p>
+                              <p className="note-text"><strong>Resolution & Cadence:</strong> {activeDs.spatial_resolution} • {activeDs.temporal_range}</p>
+                              <p className="note-text"><strong>Available Bands:</strong> <code>{activeDs.bands.join(', ')}</code></p>
+                              <p className="note-text"><strong>Guidance:</strong> {activeDs.usage_guidance}</p>
+                              <p className="note-text text-danger">⚠️ {activeDs.disclaimer}</p>
+                            </div>
+                          )
+                        })()}
+
+                        {/* Date Range & Resolution Inputs */}
+                        <div className="sph-config-grid" style={{ marginTop: '0.6rem' }}>
+                          <div className="config-field">
+                            <label>Start Date</label>
+                            <input
+                              type="date"
+                              value={geeStartDate}
+                              onChange={(e) => setGeeStartDate(e.target.value)}
+                              className="config-input font-mono"
+                            />
+                          </div>
+                          <div className="config-field">
+                            <label>End Date</label>
+                            <input
+                              type="date"
+                              value={geeEndDate}
+                              onChange={(e) => setGeeEndDate(e.target.value)}
+                              className="config-input font-mono"
+                            />
+                          </div>
+                        </div>
+
+                        <div className="config-field" style={{ marginTop: '0.4rem' }}>
+                          <label>Target Spatial Scale (meters)</label>
+                          <input
+                            type="number"
+                            min="10"
+                            max="1000"
+                            step="10"
+                            value={geeScaleMeters}
+                            onChange={(e) => setGeeScaleMeters(parseFloat(e.target.value) || 30)}
+                            className="config-input font-mono"
+                          />
+                          <span className="field-unit-tag">Pixel export resolution</span>
+                        </div>
+
+                        {(() => {
+                          const isGeeApiAvailable = Boolean(geeCapabilities?.gee_available)
+                          const isGeeAuthenticated = Boolean(geeCapabilities?.authenticated)
+                          const isGeeTasksEnabled = Boolean(geeCapabilities?.tasks_enabled)
+                          const isPreviewDisabled = geeLoading || !isGeeApiAvailable || !isGeeAuthenticated
+                          const isCloudExportDisabled =
+                            geeLoading || !isGeeApiAvailable || !isGeeAuthenticated || !isGeeTasksEnabled
+
+                          let geeBlockerReason = ''
+                          if (!isGeeApiAvailable) {
+                            geeBlockerReason = 'Earth Engine API (earthengine-api) is not installed on server.'
+                          } else if (!isGeeAuthenticated) {
+                            geeBlockerReason = 'Earth Engine authentication is unavailable. Application Default Credentials (ADC) or GEE_PROJECT_ID required.'
+                          }
+
+                          return (
+                            <>
+                              <div
+                                className="form-action-row"
+                                style={{
+                                  marginTop: '0.75rem',
+                                  gap: '0.5rem',
+                                  display: 'flex',
+                                  flexDirection: 'column',
+                                }}
+                              >
+                                <button
+                                  className={`btn-calculate ${isPreviewDisabled ? 'disabled' : ''}`}
+                                  onClick={handleCreateGeePlan}
+                                  disabled={isPreviewDisabled}
+                                  title={
+                                    !isGeeApiAvailable
+                                      ? 'Earth Engine library (earthengine-api) is not installed'
+                                      : !isGeeAuthenticated
+                                      ? 'Earth Engine is unauthenticated. Google Cloud ADC required.'
+                                      : 'Query satellite catalog for candidate observation plan'
+                                  }
+                                >
+                                  {geeLoading
+                                    ? '⏳ Querying Catalog & Building Plan...'
+                                    : '🛰️ Generate Candidate Observation Plan'}
+                                </button>
+
+                                <button
+                                  className="btn-secondary-action disabled"
+                                  disabled={isCloudExportDisabled}
+                                  style={{ opacity: 0.5, cursor: 'not-allowed' }}
+                                  title={
+                                    !isGeeTasksEnabled
+                                      ? 'Cloud export tasks are disabled by server policy (ENABLE_GEE_TASKS=false)'
+                                      : !isGeeApiAvailable
+                                      ? 'Earth Engine API not installed'
+                                      : !isGeeAuthenticated
+                                      ? 'Earth Engine authentication required'
+                                      : 'Submit background cloud export task'
+                                  }
+                                >
+                                  ☁️ Cloud Task Export {!isGeeTasksEnabled ? '(ENABLE_GEE_TASKS=false)' : '(Ready)'}
+                                </button>
+                              </div>
+
+                              {isPreviewDisabled && geeBlockerReason && (
+                                <div className="damage-notes-card" style={{ marginTop: '0.5rem' }}>
+                                  <span className="note-title text-danger">⛔ Earth Engine Disabled:</span>
+                                  <p className="note-text text-danger">{geeBlockerReason}</p>
+                                </div>
+                              )}
+                            </>
+                          )
+                        })()}
+                      </div>
+
+                      {geeError && <div className="damage-error-box">{geeError}</div>}
+
+                      {/* Export Plan Result */}
+                      {geeExportPlan && (
+                        <div className="gee-plan-result-card">
+                          <div className="hud-card-header">
+                            <h4 className="results-title">📋 Earth Observation Plan ({geeExportPlan.status})</h4>
+                            <span className="legend-tag">CANDIDATE WATER-CHANGE</span>
+                          </div>
+
+                          <p className="note-text">
+                            <strong>Dataset:</strong> <code>{geeExportPlan.dataset_id}</code> | <strong>Scale:</strong> {geeExportPlan.target_scale_meters}m
+                          </p>
+                          <p className="note-text">
+                            <strong>Estimated Pixels:</strong> {geeExportPlan.estimated_pixels.toLocaleString()} pixels | <strong>Cloud Tasks Submitted:</strong> {geeExportPlan.cloud_task_submitted ? 'Yes' : 'No (Dry Run / Tasks Disabled)'}
+                          </p>
+
+                          {geeExportPlan.acquisition_timestamps && geeExportPlan.acquisition_timestamps.length > 0 && (
+                            <div className="damage-notes-card">
+                              <span className="note-title">📅 Identified Candidate Acquisitions:</span>
+                              <ul className="warnings-list font-mono">
+                                {geeExportPlan.acquisition_timestamps.map((ts, idx) => (
+                                  <li key={idx}>{ts}</li>
+                                ))}
+                              </ul>
+                            </div>
+                          )}
+
+                          <div className="damage-notes-card">
+                            <span className="note-title">⚠️ Earth Observation Disclaimer</span>
+                            <p className="note-text">{geeExportPlan.disclaimer}</p>
+                          </div>
+                        </div>
+                      )}
+                    </>
+                  )}
                 </div>
               </div>
             )}

@@ -1,0 +1,22 @@
+# Optional standalone Conda environment specification for PySPH Lagrangian particle solver.
+# Keep this separate from the core 'sih-app' environment to avoid dependency conflicts.
+# Usage:
+#   conda env create -f environment_pysph.yml
+#   conda activate pysph-env
+
+name: pysph-env
+channels:
+  - conda-forge
+  - nodefaults
+dependencies:
+  - python=3.10
+  - pip
+  - numpy
+  - cython
+  - scipy
+  - h5py
+  - mpi4py
+  - matplotlib
+  - pydantic
+  - pip:
+    - pysph>=1.0b1

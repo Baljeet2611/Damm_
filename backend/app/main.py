@@ -24,6 +24,18 @@ from app.schemas import (
     SimulationRunRequest,
     SimulationRunResponse,
     SimulationLogResponse,
+    SPHCapabilitiesResponse,
+    SPHPackageResponse,
+    SPHRunRequest,
+    SPHRunResponse,
+    ComparisonReadinessResponse,
+    ComparisonRequest,
+    ComparisonResponse,
+    MethodologyComparisonResponse,
+    GEECapabilitiesResponse,
+    GEEDatasetInfo,
+    GEEExportPlanRequest,
+    GEEExportPlanResponse,
 )
 
 from app.raster_service import (
@@ -62,6 +74,26 @@ from app.simulation_service import (
     list_simulation_runs,
     get_simulation_run,
     get_simulation_logs,
+)
+from app.sph_service import (
+    check_sph_capabilities,
+    build_sph_package,
+    get_sph_package_zip_path,
+    execute_sph_run,
+    list_sph_runs,
+    get_sph_run,
+    get_sph_logs,
+)
+from app.comparison_service import (
+    check_comparison_readiness,
+    compare_runs,
+    get_methodology_comparison,
+)
+from app.gee_service import (
+    check_gee_capabilities,
+    list_whitelisted_datasets,
+    get_dataset_info,
+    create_export_plan,
 )
 
 app = FastAPI(
@@ -386,6 +418,128 @@ def get_run_by_id(run_id: str) -> SimulationRunResponse:
 def get_run_logs(run_id: str) -> SimulationLogResponse:
     """Retrieve captured stdout and stderr execution logs for a simulation run."""
     return get_simulation_logs(run_id)
+
+
+# ==========================================
+# Phase 12: SPH (PySPH) Solver Endpoints
+# ==========================================
+
+@app.get("/api/sph/capabilities", response_model=SPHCapabilitiesResponse)
+def get_sph_capabilities() -> SPHCapabilitiesResponse:
+    """Detect PySPH solver environment and execution policy."""
+    return check_sph_capabilities()
+
+
+@app.post("/api/scenarios/{scenario_id}/build-sph-package", response_model=SPHPackageResponse)
+def post_build_sph_package(scenario_id: str) -> SPHPackageResponse:
+    """Generate downloadable PySPH 2D benchmark model package ZIP archive."""
+    response, _ = build_sph_package(scenario_id)
+    return response
+
+
+@app.get("/api/scenarios/{scenario_id}/download-sph-package")
+def get_download_sph_package(scenario_id: str):
+    """Download the built PySPH benchmark package ZIP archive."""
+    zip_path = get_sph_package_zip_path(scenario_id)
+    return FileResponse(
+        path=str(zip_path),
+        media_type="application/zip",
+        filename=zip_path.name,
+    )
+
+
+@app.post("/api/scenarios/{scenario_id}/run-sph", response_model=SPHRunResponse)
+def post_run_sph(scenario_id: str, request: Optional[SPHRunRequest] = None) -> SPHRunResponse:
+    """
+    Execute PySPH simulation strictly gated by server policy.
+    Returns 409 Conflict if execution is disabled or PySPH is missing.
+    """
+    return execute_sph_run(scenario_id, req=request)
+
+
+@app.get("/api/sph-runs", response_model=List[SPHRunResponse])
+def get_sph_runs_list() -> List[SPHRunResponse]:
+    """List historical SPH simulation runs."""
+    return list_sph_runs()
+
+
+@app.get("/api/sph-runs/{run_id}", response_model=SPHRunResponse)
+def get_sph_run_by_id(run_id: str) -> SPHRunResponse:
+    """Retrieve status and metadata for a specific SPH run."""
+    return get_sph_run(run_id)
+
+
+@app.get("/api/sph-runs/{run_id}/logs", response_model=SimulationLogResponse)
+def get_sph_run_logs(run_id: str) -> SimulationLogResponse:
+    """Retrieve captured stdout and stderr execution logs for an SPH run."""
+    return get_sph_logs(run_id)
+
+
+# ==========================================
+# Phase 12: Multi-Engine Comparison Endpoints
+# ==========================================
+
+@app.get("/api/comparison/readiness", response_model=ComparisonReadinessResponse)
+def get_comparison_readiness() -> ComparisonReadinessResponse:
+    """Check readiness of Delft3D FM and PySPH runs for physical hydrodynamic comparison."""
+    return check_comparison_readiness()
+
+
+@app.get("/api/comparison/methodology", response_model=MethodologyComparisonResponse)
+def get_comparison_methodology() -> MethodologyComparisonResponse:
+    """Retrieve structured architectural and physical methodology matrix."""
+    return get_methodology_comparison()
+
+
+@app.post("/api/comparison/compare", response_model=ComparisonResponse)
+def post_compare_runs(request: ComparisonRequest) -> ComparisonResponse:
+    """
+    Execute quantitative spatial comparison between Delft3D and PySPH runs.
+    Returns comparison_unavailable if runs are missing or units unverified.
+    """
+    return compare_runs(
+        delft3d_run_id=request.delft3d_run_id,
+        sph_run_id=request.sph_run_id,
+        reproject_crs=request.reproject_crs or "EPSG:4326",
+    )
+
+
+# ==========================================
+# Phase 12: Google Earth Engine Connector Endpoints
+# ==========================================
+
+@app.get("/api/gee/capabilities", response_model=GEECapabilitiesResponse)
+def get_gee_capabilities() -> GEECapabilitiesResponse:
+    """Detect Earth Engine connector capabilities and authentication status."""
+    return check_gee_capabilities()
+
+
+@app.get("/api/gee/datasets", response_model=List[GEEDatasetInfo])
+def get_gee_datasets() -> List[GEEDatasetInfo]:
+    """List approved whitelisted Earth Engine datasets."""
+    return list_whitelisted_datasets()
+
+
+@app.get("/api/gee/datasets/{dataset_id:path}", response_model=GEEDatasetInfo)
+def get_gee_dataset(dataset_id: str) -> GEEDatasetInfo:
+    """Retrieve metadata for a specific whitelisted Earth Engine dataset."""
+    info = get_dataset_info(dataset_id)
+    if not info:
+        raise HTTPException(status_code=404, detail=f"Dataset '{dataset_id}' not found in approved Earth Engine whitelist.")
+    return info
+
+
+@app.post("/api/gee/export-plan", response_model=GEEExportPlanResponse)
+def post_gee_export_plan(request: GEEExportPlanRequest) -> GEEExportPlanResponse:
+    """
+    Generate an Earth Engine export plan or candidate observation query.
+    Returns dry-run plan if unauthenticated or task submission is disabled.
+    """
+    try:
+        return create_export_plan(request)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
 
 
 
