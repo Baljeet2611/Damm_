@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import Optional, Dict, Any, List
 from pydantic import BaseModel, Field
 
 
@@ -66,3 +66,29 @@ class RasterLegendResponse(BaseModel):
     max_value: Optional[float] = None
     color_ramp: list[ColorRampStop]
     items: list[LegendItem]
+
+
+# Vector & Preliminary Exposure Analysis Schemas
+
+class CategoryCount(BaseModel):
+    total: int
+    assessed: int
+    exposed: int
+    not_exposed: int
+    not_assessed: int
+
+
+class ExposureDatasetSummary(BaseModel):
+    total: int
+    assessed: int
+    exposed: int
+    not_exposed: int
+    not_assessed: int
+    by_category: Dict[str, CategoryCount]
+
+
+class ExposureSummaryResponse(BaseModel):
+    disclaimer: str = "Preliminary exposure screening based on unverified sample rasters. Not a validated hydrodynamic risk assessment or damage analysis."
+    methodology_note: str = "Direct coordinate sampling for points; representative-point/midpoint geometric screening for polygons and lines."
+    assets: ExposureDatasetSummary
+    roads: ExposureDatasetSummary

@@ -1,3 +1,4 @@
+from typing import Dict, Any
 from fastapi import FastAPI, Query, Response
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -6,6 +7,7 @@ from app.schemas import (
     RasterMetadataResponse,
     RasterPointValueResponse,
     RasterLegendResponse,
+    ExposureSummaryResponse,
 )
 from app.raster_service import (
     list_datasets,
@@ -14,11 +16,18 @@ from app.raster_service import (
     get_raster_tile,
     get_raster_legend,
 )
+from app.vector_service import (
+    load_raw_assets,
+    load_raw_roads,
+    get_exposure_assets,
+    get_exposure_roads,
+    get_exposure_summary,
+)
 
 app = FastAPI(
     title="Dam Break Decision Support System API",
-    description="Automated dam-break hydrodynamic inspection and inundation analysis API",
-    version="0.4.0",
+    description="Automated dam-break hydrodynamic inspection, vector overlays, and preliminary inundation exposure analysis API",
+    version="0.6.0",
 )
 
 app.add_middleware(
@@ -96,3 +105,54 @@ def get_legend(id: str) -> RasterLegendResponse:
     """
     return get_raster_legend(dataset_id=id)
 
+
+# Vector & Exposure Analysis Endpoints
+
+@app.get("/api/assets")
+def get_assets() -> Dict[str, Any]:
+    """
+    Return raw infrastructure assets GeoJSON FeatureCollection
+    with OSM categorized classifications.
+    Never accepts or exposes filesystem paths.
+    """
+    return load_raw_assets()
+
+
+@app.get("/api/roads")
+def get_roads() -> Dict[str, Any]:
+    """
+    Return road network converted from GraphML edges to GeoJSON FeatureCollection LineStrings.
+    Uses stored geometry when available, otherwise node coordinates.
+    Never accepts or exposes filesystem paths.
+    """
+    return load_raw_roads()
+
+
+@app.get("/api/exposure/assets")
+def get_exposure_assets_endpoint() -> Dict[str, Any]:
+    """
+    Return infrastructure assets GeoJSON FeatureCollection with preliminary
+    raster exposure screening attributes attached (assessed, exposed, depth_value,
+    velocity_value, arrival_value, sampling_method, category).
+    """
+    return get_exposure_assets()
+
+
+@app.get("/api/exposure/roads")
+def get_exposure_roads_endpoint() -> Dict[str, Any]:
+    """
+    Return road network GeoJSON FeatureCollection with preliminary
+    raster exposure screening attributes attached (assessed, exposed, depth_value,
+    velocity_value, arrival_value, sampling_method, category).
+    """
+    return get_exposure_roads()
+
+
+@app.get("/api/exposure/summary", response_model=ExposureSummaryResponse)
+def get_exposure_summary_endpoint() -> ExposureSummaryResponse:
+    """
+    Return preliminary flood-exposure summary containing total, assessed, exposed,
+    not-exposed, and not-assessed counts, plus category breakdowns for assets and roads.
+    Includes scientific disclaimer on unverified sample rasters.
+    """
+    return get_exposure_summary()

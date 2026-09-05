@@ -66,21 +66,26 @@ Automated dam-break framework comparing SPH and Delft3D, with inundation, damage
 
 ---
 
-## Phase 5: Hydrodynamic Simulation & Solver Comparison Engine
-
----
-
-## Phase 5: Exposure, Vulnerability & Damage Assessment Engine
-- [ ] Multi-sector asset exposure analysis:
-  * [ ] Intersect maximum flood extent with building footprints, schools, hospitals, and utilities.
-  * [ ] Classify flood hazard levels based on USBR / DEFRA hazard rating ($H = d \times (v + 0.5) + DF$).
-- [ ] Depth-damage curve modeling:
-  * [ ] Integrate structural and contents depth-damage functions for Indian rural and peri-urban buildings.
-  * [ ] Estimate economic losses (direct structural loss, inventory loss, agricultural crop loss).
-- [ ] Critical road network & evacuation accessibility:
-  * [ ] Identify submerged road segments and cut-off bridge crossings dynamically over simulation time steps.
-  * [ ] Compute shortest safe evacuation routes from vulnerable settlements to designated relief centers.
-  * [ ] Detect isolated clusters and estimate critical evacuation time windows before wave arrival.
+## Phase 5–6: Vector Overlays & Preliminary Flood-Exposure Screening [COMPLETED]
+- [x] Implement fixed read-only endpoints:
+  - [x] `GET /api/assets`: Raw OSM infrastructure assets (513 features) with standardized categorization (`building`, `healthcare`, `education`, `emergency`, `settlement`, `transport`, `other`).
+  - [x] `GET /api/roads`: OSMnx GraphML road network (3,084 nodes, 8,047 edges) converted to GeoJSON LineStrings with stored geometry fallback.
+  - [x] `GET /api/exposure/assets`: Preliminary exposure screening per asset with attached attributes (`assessed`, `exposed` where valid depth > 0, `depth_value`, `velocity_value`, `arrival_value`, `sampling_method`).
+  - [x] `GET /api/exposure/roads`: Preliminary exposure screening per road segment.
+  - [x] `GET /api/exposure/summary`: Full exposure summary with total, assessed, exposed, not-exposed, not-assessed counts, and category breakdowns.
+- [x] Implemented geometric screening methods:
+  - Direct point sampling for Points (`point_direct`).
+  - Interior representative point sampling for Polygons (`polygon_representative_point`).
+  - Segment midpoint sampling for LineStrings (`line_midpoint`).
+- [x] In-memory caching for parsed vector data and raster screening results keyed by file modification timestamps.
+- [x] Path safety: all endpoints accept only whitelisted IDs and never accept or expose filesystem paths.
+- [x] Frontend vector visualization in MapLibre:
+  - Independent toggle switches for Infrastructure Assets and Road Network overlays without breaking raster selection.
+  - Distinct styling for exposed (vivid crimson red) vs non-exposed/dry (emerald green / slate).
+  - Interactive click popups displaying feature title, category, exposed/safe badge, raster values marked "unit unverified", and methodology notes.
+  - Dynamic Exposure Summary panel with KPI cards (135/513 assets, 2,060/8,047 road segments exposed) and category breakdown tables.
+  - Prominently labeled with mandatory preliminary exposure screening disclaimer.
+- [x] Passed 29 backend pytest tests (isolated mocks + real Hidkal integration) and verified frontend production build (`npm run build`).
 
 ---
 

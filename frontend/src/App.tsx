@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
-import maplibregl, { Map as MapLibreMap, Marker } from 'maplibre-gl'
+import maplibregl, { Map as MapLibreMap, Marker, Popup } from 'maplibre-gl'
 import 'maplibre-gl/dist/maplibre-gl.css'
 import './App.css'
 
@@ -16,12 +16,10 @@ interface DatasetInfo {
 }
 
 interface ColorRampStop {
-  offset: float
+  offset: number
   color: string
-  value: float
+  value: number
 }
-
-type float = number
 
 interface LegendItem {
   value: number
@@ -56,6 +54,30 @@ interface ProbeData {
   values: Record<LayerId, PointValueResult | null>
 }
 
+interface CategoryCount {
+  total: number
+  assessed: number
+  exposed: number
+  not_exposed: number
+  not_assessed: number
+}
+
+interface ExposureDatasetSummary {
+  total: number
+  assessed: number
+  exposed: number
+  not_exposed: number
+  not_assessed: number
+  by_category: Record<string, CategoryCount>
+}
+
+interface ExposureSummary {
+  disclaimer: string
+  methodology_note: string
+  assets: ExposureDatasetSummary
+  roads: ExposureDatasetSummary
+}
+
 // Hidkal Dam bounding box [minLon, minLat, maxLon, maxLat]
 const HIDKAL_BOUNDS: [number, number, number, number] = [74.60, 16.12, 74.88, 16.32]
 
@@ -70,6 +92,7 @@ function App() {
   const mapContainerRef = useRef<HTMLDivElement>(null)
   const mapRef = useRef<MapLibreMap | null>(null)
   const markerRef = useRef<Marker | null>(null)
+  const popupRef = useRef<Popup | null>(null)
 
   const [backendOnline, setBackendOnline] = useState<boolean | null>(null)
   const [datasets, setDatasets] = useState<DatasetInfo[]>([])
@@ -80,6 +103,13 @@ function App() {
   const [mapLoaded, setMapLoaded] = useState<boolean>(false)
   const [probe, setProbe] = useState<ProbeData | null>(null)
   const [sidebarOpen, setSidebarOpen] = useState<boolean>(true)
+
+  // Vector Layer Toggles & Exposure Summary
+  const [showAssets, setShowAssets] = useState<boolean>(true)
+  const [showRoads, setShowRoads] = useState<boolean>(true)
+  const [exposureSummary, setExposureSummary] = useState<ExposureSummary | null>(null)
+  const [summaryLoading, setSummaryLoading] = useState<boolean>(false)
+  const [activeTab, setActiveTab] = useState<'layers' | 'exposure'>('layers')
 
   const apiBaseUrl = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'
 
@@ -97,6 +127,23 @@ function App() {
       .then((res) => res.json())
       .then((data: DatasetInfo[]) => setDatasets(data))
       .catch(() => {})
+  }, [apiBaseUrl])
+
+  // Fetch Exposure Summary
+  useEffect(() => {
+    setSummaryLoading(true)
+    fetch(`${apiBaseUrl}/api/exposure/summary`)
+      .then((res) => {
+        if (!res.ok) throw new Error(`HTTP ${res.status}`)
+        return res.json() as Promise<ExposureSummary>
+      })
+      .then((data) => {
+        setExposureSummary(data)
+        setSummaryLoading(false)
+      })
+      .catch(() => {
+        setSummaryLoading(false)
+      })
   }, [apiBaseUrl])
 
   // Fetch legend when active layer changes
@@ -198,18 +245,24 @@ function App() {
       bounds: HIDKAL_BOUNDS,
     })
 
-    map.addLayer({
-      id: layerId,
-      type: 'raster',
-      source: sourceId,
-      paint: {
-        'raster-opacity': opacity,
-        'raster-fade-duration': 150,
+    // Add raster layer beneath vector layers if they exist
+    const firstVectorLayer = map.getLayer('roads-line') ? 'roads-line' : undefined
+
+    map.addLayer(
+      {
+        id: layerId,
+        type: 'raster',
+        source: sourceId,
+        paint: {
+          'raster-opacity': opacity,
+          'raster-fade-duration': 150,
+        },
       },
-    })
+      firstVectorLayer
+    )
   }, [apiBaseUrl, selectedLayer, mapLoaded])
 
-  // Update opacity dynamically
+  // Update raster opacity dynamically
   useEffect(() => {
     const map = mapRef.current
     if (!map || !mapLoaded) return
@@ -218,6 +271,255 @@ function App() {
       map.setPaintProperty(layerId, 'raster-opacity', opacity)
     }
   }, [opacity, mapLoaded])
+
+  // Helper for vector click popup creation
+  const handleVectorFeatureClick = useCallback((e: maplibregl.MapMouseEvent & { features?: any[] }) => {
+    if (!e.features || e.features.length === 0 || !mapRef.current) return
+
+    const feat = e.features[0]
+    const props = feat.properties || {}
+    const isExposed = props.exposed === true || props.exposed === 'true'
+    const isAssessed = props.assessed === true || props.assessed === 'true'
+    const depthVal = props.depth_value != null && props.depth_value !== '' ? Number(props.depth_value) : null
+    const velVal = props.velocity_value != null && props.velocity_value !== '' ? Number(props.velocity_value) : null
+    const arrVal = props.arrival_value != null && props.arrival_value !== '' ? Number(props.arrival_value) : null
+
+    const title = props.name || props.ref || props.osmid || (props.category ? `Asset: ${props.category}` : 'Feature')
+    const category = props.category || 'other'
+    const method = props.sampling_method || 'direct'
+
+    if (popupRef.current) {
+      popupRef.current.remove()
+    }
+
+    const badgeLabel = isExposed
+      ? 'Screening-positive (depth > 0)'
+      : isAssessed
+      ? 'Not exposed at sample'
+      : 'Not assessed'
+
+    const badgeClass = isExposed
+      ? 'badge-exposed'
+      : isAssessed
+      ? 'badge-safe'
+      : 'badge-unassessed'
+
+    const depthDisplay = depthVal !== null
+      ? (depthVal > 0 ? `${depthVal.toFixed(2)} (unit unverified)` : '0.00 (unit unverified)')
+      : 'Not assessed'
+
+    const htmlContent = `
+      <div class="vector-popup-card">
+        <div class="vector-popup-header">
+          <span class="vector-popup-icon">${isExposed ? '⚠️' : '🛡️'}</span>
+          <div class="vector-popup-title-box">
+            <h4 class="vector-popup-title">${title}</h4>
+            <span class="vector-popup-badge ${badgeClass}">
+              ${badgeLabel}
+            </span>
+          </div>
+        </div>
+        <div class="vector-popup-body">
+          <div class="popup-row"><span class="popup-label">Category:</span> <strong class="popup-val">${category.toUpperCase()}</strong></div>
+          <div class="popup-row"><span class="popup-label">Flood Depth:</span> <strong class="popup-val ${isExposed ? 'text-danger' : ''}">${depthDisplay}</strong></div>
+          <div class="popup-row"><span class="popup-label">Velocity:</span> <strong class="popup-val">${velVal !== null ? `${velVal.toFixed(2)} (unit unverified)` : 'N/A'}</strong></div>
+          <div class="popup-row"><span class="popup-label">Arrival Time:</span> <strong class="popup-val">${arrVal !== null ? `${arrVal.toFixed(2)} (unit unverified)` : 'N/A (unit unverified)'}</strong></div>
+          <div class="popup-row"><span class="popup-label">Sampling Method:</span> <span class="popup-method">${method}</span></div>
+        </div>
+        <div class="vector-popup-footer">
+          <span>ℹ️ Preliminary exposure screening based on unverified sample rasters. Not a validated risk or damage assessment.</span>
+        </div>
+      </div>
+    `
+
+    popupRef.current = new maplibregl.Popup({ closeButton: true, closeOnClick: true, maxWidth: '320px' })
+      .setLngLat(e.lngLat)
+      .setHTML(htmlContent)
+      .addTo(mapRef.current)
+  }, [])
+
+  // Manage Vector Road Network Layer
+  useEffect(() => {
+    const map = mapRef.current
+    if (!map || !mapLoaded) return
+
+    const sourceId = 'exposure-roads-source'
+    const layerId = 'roads-line'
+
+    if (!showRoads) {
+      if (map.getLayer(layerId)) map.removeLayer(layerId)
+      if (map.getSource(sourceId)) map.removeSource(sourceId)
+      return
+    }
+
+    if (!map.getSource(sourceId)) {
+      map.addSource(sourceId, {
+        type: 'geojson',
+        data: `${apiBaseUrl}/api/exposure/roads`,
+      })
+    }
+
+    if (!map.getLayer(layerId)) {
+      map.addLayer({
+        id: layerId,
+        type: 'line',
+        source: sourceId,
+        paint: {
+          'line-color': [
+            'case',
+            ['==', ['get', 'exposed'], true],
+            '#e11d48', // Exposed = Crimson
+            '#64748b', // Not exposed = Slate
+          ],
+          'line-width': [
+            'case',
+            ['==', ['get', 'exposed'], true],
+            3.2,
+            1.6,
+          ],
+          'line-opacity': 0.88,
+        },
+      })
+
+      map.on('click', layerId, handleVectorFeatureClick)
+      map.on('mouseenter', layerId, () => {
+        map.getCanvas().style.cursor = 'pointer'
+      })
+      map.on('mouseleave', layerId, () => {
+        map.getCanvas().style.cursor = ''
+      })
+    }
+  }, [apiBaseUrl, showRoads, mapLoaded, handleVectorFeatureClick])
+
+  // Manage Vector Assets Layer (Polygons, Lines, Points)
+  useEffect(() => {
+    const map = mapRef.current
+    if (!map || !mapLoaded) return
+
+    const sourceId = 'exposure-assets-source'
+    const fillLayerId = 'assets-polygons-fill'
+    const lineLayerId = 'assets-polygons-line'
+    const linesLayerId = 'assets-lines'
+    const pointLayerId = 'assets-points'
+
+    const layerIds = [fillLayerId, lineLayerId, linesLayerId, pointLayerId]
+
+    if (!showAssets) {
+      layerIds.forEach((id) => {
+        if (map.getLayer(id)) map.removeLayer(id)
+      })
+      if (map.getSource(sourceId)) map.removeSource(sourceId)
+      return
+    }
+
+    if (!map.getSource(sourceId)) {
+      map.addSource(sourceId, {
+        type: 'geojson',
+        data: `${apiBaseUrl}/api/exposure/assets`,
+      })
+    }
+
+    // 1. Asset Polygons (Buildings/Facilities)
+    if (!map.getLayer(fillLayerId)) {
+      map.addLayer({
+        id: fillLayerId,
+        type: 'fill',
+        source: sourceId,
+        filter: ['in', ['geometry-type'], ['literal', ['Polygon', 'MultiPolygon']]],
+        paint: {
+          'fill-color': [
+            'case',
+            ['==', ['get', 'exposed'], true],
+            '#ef4444', // Screening-positive = Red
+            '#10b981', // Not exposed at sample = Emerald
+          ],
+          'fill-opacity': [
+            'case',
+            ['==', ['get', 'exposed'], true],
+            0.65,
+            0.35,
+          ],
+        },
+      })
+
+      map.addLayer({
+        id: lineLayerId,
+        type: 'line',
+        source: sourceId,
+        filter: ['in', ['geometry-type'], ['literal', ['Polygon', 'MultiPolygon']]],
+        paint: {
+          'line-color': [
+            'case',
+            ['==', ['get', 'exposed'], true],
+            '#b91c1c',
+            '#047857',
+          ],
+          'line-width': 1.5,
+        },
+      })
+    }
+
+    // 2. Asset Lines (Bridges / Rails / Transport links)
+    if (!map.getLayer(linesLayerId)) {
+      map.addLayer({
+        id: linesLayerId,
+        type: 'line',
+        source: sourceId,
+        filter: ['in', ['geometry-type'], ['literal', ['LineString', 'MultiLineString']]],
+        paint: {
+          'line-color': [
+            'case',
+            ['==', ['get', 'exposed'], true],
+            '#dc2626',
+            '#0284c7',
+          ],
+          'line-width': [
+            'case',
+            ['==', ['get', 'exposed'], true],
+            3.5,
+            2.0,
+          ],
+        },
+      })
+    }
+
+    // 3. Asset Points (Settlements / Amenities / Hospitals / Schools)
+    if (!map.getLayer(pointLayerId)) {
+      map.addLayer({
+        id: pointLayerId,
+        type: 'circle',
+        source: sourceId,
+        filter: ['==', ['geometry-type'], 'Point'],
+        paint: {
+          'circle-color': [
+            'case',
+            ['==', ['get', 'exposed'], true],
+            '#ef4444',
+            '#10b981',
+          ],
+          'circle-radius': [
+            'case',
+            ['==', ['get', 'exposed'], true],
+            7.0,
+            5.0,
+          ],
+          'circle-stroke-width': 2,
+          'circle-stroke-color': '#ffffff',
+        },
+      })
+    }
+
+    // Attach click and hover handlers
+    layerIds.forEach((id) => {
+      map.on('click', id, handleVectorFeatureClick)
+      map.on('mouseenter', id, () => {
+        map.getCanvas().style.cursor = 'pointer'
+      })
+      map.on('mouseleave', id, () => {
+        map.getCanvas().style.cursor = ''
+      })
+    })
+  }, [apiBaseUrl, showAssets, mapLoaded, handleVectorFeatureClick])
 
   // Fit map to Hidkal bounds
   const fitToHidkal = useCallback(() => {
@@ -231,12 +533,21 @@ function App() {
     )
   }, [])
 
-  // Handle Map Click - Point Inspection Probe
+  // Handle Map Click - Point Inspection Probe (when clicking non-feature canvas)
   useEffect(() => {
     const map = mapRef.current
     if (!map) return
 
     const handleMapClick = (e: maplibregl.MapMouseEvent) => {
+      // If a vector feature was clicked, don't overwrite with blank probe
+      const vectorFeatures = map.queryRenderedFeatures(e.point, {
+        layers: ['assets-polygons-fill', 'assets-lines', 'assets-points', 'roads-line'].filter((id) => map.getLayer(id)),
+      })
+
+      if (vectorFeatures.length > 0) {
+        return
+      }
+
       const { lng, lat } = e.lngLat
       const queryLon = Number(lng.toFixed(6))
       const queryLat = Number(lat.toFixed(6))
@@ -347,200 +658,382 @@ function App() {
         {/* Floating Sidebar / Control HUD */}
         {sidebarOpen && (
           <aside className="hud-panel">
-            {/* Layer Selector */}
-            <div className="hud-card">
-              <div className="hud-card-header">
-                <h3>Hydrodynamic Raster Layers</h3>
-                <button className="btn-fit" onClick={fitToHidkal} title="Fit map to Hidkal bounds">
-                  🎯 Fit Hidkal
-                </button>
-              </div>
+            {/* Panel Tab Navigation */}
+            <div className="hud-tabs">
+              <button
+                className={`hud-tab-btn ${activeTab === 'layers' ? 'active' : ''}`}
+                onClick={() => setActiveTab('layers')}
+              >
+                🗺️ Layers & Probes
+              </button>
+              <button
+                className={`hud-tab-btn ${activeTab === 'exposure' ? 'active' : ''}`}
+                onClick={() => setActiveTab('exposure')}
+              >
+                📊 Exposure Summary
+              </button>
+            </div>
 
-              <div className="layer-options">
-                {(['dem', 'depth', 'velocity', 'arrival'] as LayerId[]).map((layerId) => {
-                  const meta = LAYER_LABELS[layerId]
-                  const isSelected = selectedLayer === layerId
-                  const ds = datasets.find((d) => d.id === layerId)
-                  const isAvailable = ds?.available ?? ds?.availability ?? true
-
-                  return (
-                    <button
-                      key={layerId}
-                      className={`layer-option-btn ${isSelected ? 'active' : ''}`}
-                      onClick={() => setSelectedLayer(layerId)}
-                    >
-                      <span className="layer-btn-icon">{meta.icon}</span>
-                      <div className="layer-btn-text">
-                        <span className="layer-btn-title">{meta.title}</span>
-                        <span className="layer-btn-sub">{meta.subtitle}</span>
-                      </div>
-                      <div className="layer-badges">
-                        {!isAvailable && <span className="layer-unavailable-badge">Offline</span>}
-                        {isSelected && <span className="layer-active-badge">Active</span>}
-                      </div>
+            {activeTab === 'layers' ? (
+              <>
+                {/* Vector Overlays Toggle Card */}
+                <div className="hud-card vector-controls-card">
+                  <div className="hud-card-header">
+                    <h3>Vector Overlays & Exposure</h3>
+                    <button className="btn-fit" onClick={fitToHidkal} title="Fit map to Hidkal bounds">
+                      🎯 Fit Hidkal
                     </button>
-                  )
-                })}
-              </div>
-
-              {/* Opacity Control */}
-              <div className="opacity-control">
-                <div className="opacity-header">
-                  <label htmlFor="opacity-slider">Layer Opacity</label>
-                  <span className="opacity-val">{Math.round(opacity * 100)}%</span>
-                </div>
-                <input
-                  id="opacity-slider"
-                  type="range"
-                  min="0"
-                  max="1"
-                  step="0.05"
-                  value={opacity}
-                  onChange={(e) => setOpacity(parseFloat(e.target.value))}
-                  className="opacity-slider"
-                />
-              </div>
-            </div>
-
-            {/* Dynamic Legend Card */}
-            <div className="hud-card legend-card">
-              <div className="hud-card-header">
-                <h3>Legend & Classification</h3>
-                <span className="legend-tag">{selectedLayer.toUpperCase()}</span>
-              </div>
-
-              {legendLoading ? (
-                <div className="legend-loading">Loading color ramp...</div>
-              ) : legend ? (
-                <div className="legend-content">
-                  <p className="legend-layer-title">{legend.label}</p>
-                  <div className="legend-meta-note">
-                    <span className="meta-key">Status:</span> {legend.unit_status}
                   </div>
 
-                  {/* Gradient Bar */}
-                  <div
-                    className="legend-gradient-bar"
-                    style={{
-                      background: `linear-gradient(to right, ${legend.color_ramp
-                        .map((stop) => `${stop.color} ${stop.offset * 100}%`)
-                        .join(', ')})`,
-                    }}
-                  />
-
-                  {/* Discrete Class Items */}
-                  <div className="legend-stops-list">
-                    {legend.items.map((item, idx) => (
-                      <div key={idx} className="legend-stop-item">
-                        <span className="stop-color-chip" style={{ backgroundColor: item.color }} />
-                        <span className="stop-label">{item.label}</span>
+                  <div className="vector-toggles">
+                    <label className="toggle-checkbox-row">
+                      <input
+                        type="checkbox"
+                        checked={showAssets}
+                        onChange={(e) => setShowAssets(e.target.checked)}
+                      />
+                      <div className="toggle-label-content">
+                        <span className="toggle-title">🏛️ Infrastructure Assets (513)</span>
+                        <span className="toggle-desc">Buildings, Healthcare, Settlements, Bridges</span>
                       </div>
-                    ))}
+                    </label>
+
+                    <label className="toggle-checkbox-row">
+                      <input
+                        type="checkbox"
+                        checked={showRoads}
+                        onChange={(e) => setShowRoads(e.target.checked)}
+                      />
+                      <div className="toggle-label-content">
+                        <span className="toggle-title">🛣️ Road Network Graph (8,047)</span>
+                        <span className="toggle-desc">Primary, Secondary, Tertiary & Residential roads</span>
+                      </div>
+                    </label>
                   </div>
 
-                  {/* Transparency note */}
-                  <div className="transparency-note">
-                    {selectedLayer === 'depth' && 'ℹ️ Dry cells (depth = 0, unit unverified) are rendered transparent.'}
-                    {selectedLayer === 'velocity' && 'ℹ️ Zero velocity cells (0, unit unverified) are rendered transparent.'}
-                    {selectedLayer === 'arrival' && 'ℹ️ Unflooded cells (+9999 / -9999, unit unverified) are rendered transparent.'}
-                    {selectedLayer === 'dem' && 'ℹ️ NoData / outside cells are rendered transparent.'}
-                  </div>
-                </div>
-              ) : (
-                <div className="legend-error">Legend data currently unavailable.</div>
-              )}
-            </div>
-
-            {/* Point Inspection Probe Card */}
-            <div className="hud-card probe-card">
-              <div className="hud-card-header">
-                <h3>Point Query Probe</h3>
-                <span className="probe-hint">Click map to inspect</span>
-              </div>
-
-              {probe ? (
-                <div className="probe-content">
-                  <div className="probe-coords">
-                    <span>Lon: {probe.lon.toFixed(5)}°E</span>
-                    <span>Lat: {probe.lat.toFixed(5)}°N</span>
-                  </div>
-
-                  {probe.loading ? (
-                    <div className="probe-loading">
-                      <span className="spinner"></span> Querying all 4 rasters...
+                  {/* Vector Styling Key */}
+                  <div className="vector-style-key">
+                    <div className="style-key-item">
+                      <span className="style-chip chip-exposed" />
+                      <span>Screening-positive (depth &gt; 0)</span>
                     </div>
-                  ) : probe.error ? (
-                    <div className="probe-error-msg">{probe.error}</div>
+                    <div className="style-key-item">
+                      <span className="style-chip chip-safe" />
+                      <span>Not exposed at sample</span>
+                    </div>
+                    <div className="style-key-item">
+                      <span className="style-chip chip-unassessed" />
+                      <span>Not assessed</span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Layer Selector Card */}
+                <div className="hud-card">
+                  <div className="hud-card-header">
+                    <h3>Hydrodynamic Raster Layers</h3>
+                    <span className="legend-tag">{selectedLayer.toUpperCase()}</span>
+                  </div>
+
+                  <div className="layer-options">
+                    {(['dem', 'depth', 'velocity', 'arrival'] as LayerId[]).map((layerId) => {
+                      const meta = LAYER_LABELS[layerId]
+                      const isSelected = selectedLayer === layerId
+                      const ds = datasets.find((d) => d.id === layerId)
+                      const isAvailable = ds?.available ?? ds?.availability ?? true
+
+                      return (
+                        <button
+                          key={layerId}
+                          className={`layer-option-btn ${isSelected ? 'active' : ''}`}
+                          onClick={() => setSelectedLayer(layerId)}
+                        >
+                          <span className="layer-btn-icon">{meta.icon}</span>
+                          <div className="layer-btn-text">
+                            <span className="layer-btn-title">{meta.title}</span>
+                            <span className="layer-btn-sub">{meta.subtitle}</span>
+                          </div>
+                          <div className="layer-badges">
+                            {!isAvailable && <span className="layer-unavailable-badge">Offline</span>}
+                            {isSelected && <span className="layer-active-badge">Active</span>}
+                          </div>
+                        </button>
+                      )
+                    })}
+                  </div>
+
+                  {/* Opacity Control */}
+                  <div className="opacity-control">
+                    <div className="opacity-header">
+                      <label htmlFor="opacity-slider">Raster Opacity</label>
+                      <span className="opacity-val">{Math.round(opacity * 100)}%</span>
+                    </div>
+                    <input
+                      id="opacity-slider"
+                      type="range"
+                      min="0"
+                      max="1"
+                      step="0.05"
+                      value={opacity}
+                      onChange={(e) => setOpacity(parseFloat(e.target.value))}
+                      className="opacity-slider"
+                    />
+                  </div>
+                </div>
+
+                {/* Dynamic Legend Card */}
+                <div className="hud-card legend-card">
+                  <div className="hud-card-header">
+                    <h3>Legend & Classification</h3>
+                  </div>
+
+                  {legendLoading ? (
+                    <div className="legend-loading">Loading color ramp...</div>
+                  ) : legend ? (
+                    <div className="legend-content">
+                      <p className="legend-layer-title">{legend.label}</p>
+                      <div className="legend-meta-note">
+                        <span className="meta-key">Status:</span> {legend.unit_status}
+                      </div>
+
+                      {/* Gradient Bar */}
+                      <div
+                        className="legend-gradient-bar"
+                        style={{
+                          background: `linear-gradient(to right, ${legend.color_ramp
+                            .map((stop) => `${stop.color} ${stop.offset * 100}%`)
+                            .join(', ')})`,
+                        }}
+                      />
+
+                      {/* Discrete Class Items */}
+                      <div className="legend-stops-list">
+                        {legend.items.map((item, idx) => (
+                          <div key={idx} className="legend-stop-item">
+                            <span className="stop-color-chip" style={{ backgroundColor: item.color }} />
+                            <span className="stop-label">{item.label}</span>
+                          </div>
+                        ))}
+                      </div>
+
+                      {/* Transparency note */}
+                      <div className="transparency-note">
+                        {selectedLayer === 'depth' && 'ℹ️ Dry cells (depth = 0, unit unverified) are rendered transparent.'}
+                        {selectedLayer === 'velocity' && 'ℹ️ Zero velocity cells (0, unit unverified) are rendered transparent.'}
+                        {selectedLayer === 'arrival' && 'ℹ️ Unflooded cells (+9999 / -9999, unit unverified) are rendered transparent.'}
+                        {selectedLayer === 'dem' && 'ℹ️ NoData / outside cells are rendered transparent.'}
+                      </div>
+                    </div>
                   ) : (
-                    <div className="probe-grid">
-                      <div className="probe-item">
-                        <div className="probe-item-header">
-                          <span className="probe-item-icon">⛰️</span>
-                          <span className="probe-item-label">DEM Elevation</span>
-                        </div>
-                        <div className="probe-item-val">
-                          {probe.values.dem?.value != null
-                            ? `${probe.values.dem.value.toFixed(2)} (unit unverified)`
-                            : probe.values.dem?.is_nodata
-                            ? 'NoData'
-                            : 'N/A'}
-                        </div>
+                    <div className="legend-error">Legend data currently unavailable.</div>
+                  )}
+                </div>
+
+                {/* Point Inspection Probe Card */}
+                <div className="hud-card probe-card">
+                  <div className="hud-card-header">
+                    <h3>Point Query Probe</h3>
+                    <span className="probe-hint">Click map to inspect</span>
+                  </div>
+
+                  {probe ? (
+                    <div className="probe-content">
+                      <div className="probe-coords">
+                        <span>Lon: {probe.lon.toFixed(5)}°E</span>
+                        <span>Lat: {probe.lat.toFixed(5)}°N</span>
                       </div>
 
-                      <div className="probe-item">
-                        <div className="probe-item-header">
-                          <span className="probe-item-icon">🌊</span>
-                          <span className="probe-item-label">Flood Depth</span>
+                      {probe.loading ? (
+                        <div className="probe-loading">
+                          <span className="spinner"></span> Querying all 4 rasters...
                         </div>
-                        <div className="probe-item-val highlight-depth">
-                          {probe.values.depth?.value != null
-                            ? probe.values.depth.value > 0
-                              ? `${probe.values.depth.value.toFixed(2)} (unit unverified)`
-                              : '0.00 (Dry, unit unverified)'
-                            : probe.values.depth?.is_nodata
-                            ? 'NoData / Dry'
-                            : 'N/A'}
-                        </div>
-                      </div>
+                      ) : probe.error ? (
+                        <div className="probe-error-msg">{probe.error}</div>
+                      ) : (
+                        <div className="probe-grid">
+                          <div className="probe-item">
+                            <div className="probe-item-header">
+                              <span className="probe-item-icon">⛰️</span>
+                              <span className="probe-item-label">DEM Elevation</span>
+                            </div>
+                            <div className="probe-item-val">
+                              {probe.values.dem?.value != null
+                                ? `${probe.values.dem.value.toFixed(2)} (unit unverified)`
+                                : probe.values.dem?.is_nodata
+                                ? 'NoData'
+                                : 'N/A'}
+                            </div>
+                          </div>
 
-                      <div className="probe-item">
-                        <div className="probe-item-header">
-                          <span className="probe-item-icon">⚡</span>
-                          <span className="probe-item-label">Velocity</span>
-                        </div>
-                        <div className="probe-item-val highlight-velocity">
-                          {probe.values.velocity?.value != null
-                            ? probe.values.velocity.value > 0
-                              ? `${probe.values.velocity.value.toFixed(2)} (unit unverified)`
-                              : '0.00 (unit unverified)'
-                            : probe.values.velocity?.is_nodata
-                            ? 'NoData'
-                            : 'N/A'}
-                        </div>
-                      </div>
+                          <div className="probe-item">
+                            <div className="probe-item-header">
+                              <span className="probe-item-icon">🌊</span>
+                              <span className="probe-item-label">Flood Depth</span>
+                            </div>
+                            <div className="probe-item-val highlight-depth">
+                              {probe.values.depth?.value != null
+                                ? probe.values.depth.value > 0
+                                  ? `${probe.values.depth.value.toFixed(2)} (unit unverified)`
+                                  : '0.00 (unit unverified)'
+                                : probe.values.depth?.is_nodata
+                                ? 'NoData'
+                                : 'N/A'}
+                            </div>
+                          </div>
 
-                      <div className="probe-item">
-                        <div className="probe-item-header">
-                          <span className="probe-item-icon">⏱️</span>
-                          <span className="probe-item-label">Arrival Time</span>
+                          <div className="probe-item">
+                            <div className="probe-item-header">
+                              <span className="probe-item-icon">⚡</span>
+                              <span className="probe-item-label">Velocity</span>
+                            </div>
+                            <div className="probe-item-val highlight-velocity">
+                              {probe.values.velocity?.value != null
+                                ? probe.values.velocity.value > 0
+                                  ? `${probe.values.velocity.value.toFixed(2)} (unit unverified)`
+                                  : '0.00 (unit unverified)'
+                                : probe.values.velocity?.is_nodata
+                                ? 'NoData'
+                                : 'N/A'}
+                            </div>
+                          </div>
+
+                          <div className="probe-item">
+                            <div className="probe-item-header">
+                              <span className="probe-item-icon">⏱️</span>
+                              <span className="probe-item-label">Arrival Time</span>
+                            </div>
+                            <div className="probe-item-val highlight-arrival">
+                              {probe.values.arrival?.value != null
+                                ? `${probe.values.arrival.value.toFixed(2)} (unit unverified)`
+                                : probe.values.arrival?.is_nodata
+                                ? 'Unflooded'
+                                : 'N/A'}
+                            </div>
+                          </div>
                         </div>
-                        <div className="probe-item-val highlight-arrival">
-                          {probe.values.arrival?.value != null
-                            ? `${probe.values.arrival.value.toFixed(2)} (unit unverified)`
-                            : probe.values.arrival?.is_nodata
-                            ? 'Unflooded'
-                            : 'N/A'}
-                        </div>
-                      </div>
+                      )}
+                    </div>
+                  ) : (
+                    <div className="probe-placeholder">
+                      <p>📍 Click anywhere on the map to probe raster values, or click on an asset/road for exposure screening details.</p>
                     </div>
                   )}
                 </div>
-              ) : (
-                <div className="probe-placeholder">
-                  <p>📍 Click anywhere inside the Hidkal boundary to probe elevation, depth, velocity, and arrival values.</p>
+              </>
+            ) : (
+              /* Exposure Summary Card */
+              <div className="hud-card exposure-summary-card">
+                <div className="hud-card-header">
+                  <h3>Preliminary Exposure Screening Summary</h3>
+                  <button className="btn-fit" onClick={fitToHidkal}>🎯 Fit Hidkal</button>
                 </div>
-              )}
-            </div>
+
+                {summaryLoading ? (
+                  <div className="probe-loading">
+                    <span className="spinner"></span> Loading exposure screening summary...
+                  </div>
+                ) : exposureSummary ? (
+                  <div className="exposure-summary-body">
+                    {/* Preliminary Disclaimer Note */}
+                    <div className="preliminary-disclaimer-box">
+                      <span className="disclaimer-icon">⚠️</span>
+                      <p className="disclaimer-text">
+                        <strong>Preliminary exposure screening based on unverified sample rasters.</strong> Not a validated hydrodynamic risk assessment, damage calculation, or safety conclusion.
+                      </p>
+                    </div>
+
+                    {/* KPI Stat Cards */}
+                    <div className="kpi-grid">
+                      <div className="kpi-card">
+                        <span className="kpi-title">Screening-positive Assets</span>
+                        <div className="kpi-value-row">
+                          <span className="kpi-num text-danger">{exposureSummary.assets.exposed}</span>
+                          <span className="kpi-total">/ {exposureSummary.assets.total}</span>
+                        </div>
+                        <span className="kpi-sub">
+                          {((exposureSummary.assets.exposed / (exposureSummary.assets.total || 1)) * 100).toFixed(1)}% screened positive
+                        </span>
+                      </div>
+
+                      <div className="kpi-card">
+                        <span className="kpi-title">Screening-positive Road Segments</span>
+                        <div className="kpi-value-row">
+                          <span className="kpi-num text-danger">{exposureSummary.roads.exposed.toLocaleString()}</span>
+                          <span className="kpi-total">/ {exposureSummary.roads.total.toLocaleString()}</span>
+                        </div>
+                        <span className="kpi-sub">
+                          {((exposureSummary.roads.exposed / (exposureSummary.roads.total || 1)) * 100).toFixed(1)}% screened positive
+                        </span>
+                      </div>
+                    </div>
+
+                    {/* Asset Breakdown Table */}
+                    <div className="breakdown-section">
+                      <h4 className="breakdown-title">Asset Category Breakdown</h4>
+                      <table className="breakdown-table">
+                        <thead>
+                          <tr>
+                            <th>Category</th>
+                            <th className="text-right">Total</th>
+                            <th className="text-right">Screening-positive</th>
+                            <th className="text-right">Not exposed at sample</th>
+                            <th className="text-right">Not assessed</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {Object.entries(exposureSummary.assets.by_category).map(([cat, c]) => (
+                            <tr key={cat}>
+                              <td className="cat-name-cell">
+                                <span className="cat-dot" />
+                                <span>{cat.charAt(0).toUpperCase() + cat.slice(1)}</span>
+                              </td>
+                              <td className="text-right font-mono">{c.total}</td>
+                              <td className={`text-right font-mono ${c.exposed > 0 ? 'text-danger font-bold' : ''}`}>{c.exposed}</td>
+                              <td className="text-right font-mono text-muted">{c.not_exposed}</td>
+                              <td className="text-right font-mono text-muted">{c.not_assessed}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+
+                    {/* Road Network Breakdown Table */}
+                    <div className="breakdown-section">
+                      <h4 className="breakdown-title">Road Network Breakdown</h4>
+                      <table className="breakdown-table">
+                        <thead>
+                          <tr>
+                            <th>Highway Type</th>
+                            <th className="text-right">Segments</th>
+                            <th className="text-right">Screening-positive</th>
+                            <th className="text-right">Not exposed at sample</th>
+                            <th className="text-right">Not assessed</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {Object.entries(exposureSummary.roads.by_category)
+                            .sort((a, b) => b[1].total - a[1].total)
+                            .map(([cat, c]) => (
+                              <tr key={cat}>
+                                <td className="cat-name-cell">
+                                  <span className="cat-dot dot-road" />
+                                  <span>{cat.charAt(0).toUpperCase() + cat.slice(1)}</span>
+                                </td>
+                                <td className="text-right font-mono">{c.total.toLocaleString()}</td>
+                                <td className={`text-right font-mono ${c.exposed > 0 ? 'text-danger font-bold' : ''}`}>{c.exposed.toLocaleString()}</td>
+                                <td className="text-right font-mono text-muted">{c.not_exposed.toLocaleString()}</td>
+                                <td className="text-right font-mono text-muted">{c.not_assessed.toLocaleString()}</td>
+                              </tr>
+                            ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="legend-error">Exposure summary unavailable.</div>
+                )}
+              </div>
+            )}
           </aside>
         )}
       </main>
@@ -549,4 +1042,3 @@ function App() {
 }
 
 export default App
-
