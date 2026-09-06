@@ -1,7 +1,7 @@
 import os
 import logging
 from typing import Dict, Any, List, Optional
-from fastapi import FastAPI, Query, Response, HTTPException, Request
+from fastapi import FastAPI, Query, Response, HTTPException, Request, UploadFile, File, Form
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.gzip import GZipMiddleware
@@ -42,6 +42,7 @@ from app.schemas import (
     HazardSourcesResponse,
     ANUGARunSummary,
     ANUGARunDetailResponse,
+    DamProjectValidationResponse,
 )
 
 from app.raster_service import (
@@ -110,6 +111,7 @@ from app.gee_service import (
     get_dataset_info,
     create_export_plan,
 )
+from app.onboarding_service import validate_dam_project_dataset
 
 logger = logging.getLogger("app.main")
 
@@ -673,6 +675,55 @@ def post_gee_export_plan(request: GEEExportPlanRequest) -> GEEExportPlanResponse
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
+
+# ==========================================
+# Dam Project Onboarding & Dataset Validation (SIH PS 26161)
+# ==========================================
+
+@app.post("/api/dam-projects/validate", response_model=DamProjectValidationResponse)
+async def post_validate_dam_project(
+    dem_file: UploadFile = File(..., description="DEM GeoTIFF file (.tif or .tiff)"),
+    dam_axis_file: UploadFile = File(..., description="Dam axis alignment GeoJSON file (.geojson or .json)"),
+    reservoir_boundary_file: Optional[UploadFile] = File(default=None, description="Optional reservoir pool boundary GeoJSON (.geojson or .json)"),
+    project_name: str = Form(default="New Dam Project"),
+    vertical_unit: Optional[str] = Form(default=None, description="User-verified vertical elevation unit (e.g. meters)"),
+    vertical_datum: Optional[str] = Form(default=None, description="User-verified vertical datum (e.g. MSL, EGM96)"),
+    reservoir_level: Optional[float] = Form(default=None, description="Assumed reservoir level / FRL in elevation units"),
+    breach_width: Optional[float] = Form(default=None, description="Hypothetical breach width in meters"),
+    breach_center_x: Optional[float] = Form(default=None, description="Breach center longitude or X coordinate in geometry_crs"),
+    breach_center_y: Optional[float] = Form(default=None, description="Breach center latitude or Y coordinate in geometry_crs"),
+    breach_formation_time_hr: Optional[float] = Form(default=1.0, description="Breach formation time in hours"),
+    manning_roughness: Optional[float] = Form(default=0.035, description="Channel Manning's roughness coefficient"),
+    geometry_crs: Optional[str] = Form(default="EPSG:4326", description="Coordinate Reference System of input GeoJSON geometries and breach coordinates"),
+) -> DamProjectValidationResponse:
+    """
+    Validate user-uploaded generalized dam/river dataset without running simulation.
+    Performs spatial extent checking, CRS verification, geometry validation,
+    and parameter safety checks using temporary in-memory storage.
+    Breach center coordinates (breach_center_x, breach_center_y) are interpreted in geometry_crs.
+    """
+    dem_bytes = await dem_file.read()
+    dam_axis_bytes = await dam_axis_file.read()
+    res_bytes = await reservoir_boundary_file.read() if reservoir_boundary_file else None
+
+    return validate_dam_project_dataset(
+        dem_bytes=dem_bytes,
+        dem_filename=dem_file.filename or "dem.tif",
+        dam_axis_bytes=dam_axis_bytes,
+        dam_axis_filename=dam_axis_file.filename or "dam_axis.geojson",
+        reservoir_bytes=res_bytes,
+        reservoir_filename=reservoir_boundary_file.filename if reservoir_boundary_file else None,
+        project_name=project_name,
+        vertical_unit=vertical_unit,
+        vertical_datum=vertical_datum,
+        reservoir_level=reservoir_level,
+        breach_width=breach_width,
+        breach_center_x=breach_center_x,
+        breach_center_y=breach_center_y,
+        breach_formation_time_hr=breach_formation_time_hr,
+        manning_roughness=manning_roughness,
+        geometry_crs=geometry_crs or "EPSG:4326",
+    )
 
 
 

@@ -587,3 +587,66 @@ class ANUGARunDetailResponse(BaseModel):
     layers: Dict[str, Dict[str, Any]]
     manifest: Dict[str, Any]
 
+
+# ==============================================================================
+# Dam Project Onboarding & Validation Schemas (SIH PS 26161)
+# ==============================================================================
+
+class RasterDerivedMetadata(BaseModel):
+    width: int
+    height: int
+    band_count: int
+    dtype: str
+    crs: str
+    bounds: RasterBounds
+    resolution: RasterResolution
+    nodata: Optional[float] = None
+    min_elevation: Optional[float] = None
+    max_elevation: Optional[float] = None
+    vertical_unit_in_header: str = "unknown"
+    vertical_datum_in_header: str = "unknown"
+
+
+class UserProvidedMetadata(BaseModel):
+    project_name: str
+    vertical_unit: Optional[str] = None
+    vertical_datum: Optional[str] = None
+    reservoir_level: Optional[float] = None
+    breach_width: Optional[float] = None
+    breach_center: Optional[Tuple[float, float]] = None
+    breach_formation_time_hr: Optional[float] = None
+    manning_roughness: Optional[float] = None
+    geometry_crs: str = "EPSG:4326"
+
+
+class GeometryValidationMetadata(BaseModel):
+    layer_name: str
+    feature_count: int
+    geometry_types: List[str]
+    is_valid: bool
+    intersects_dem_bounds: bool
+    fully_within_dem_bounds: bool
+    centroid_coords: Optional[Tuple[float, float]] = None
+
+
+class NormalizedProjectMetadata(BaseModel):
+    project_name: str
+    raster_metadata: Optional[RasterDerivedMetadata] = None
+    user_provided_metadata: Optional[UserProvidedMetadata] = None
+    dam_axis_metadata: Optional[GeometryValidationMetadata] = None
+    reservoir_metadata: Optional[GeometryValidationMetadata] = None
+    breach_on_dam_axis: bool = False
+    breach_distance_to_axis_m: Optional[float] = None
+    distance_calculation_crs: Optional[str] = None
+
+
+class DamProjectValidationResponse(BaseModel):
+    valid: bool
+    project_name: str
+    errors: List[str]
+    warnings: List[str]
+    normalized_metadata: Optional[NormalizedProjectMetadata] = None
+    assumptions_requiring_confirmation: List[str]
+    metadata_declared: bool
+    onboarding_validation_passed: bool
+    scientifically_verified: bool = False
