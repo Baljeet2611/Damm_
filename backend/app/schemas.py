@@ -89,10 +89,18 @@ class ExposureDatasetSummary(BaseModel):
 
 
 class ExposureSummaryResponse(BaseModel):
+    hazard_source: str = "sample_hidkal"
+    run_id: Optional[str] = None
+    screening_threshold: float = 0.0
+    unit_status: Optional[str] = "unverified"
     disclaimer: str = "Preliminary exposure screening based on unverified sample rasters. Not a validated hydrodynamic risk assessment or damage analysis."
     methodology_note: str = "Direct coordinate sampling for points; representative-point/midpoint geometric screening for polygons and lines."
     assets: ExposureDatasetSummary
     roads: ExposureDatasetSummary
+    initially_wet_reservoir_assets: Optional[int] = None
+    initially_wet_reservoir_roads: Optional[int] = None
+    newly_inundated_assets: Optional[int] = None
+    newly_inundated_roads: Optional[int] = None
 
 
 # Phase 7: Illustrative Damage Scenario Schemas
@@ -113,6 +121,8 @@ class DamageConfigResponse(BaseModel):
 
 
 class DamageScenarioRequest(BaseModel):
+    hazard_source: Optional[str] = Field(default="sample_hidkal", description="Hazard source: sample_hidkal or anuga_hidkal_pilot")
+    screening_threshold: Optional[float] = Field(default=0.0, ge=0.0, description="Minimum depth threshold for exposure screening")
     assumed_depth_unit: Optional[str] = "assumed meters (unverified)"
     currency_label: Optional[str] = "INR (₹)"
     replacement_values: Dict[str, float]
@@ -147,6 +157,9 @@ class CategoryDamageResult(BaseModel):
 
 
 class DamageScenarioResponse(BaseModel):
+    hazard_source: str = "sample_hidkal"
+    run_id: Optional[str] = None
+    screening_threshold: float = 0.0
     disclaimer: str
     methodology: str
     currency_label: str
@@ -161,11 +174,13 @@ class DamageScenarioResponse(BaseModel):
 # Phase 8: Route Screening Schemas
 
 class RouteScreeningRequest(BaseModel):
+    hazard_source: Optional[str] = Field(default="sample_hidkal", description="Hazard source: sample_hidkal or anuga_hidkal_pilot")
+    screening_threshold: Optional[float] = Field(default=0.0, ge=0.0, description="Minimum depth threshold for road avoidance")
     start_lon: float = Field(..., ge=-180.0, le=180.0, description="Start longitude in decimal degrees")
     start_lat: float = Field(..., ge=-90.0, le=90.0, description="Start latitude in decimal degrees")
     end_lon: float = Field(..., ge=-180.0, le=180.0, description="Destination longitude in decimal degrees")
     end_lat: float = Field(..., ge=-90.0, le=90.0, description="Destination latitude in decimal degrees")
-    avoid_screening_positive: bool = Field(default=True, description="Remove screening-positive (depth > 0 at sample) road segments from routing graph")
+    avoid_screening_positive: bool = Field(default=True, description="Remove screening-positive (depth > threshold) road segments from routing graph")
     max_snap_distance_meters: float = Field(
         default=5000.0,
         ge=10.0,
@@ -175,6 +190,9 @@ class RouteScreeningRequest(BaseModel):
 
 
 class RouteScreeningResponse(BaseModel):
+    hazard_source: str = "sample_hidkal"
+    run_id: Optional[str] = None
+    screening_threshold: float = 0.0
     route_found: bool
     geojson: Optional[Dict[str, Any]] = None
     total_distance_meters: Optional[float] = None
@@ -197,12 +215,16 @@ class RouteScreeningResponse(BaseModel):
 
 class ExportRouteRequest(BaseModel):
     format: str = Field(default="geojson", description="Export format: geojson, kml, or shp")
+    hazard_source: Optional[str] = Field(default="sample_hidkal", description="Hazard source: sample_hidkal or anuga_hidkal_pilot")
+    screening_threshold: Optional[float] = Field(default=0.0, ge=0.0, description="Screening threshold")
     route_request: RouteScreeningRequest = Field(..., description="Route screening parameters to compute route for export")
 
 
 class ExportRequest(BaseModel):
     layer: str = Field(..., description="Target layer: assets, roads, or route")
     format: str = Field(default="geojson", description="Export format: geojson, kml, or shp")
+    hazard_source: Optional[str] = Field(default="sample_hidkal", description="Hazard source: sample_hidkal or anuga_hidkal_pilot")
+    screening_threshold: Optional[float] = Field(default=0.0, ge=0.0, description="Screening threshold")
     exposure_filter: Optional[str] = Field(default="all", description="Exposure filter: all, screening_positive, not_exposed, not_assessed")
     route_request: Optional[RouteScreeningRequest] = Field(default=None, description="Route screening parameters if layer is route")
 
@@ -496,5 +518,70 @@ class GEEExportPlanResponse(BaseModel):
     disclaimer: str
 
 
+# ==========================================
+# Phase 16: Hazard Sources & ANUGA Pilot Schemas
+# ==========================================
 
+class HazardSourceInfo(BaseModel):
+    id: str
+    label: str
+    status: str
+    disclaimer: str
+    vertical_unit_status: str
+    available: bool
+    availability_reason: Optional[str] = None
+    default_screening_threshold: float = 0.0
+    layers: List[str]
+    run_id: Optional[str] = None
+
+
+class HazardSourcesResponse(BaseModel):
+    default_source: str
+    sources: List[HazardSourceInfo]
+    scientific_notice: str
+
+
+class ANUGARunSummary(BaseModel):
+    run_id: str
+    scenario_status: str
+    title: str
+    site: str
+    timestamp_utc: Optional[str] = None
+    available: bool
+    availability_reason: Optional[str] = None
+    breach_width_m: float
+    simulated_duration_sec: float
+    saved_yield_frames: int
+    arrival_time_resolution_sec: float
+    initial_volume_assumed_mcm: Optional[float] = None
+    mesh_triangles: Optional[int] = None
+    mesh_vertices: Optional[int] = None
+    raster_cells_total: Optional[int] = None
+    raster_cells_valid: Optional[int] = None
+    screening_threshold_label: str = "0.10 assumed metres"
+    velocity_unit_label: str = "assumed m/s"
+    volume_unit_label: str = "assumed MCM"
+    disclaimer: str
+
+
+class ANUGARunDetailResponse(BaseModel):
+    run_id: str
+    scenario_status: str
+    title: str
+    site: str
+    timestamp_utc: Optional[str] = None
+    available: bool
+    availability_reason: Optional[str] = None
+    disclaimer: str
+    assumptions: Dict[str, Any]
+    breach_mechanics: Dict[str, Any]
+    spatial_parameters: Dict[str, Any]
+    computational_statistics: Dict[str, Any]
+    boundary_analysis: Dict[str, Any]
+    area_partitioning_km2: Dict[str, Any]
+    volume_conservation: Dict[str, Any]
+    inundation_results: Dict[str, Any]
+    provenance_metrics: Optional[Dict[str, Any]] = None
+    layers: Dict[str, Dict[str, Any]]
+    manifest: Dict[str, Any]
 

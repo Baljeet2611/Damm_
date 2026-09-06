@@ -36,6 +36,9 @@ from app.schemas import (
     GEEDatasetInfo,
     GEEExportPlanRequest,
     GEEExportPlanResponse,
+    HazardSourcesResponse,
+    ANUGARunSummary,
+    ANUGARunDetailResponse,
 )
 
 from app.raster_service import (
@@ -44,6 +47,15 @@ from app.raster_service import (
     get_raster_point_value,
     get_raster_tile,
     get_raster_legend,
+)
+from app.anuga_service import (
+    get_hazard_sources,
+    list_anuga_runs,
+    get_anuga_run_detail,
+    get_anuga_raster_metadata,
+    get_anuga_raster_point_value,
+    get_anuga_raster_tile,
+    get_anuga_raster_legend,
 )
 from app.vector_service import (
     load_raw_assets,
@@ -141,6 +153,77 @@ def health_check():
     return {"status": "ok"}
 
 
+# Phase 16: Hazard Sources Catalog
+
+@app.get("/api/hazard-sources", response_model=HazardSourcesResponse)
+def get_hazard_sources_endpoint() -> HazardSourcesResponse:
+    """
+    Return catalog of available hazard sources (Sample vs ANUGA Pilot)
+    with execution status, disclaimers, vertical unit descriptions, and availability.
+    """
+    return get_hazard_sources()
+
+
+# Phase 16: ANUGA Pilot Hydrodynamic Results Endpoints
+
+@app.get("/api/anuga/runs", response_model=List[ANUGARunSummary])
+def get_anuga_runs() -> List[ANUGARunSummary]:
+    """List registered ANUGA pilot simulation runs with availability and diagnostics."""
+    return list_anuga_runs()
+
+
+@app.get("/api/anuga/runs/{run_id}", response_model=ANUGARunDetailResponse)
+def get_anuga_run(run_id: str) -> ANUGARunDetailResponse:
+    """Retrieve detailed metadata, breach parameters, volume conservation, and manifest for an ANUGA run."""
+    return get_anuga_run_detail(run_id=run_id)
+
+
+@app.get("/api/anuga/rasters/{id}/metadata", response_model=RasterMetadataResponse)
+def get_anuga_metadata(id: str) -> RasterMetadataResponse:
+    """Return metadata for an ANUGA pilot GeoTIFF raster layer (depth, velocity, arrival)."""
+    return get_anuga_raster_metadata(layer_name=id)
+
+
+@app.get("/api/anuga/rasters/{id}/value", response_model=RasterPointValueResponse)
+def get_anuga_point_value(
+    id: str,
+    lon: float = Query(..., description="Query longitude coordinate in WGS84 (EPSG:4326)"),
+    lat: float = Query(..., description="Query latitude coordinate in WGS84 (EPSG:4326)"),
+) -> RasterPointValueResponse:
+    """
+    Point query for an ANUGA layer at WGS84 coordinates (lon, lat).
+    Transforms coordinates into EPSG:32643 and samples the raster with arrival semantics.
+    """
+    return get_anuga_raster_point_value(layer_name=id, lon=lon, lat=lat)
+
+
+@app.get("/api/anuga/rasters/{id}/tiles/{z}/{x}/{y}.png")
+def get_anuga_tile(
+    id: str,
+    z: int,
+    x: int,
+    y: int,
+) -> Response:
+    """
+    Web Mercator XYZ tile endpoint for ANUGA pilot raster visualization.
+    Returns 256x256 PNG with customized color ramp and layer transparency.
+    """
+    tile_bytes = get_anuga_raster_tile(layer_name=id, z=z, x=x, y=y)
+    return Response(
+        content=tile_bytes,
+        media_type="image/png",
+        headers={"Cache-Control": "public, max-age=3600"},
+    )
+
+
+@app.get("/api/anuga/rasters/{id}/legend", response_model=RasterLegendResponse)
+def get_anuga_legend(id: str) -> RasterLegendResponse:
+    """Return colormap stops, discrete legend classifications, and value range for an ANUGA layer."""
+    return get_anuga_raster_legend(layer_name=id)
+
+
+# Sample Raster Inspection Endpoints
+
 @app.get("/api/datasets", response_model=list[DatasetResponse])
 def get_datasets() -> list[DatasetResponse]:
     """
@@ -226,33 +309,42 @@ def get_roads() -> Dict[str, Any]:
 
 
 @app.get("/api/exposure/assets")
-def get_exposure_assets_endpoint() -> Dict[str, Any]:
+def get_exposure_assets_endpoint(
+    hazard_source: Optional[str] = Query(default="sample_hidkal", description="Hazard source: sample_hidkal or anuga_hidkal_pilot"),
+    threshold: Optional[float] = Query(default=0.0, description="Minimum depth threshold for exposure screening"),
+) -> Dict[str, Any]:
     """
     Return infrastructure assets GeoJSON FeatureCollection with preliminary
     raster exposure screening attributes attached (assessed, exposed, depth_value,
-    velocity_value, arrival_value, sampling_method, category).
+    velocity_value, arrival_value, is_initially_wet, sampling_method, category).
     """
-    return get_exposure_assets()
+    return get_exposure_assets(hazard_source=hazard_source or "sample_hidkal", threshold=threshold or 0.0)
 
 
 @app.get("/api/exposure/roads")
-def get_exposure_roads_endpoint() -> Dict[str, Any]:
+def get_exposure_roads_endpoint(
+    hazard_source: Optional[str] = Query(default="sample_hidkal", description="Hazard source: sample_hidkal or anuga_hidkal_pilot"),
+    threshold: Optional[float] = Query(default=0.0, description="Minimum depth threshold for exposure screening"),
+) -> Dict[str, Any]:
     """
     Return road network GeoJSON FeatureCollection with preliminary
     raster exposure screening attributes attached (assessed, exposed, depth_value,
-    velocity_value, arrival_value, sampling_method, category).
+    velocity_value, arrival_value, is_initially_wet, sampling_method, category).
     """
-    return get_exposure_roads()
+    return get_exposure_roads(hazard_source=hazard_source or "sample_hidkal", threshold=threshold or 0.0)
 
 
 @app.get("/api/exposure/summary", response_model=ExposureSummaryResponse)
-def get_exposure_summary_endpoint() -> ExposureSummaryResponse:
+def get_exposure_summary_endpoint(
+    hazard_source: Optional[str] = Query(default="sample_hidkal", description="Hazard source: sample_hidkal or anuga_hidkal_pilot"),
+    threshold: Optional[float] = Query(default=0.0, description="Minimum depth threshold for exposure screening"),
+) -> ExposureSummaryResponse:
     """
     Return preliminary flood-exposure summary containing total, assessed, exposed,
-    not-exposed, and not-assessed counts, plus category breakdowns for assets and roads.
-    Includes scientific disclaimer on unverified sample rasters.
+    not-exposed, and not-assessed counts, plus category breakdowns and reservoir partitioning.
+    Includes scientific disclaimer on selected hazard source.
     """
-    return get_exposure_summary()
+    return get_exposure_summary(hazard_source=hazard_source or "sample_hidkal", threshold=threshold or 0.0)
 
 
 # Phase 7: Illustrative Damage Scenario Endpoints
@@ -271,7 +363,7 @@ def get_damage_config() -> DamageConfigResponse:
 def post_damage_estimate(request: DamageScenarioRequest) -> DamageScenarioResponse:
     """
     Calculate transparent illustrative damage scenario estimation based on
-    Phase 6 preliminary asset screening depths and user-acknowledged input assumptions.
+    preliminary asset screening depths and user-acknowledged input assumptions.
     Rejects calculation with 422 if acknowledge_unverified_inputs is False.
     """
     return compute_damage_scenario(request)
@@ -283,7 +375,7 @@ def post_damage_estimate(request: DamageScenarioRequest) -> DamageScenarioRespon
 def post_route_screening(request: RouteScreeningRequest) -> RouteScreeningResponse:
     """
     Calculate preliminary route screening between start and destination coordinates.
-    Snaps to nearest road network nodes, removes screening-positive (depth > 0 at sample) segments by default,
+    Snaps to nearest road network nodes, removes screening-positive segments by default,
     and returns Dijkstra shortest route geometry with segment count and diagnostic warnings.
     """
     return calculate_screening_route(request)
@@ -296,6 +388,8 @@ def get_export_layer(
     layer: str,
     format: str = "geojson",
     exposure_filter: str = "all",
+    hazard_source: str = "sample_hidkal",
+    threshold: float = 0.0,
 ) -> Response:
     """
     Export whitelisted spatial layer (assets, roads) as GeoJSON, KML, or ESRI Shapefile (ZIP).
@@ -309,7 +403,13 @@ def get_export_layer(
             status_code=422,
             detail="Route export is not supported via GET. Use POST /api/export/route or POST /api/export with RouteScreeningRequest parameters.",
         )
-    return handle_export(layer=layer, format_type=format, exposure_filter=exposure_filter)
+    return handle_export(
+        layer=layer,
+        format_type=format,
+        exposure_filter=exposure_filter,
+        hazard_source=hazard_source,
+        threshold=threshold,
+    )
 
 
 @app.post("/api/export/route")
@@ -323,6 +423,8 @@ def post_export_route(request: ExportRouteRequest) -> Response:
         format_type=request.format,
         exposure_filter="all",
         route_request=request.route_request,
+        hazard_source=request.hazard_source or "sample_hidkal",
+        threshold=request.screening_threshold or 0.0,
     )
 
 
@@ -337,6 +439,8 @@ def post_export_custom(request: ExportRequest) -> Response:
         format_type=request.format,
         exposure_filter=request.exposure_filter or "all",
         route_request=request.route_request,
+        hazard_source=request.hazard_source or "sample_hidkal",
+        threshold=request.screening_threshold or 0.0,
     )
 
 

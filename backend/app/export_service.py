@@ -48,6 +48,8 @@ def get_layer_feature_collection(
     layer: str,
     exposure_filter: str = "all",
     route_request: Optional[RouteScreeningRequest] = None,
+    hazard_source: str = "sample_hidkal",
+    threshold: float = 0.0,
 ) -> Dict[str, Any]:
     """
     Retrieve and filter GeoJSON FeatureCollection for the requested layer.
@@ -65,11 +67,14 @@ def get_layer_feature_collection(
             detail=f"Invalid exposure_filter '{exposure_filter}'. Supported filters are: {', '.join(sorted(SUPPORTED_FILTERS))}",
         )
 
+    h_src = hazard_source or "sample_hidkal"
+    t_val = float(threshold) if threshold is not None else (0.10 if h_src == "anuga_hidkal_pilot" else 0.0)
+
     if layer == "assets":
-        raw = get_exposure_assets()
+        raw = get_exposure_assets(hazard_source=h_src, threshold=t_val)
         return filter_geojson_features(raw, exposure_filter)
     elif layer == "roads":
-        raw = get_exposure_roads()
+        raw = get_exposure_roads(hazard_source=h_src, threshold=t_val)
         return filter_geojson_features(raw, exposure_filter)
     elif layer == "route":
         if not route_request:
@@ -339,6 +344,8 @@ def handle_export(
     format_type: str = "geojson",
     exposure_filter: str = "all",
     route_request: Optional[RouteScreeningRequest] = None,
+    hazard_source: str = "sample_hidkal",
+    threshold: float = 0.0,
 ) -> Response:
     """Main export handler dispatching to GeoJSON, KML, or Shapefile (ZIP) generator."""
     fmt = format_type.lower().strip()
@@ -348,7 +355,13 @@ def handle_export(
             detail=f"Invalid format '{format_type}'. Supported formats are: {', '.join(sorted(SUPPORTED_FORMATS))}",
         )
 
-    geojson_data = get_layer_feature_collection(layer, exposure_filter, route_request)
+    geojson_data = get_layer_feature_collection(
+        layer=layer,
+        exposure_filter=exposure_filter,
+        route_request=route_request,
+        hazard_source=hazard_source,
+        threshold=threshold,
+    )
 
     if fmt == "geojson":
         return export_to_geojson_response(geojson_data, layer, exposure_filter)

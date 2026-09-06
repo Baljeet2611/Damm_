@@ -135,7 +135,9 @@ def calculate_screening_route(req: RouteScreeningRequest) -> RouteScreeningRespo
         warnings.append(f"Destination point was snapped {snap_e_dist:.1f} m to nearest road network node ({end_node}).")
 
     # 3. Query road exposure screening results using stable (u, v, key) matching
-    exposure_roads = get_exposure_roads()
+    h_src = req.hazard_source or "sample_hidkal"
+    t_val = req.screening_threshold if req.screening_threshold is not None else (0.10 if h_src == "anuga_hidkal_pilot" else 0.0)
+    exposure_roads = get_exposure_roads(hazard_source=h_src, threshold=t_val)
     exposed_edge_keys = set()
     for feat in exposure_roads.get("features", []):
         props = feat.get("properties") or {}
@@ -178,75 +180,66 @@ def calculate_screening_route(req: RouteScreeningRequest) -> RouteScreeningRespo
         G_routing.add_edge(u, v, key=k, **edge_data)
 
     if start_node == end_node:
-        warnings.append("Start and destination points snapped to the exact same road node.")
-
-    # 5. Compute shortest path
-    try:
-        path_nodes = nx.shortest_path(G_routing, source=start_node, target=end_node, weight="weight")
-    except (nx.NetworkXNoPath, nx.NodeNotFound):
-        warnings.append(
-            "No traversable route found connecting the start and destination nodes while avoiding screening-positive roads."
-        )
-        return RouteScreeningResponse(
-            route_found=False,
-            geojson=None,
-            total_distance_meters=None,
-            total_distance_km=None,
-            segment_count=None,
-            start_coords=(req.start_lon, req.start_lat),
-            end_coords=(req.end_lon, req.end_lat),
-            snapped_start_coords=(snap_s_lon, snap_s_lat),
-            snapped_end_coords=(snap_e_lon, snap_e_lat),
-            start_snap_distance_meters=snap_s_dist,
-            end_snap_distance_meters=snap_e_dist,
-            excluded_edges_count=excluded_edges_count,
-            avoid_screening_positive=req.avoid_screening_positive,
-            disclaimer=disclaimer,
-            methodology=methodology,
-            warnings=warnings,
-        )
-
-    # 6. Reconstruct route line geometry in exact travel order
-    route_coords: List[Tuple[float, float]] = []
-    total_length = 0.0
-
-    if len(path_nodes) == 1:
-        # Snapped to single node
-        route_coords = [(snap_s_lon, snap_s_lat), (snap_e_lon, snap_e_lat)]
+        warnings.append("Start and destination snapped to the exact same road node.")
+        path_nodes = [start_node]
+        total_length = 0.0
     else:
-        for i in range(len(path_nodes) - 1):
-            u_node = path_nodes[i]
-            v_node = path_nodes[i + 1]
+        try:
+            path_nodes = nx.shortest_path(G_routing, source=start_node, target=end_node, weight="weight")
+            total_length = float(nx.shortest_path_length(G_routing, source=start_node, target=end_node, weight="weight"))
+        except (nx.NetworkXNoPath, nx.NodeNotFound):
+            return RouteScreeningResponse(
+                hazard_source=h_src,
+                run_id="anuga_hidkal_pilot_hypothetical_v1" if h_src == "anuga_hidkal_pilot" else None,
+                screening_threshold=t_val,
+                route_found=False,
+                geojson=None,
+                total_distance_meters=None,
+                total_distance_km=None,
+                segment_count=0,
+                start_coords=(req.start_lon, req.start_lat),
+                end_coords=(req.end_lon, req.end_lat),
+                snapped_start_coords=(snap_s_lon, snap_s_lat),
+                snapped_end_coords=(snap_e_lon, snap_e_lat),
+                start_snap_distance_meters=snap_s_dist,
+                end_snap_distance_meters=snap_e_dist,
+                excluded_edges_count=excluded_edges_count,
+                avoid_screening_positive=req.avoid_screening_positive,
+                disclaimer=disclaimer,
+                methodology=methodology,
+                warnings=["No viable connected route exists between the selected points under current avoidance constraints."] + warnings,
+            )
 
-            # Get edge data between u_node and v_node along travel direction
-            edges_dict = G_routing.get_edge_data(u_node, v_node)
-            if not edges_dict and not is_directed:
-                edges_dict = G_routing.get_edge_data(v_node, u_node) or {}
+    # 5. Extract accurate geometry from graph edges
+    route_coords: List[Tuple[float, float]] = []
+    for i in range(len(path_nodes) - 1):
+        u = path_nodes[i]
+        v = path_nodes[i + 1]
+        edge_data_dict = G_routing.get_edge_data(u, v)
+        if not edge_data_dict:
+            continue
 
-            if not edges_dict:
-                # Fallback to node coordinates
-                u_x, u_y = float(G.nodes[u_node]["x"]), float(G.nodes[u_node]["y"])
-                v_x, v_y = float(G.nodes[v_node]["x"]), float(G.nodes[v_node]["y"])
-                coords = [(u_x, u_y), (v_x, v_y)]
-                edge_len = haversine_distance(u_x, u_y, v_x, v_y)
-                total_length += edge_len
-            else:
-                # Pick shortest edge between these two nodes
-                best_edge = min(edges_dict.values(), key=lambda e: float(e.get("weight", float("inf"))))
-                edge_length = float(best_edge.get("weight", 0.0))
-                total_length += edge_length
+        best_k = min(edge_data_dict.keys(), key=lambda k: edge_data_dict[k].get("weight", float("inf")))
+        best_edge = edge_data_dict[best_k]
 
-                # Extract edge geometry
-                if "geometry" in best_edge and best_edge["geometry"]:
-                    geom = wkt.loads(best_edge["geometry"])
-                    coords = list(geom.coords)
-                else:
-                    u_x, u_y = float(G.nodes[u_node]["x"]), float(G.nodes[u_node]["y"])
-                    v_x, v_y = float(G.nodes[v_node]["x"]), float(G.nodes[v_node]["y"])
-                    coords = [(u_x, u_y), (v_x, v_y)]
+        geom_wkt = best_edge.get("geometry")
+        if geom_wkt:
+            try:
+                line_geom = wkt.loads(geom_wkt)
+                coords = list(line_geom.coords)
+            except Exception:
+                coords = None
+        else:
+            coords = None
 
-                # Check vertex travel order (orient from u_node to v_node)
-                u_x, u_y = float(G.nodes[u_node]["x"]), float(G.nodes[u_node]["y"])
+        if not coords:
+            u_node = G.nodes[u]
+            v_node = G.nodes[v]
+            coords = [(float(u_node["x"]), float(u_node["y"])), (float(v_node["x"]), float(v_node["y"]))]
+        else:
+            u_node = G.nodes[u]
+            u_x, u_y = float(u_node["x"]), float(u_node["y"])
+            if len(coords) >= 2:
                 first_pt = coords[0]
                 last_pt = coords[-1]
                 dist_first_sq = (first_pt[0] - u_x) ** 2 + (first_pt[1] - u_y) ** 2
@@ -254,10 +247,10 @@ def calculate_screening_route(req: RouteScreeningRequest) -> RouteScreeningRespo
                 if dist_last_sq < dist_first_sq:
                     coords.reverse()
 
-            for pt in coords:
-                pt_tuple = (round(pt[0], 6), round(pt[1], 6))
-                if not route_coords or route_coords[-1] != pt_tuple:
-                    route_coords.append(pt_tuple)
+        for pt in coords:
+            pt_tuple = (round(pt[0], 6), round(pt[1], 6))
+            if not route_coords or route_coords[-1] != pt_tuple:
+                route_coords.append(pt_tuple)
 
     if len(route_coords) < 2:
         route_coords = [(snap_s_lon, snap_s_lat), (snap_e_lon, snap_e_lat)]
@@ -271,6 +264,8 @@ def calculate_screening_route(req: RouteScreeningRequest) -> RouteScreeningRespo
         "geometry": mapping(route_line),
         "properties": {
             "title": "Screening-Filtered Shortest Route",
+            "hazard_source": h_src,
+            "screening_threshold": t_val,
             "total_distance_meters": round(total_length, 2),
             "total_distance_km": total_km,
             "segment_count": segment_count,
@@ -284,6 +279,9 @@ def calculate_screening_route(req: RouteScreeningRequest) -> RouteScreeningRespo
     }
 
     return RouteScreeningResponse(
+        hazard_source=h_src,
+        run_id="anuga_hidkal_pilot_hypothetical_v1" if h_src == "anuga_hidkal_pilot" else None,
+        screening_threshold=t_val,
         route_found=True,
         geojson=geojson_feature,
         total_distance_meters=round(total_length, 2),
@@ -301,4 +299,3 @@ def calculate_screening_route(req: RouteScreeningRequest) -> RouteScreeningRespo
         methodology=methodology,
         warnings=warnings,
     )
-

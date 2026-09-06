@@ -150,7 +150,10 @@ def compute_damage_scenario(request: DamageScenarioRequest) -> DamageScenarioRes
     """
     validate_damage_request(request)
 
-    assets_geojson = get_exposure_assets()
+    h_src = request.hazard_source or "sample_hidkal"
+    t_val = request.screening_threshold if request.screening_threshold is not None else (0.10 if h_src == "anuga_hidkal_pilot" else 0.0)
+
+    assets_geojson = get_exposure_assets(hazard_source=h_src, threshold=t_val)
     features = assets_geojson.get("features", [])
 
     total_assets = len(features)
@@ -200,7 +203,7 @@ def compute_damage_scenario(request: DamageScenarioRequest) -> DamageScenarioRes
 
         if assessed:
             assessed_assets += 1
-            if exposed and depth is not None and depth > 0.0:
+            if exposed and depth is not None and depth > t_val:
                 screening_positive_assets += 1
                 category_stats[cat]["screening_positive_count"] += 1
 
@@ -239,14 +242,23 @@ def compute_damage_scenario(request: DamageScenarioRequest) -> DamageScenarioRes
             high_loss=high_cat_loss,
         )
 
+    disclaimer = (
+        "Hypothetical ANUGA pilot illustrative damage scenario — not an official loss estimate or validated prediction."
+        if h_src == "anuga_hidkal_pilot"
+        else DISCLAIMER_TEXT
+    )
+
     warnings = [
-        "Illustrative estimation based on unverified sample raster depths and user-configured unit values.",
+        f"Illustrative estimation based on {h_src} depth raster and user-configured unit values.",
         "Not an engineering-grade or actuarial damage analysis.",
         "Road infrastructure network and human population/casualties are strictly excluded from monetary estimation.",
     ]
 
     return DamageScenarioResponse(
-        disclaimer=DISCLAIMER_TEXT,
+        hazard_source=h_src,
+        run_id="anuga_hidkal_pilot_hypothetical_v1" if h_src == "anuga_hidkal_pilot" else None,
+        screening_threshold=t_val,
+        disclaimer=disclaimer,
         methodology=METHODOLOGY_TEXT,
         currency_label=request.currency_label or DEFAULT_CURRENCY_LABEL,
         assumed_depth_unit=request.assumed_depth_unit or DEFAULT_ASSUMED_DEPTH_UNIT,

@@ -236,9 +236,18 @@ def load_raw_roads() -> Dict[str, Any]:
     return result
 
 
+from pyproj import Transformer
+from app.anuga_service import resolve_anuga_layer_file, check_anuga_outputs_available
+
+# Transformer from EPSG:4326 to EPSG:32643 for ANUGA pilot
+_wgs84_to_utm43n = Transformer.from_crs("EPSG:4326", "EPSG:32643", always_xy=True)
+
+
 class RasterSampler:
     """Helper to sample depth, velocity, and arrival rasters efficiently in memory."""
-    def __init__(self):
+    def __init__(self, hazard_source: str = "sample_hidkal", threshold: float = 0.0):
+        self.hazard_source = hazard_source or "sample_hidkal"
+        self.threshold = threshold if threshold is not None else (0.10 if self.hazard_source == "anuga_hidkal_pilot" else 0.0)
         self.depth_arr = None
         self.velocity_arr = None
         self.arrival_arr = None
@@ -246,53 +255,96 @@ class RasterSampler:
         self.bounds = None
         self.nodata = None
         self.available = False
+        self.is_projected = False
         self.mtimes = []
 
         self._load_rasters()
 
     def _load_rasters(self):
-        _, depth_path = resolve_dataset_file("depth")
-        _, velocity_path = resolve_dataset_file("velocity")
-        _, arrival_path = resolve_dataset_file("arrival")
+        if self.hazard_source == "anuga_hidkal_pilot":
+            self.is_projected = True
+            try:
+                _, depth_path = resolve_anuga_layer_file("depth")
+                _, velocity_path = resolve_anuga_layer_file("velocity")
+                _, arrival_path = resolve_anuga_layer_file("arrival")
+            except Exception:
+                depth_path, velocity_path, arrival_path = None, None, None
 
-        if depth_path and depth_path.is_file():
-            self.mtimes.append(depth_path.stat().st_mtime)
-            with rasterio.open(depth_path) as ds:
-                self.depth_arr = ds.read(1)
-                self.inv_transform = ~ds.transform
-                self.bounds = ds.bounds
-                self.nodata = ds.nodata
-                self.height, self.width = self.depth_arr.shape
-            self.available = True
+            if depth_path and depth_path.is_file():
+                self.mtimes.append(depth_path.stat().st_mtime)
+                with rasterio.open(depth_path) as ds:
+                    self.depth_arr = ds.read(1)
+                    self.inv_transform = ~ds.transform
+                    self.bounds = ds.bounds
+                    self.nodata = ds.nodata
+                    self.height, self.width = self.depth_arr.shape
+                self.available = True
+            else:
+                self.mtimes.append(0.0)
+
+            if velocity_path and velocity_path.is_file():
+                self.mtimes.append(velocity_path.stat().st_mtime)
+                with rasterio.open(velocity_path) as ds:
+                    self.velocity_arr = ds.read(1)
+            else:
+                self.mtimes.append(0.0)
+
+            if arrival_path and arrival_path.is_file():
+                self.mtimes.append(arrival_path.stat().st_mtime)
+                with rasterio.open(arrival_path) as ds:
+                    self.arrival_arr = ds.read(1)
+            else:
+                self.mtimes.append(0.0)
         else:
-            self.mtimes.append(0.0)
+            self.is_projected = False
+            _, depth_path = resolve_dataset_file("depth")
+            _, velocity_path = resolve_dataset_file("velocity")
+            _, arrival_path = resolve_dataset_file("arrival")
 
-        if velocity_path and velocity_path.is_file():
-            self.mtimes.append(velocity_path.stat().st_mtime)
-            with rasterio.open(velocity_path) as ds:
-                self.velocity_arr = ds.read(1)
-        else:
-            self.mtimes.append(0.0)
+            if depth_path and depth_path.is_file():
+                self.mtimes.append(depth_path.stat().st_mtime)
+                with rasterio.open(depth_path) as ds:
+                    self.depth_arr = ds.read(1)
+                    self.inv_transform = ~ds.transform
+                    self.bounds = ds.bounds
+                    self.nodata = ds.nodata
+                    self.height, self.width = self.depth_arr.shape
+                self.available = True
+            else:
+                self.mtimes.append(0.0)
 
-        if arrival_path and arrival_path.is_file():
-            self.mtimes.append(arrival_path.stat().st_mtime)
-            with rasterio.open(arrival_path) as ds:
-                self.arrival_arr = ds.read(1)
-        else:
-            self.mtimes.append(0.0)
+            if velocity_path and velocity_path.is_file():
+                self.mtimes.append(velocity_path.stat().st_mtime)
+                with rasterio.open(velocity_path) as ds:
+                    self.velocity_arr = ds.read(1)
+            else:
+                self.mtimes.append(0.0)
 
-    def sample_coordinate(self, lon: float, lat: float) -> Tuple[bool, bool, Optional[float], Optional[float], Optional[float]]:
+            if arrival_path and arrival_path.is_file():
+                self.mtimes.append(arrival_path.stat().st_mtime)
+                with rasterio.open(arrival_path) as ds:
+                    self.arrival_arr = ds.read(1)
+            else:
+                self.mtimes.append(0.0)
+
+    def sample_coordinate(self, lon: float, lat: float) -> Tuple[bool, bool, Optional[float], Optional[float], Optional[float], bool]:
         """
         Sample depth, velocity, and arrival at (lon, lat).
-        Returns: (assessed, exposed, depth_value, velocity_value, arrival_value)
+        Returns: (assessed, exposed, depth_value, velocity_value, arrival_value, is_initially_wet)
         """
         if not self.available or self.bounds is None or self.inv_transform is None:
-            return False, False, None, None, None
+            return False, False, None, None, None, False
 
-        if not (self.bounds.left <= lon <= self.bounds.right and self.bounds.bottom <= lat <= self.bounds.top):
-            return False, False, None, None, None
+        # Transform coordinates if raster is in projected CRS (EPSG:32643)
+        if self.is_projected:
+            x_samp, y_samp = _wgs84_to_utm43n.transform(lon, lat)
+        else:
+            x_samp, y_samp = lon, lat
 
-        col, row = [int(v) for v in self.inv_transform * (lon, lat)]
+        if not (self.bounds.left <= x_samp <= self.bounds.right and self.bounds.bottom <= y_samp <= self.bounds.top):
+            return False, False, None, None, None, False
+
+        col, row = [int(v) for v in self.inv_transform * (x_samp, y_samp)]
         # Clamp boundary edges
         if col >= self.width:
             col = self.width - 1
@@ -317,18 +369,23 @@ class RasterSampler:
 
             # Process arrival: filter +9999, -9999, nan
             a_val = None
+            is_initially_wet = False
             if a is not None and not np.isnan(a):
-                if not (np.isclose(a, 9999.0) or np.isclose(a, -9999.0) or a >= 9000.0 or a <= 0.0):
+                if np.isclose(a, 0.0) and self.hazard_source == "anuga_hidkal_pilot":
+                    is_initially_wet = True
+                    a_val = 0.0
+                elif not (np.isclose(a, 9999.0) or np.isclose(a, -9999.0) or a >= 9000.0 or a <= 0.0):
                     a_val = round(a, 4)
 
             assessed = d_val is not None
-            exposed = bool(assessed and d_val > 0.0)
-            return assessed, exposed, d_val, v_val, a_val
+            # Exposed check against screening threshold
+            exposed = bool(assessed and d_val is not None and d_val > self.threshold)
+            return assessed, exposed, d_val, v_val, a_val, is_initially_wet
 
-        return False, False, None, None, None
+        return False, False, None, None, None, False
 
 
-def sample_geometry_exposure(geom_shape, sampler: RasterSampler) -> Tuple[bool, bool, Optional[float], Optional[float], Optional[float], str]:
+def sample_geometry_exposure(geom_shape, sampler: RasterSampler) -> Tuple[bool, bool, Optional[float], Optional[float], Optional[float], bool, str]:
     """
     Perform geometric screening for a geometry:
     - Point: direct coordinate sampling ('point_direct')
@@ -337,7 +394,7 @@ def sample_geometry_exposure(geom_shape, sampler: RasterSampler) -> Tuple[bool, 
     - Other: centroid ('geometry_centroid')
     """
     if geom_shape.is_empty:
-        return False, False, None, None, None, "empty_geometry"
+        return False, False, None, None, None, False, "empty_geometry"
 
     g_type = geom_shape.geom_type
     if g_type == "Point":
@@ -353,31 +410,34 @@ def sample_geometry_exposure(geom_shape, sampler: RasterSampler) -> Tuple[bool, 
         pt = geom_shape.centroid
         method = "geometry_centroid"
 
-    assessed, exposed, d_val, v_val, a_val = sampler.sample_coordinate(pt.x, pt.y)
-    return assessed, exposed, d_val, v_val, a_val, method
+    assessed, exposed, d_val, v_val, a_val, is_init_wet = sampler.sample_coordinate(pt.x, pt.y)
+    return assessed, exposed, d_val, v_val, a_val, is_init_wet, method
 
 
-def get_exposure_assets() -> Dict[str, Any]:
+def get_exposure_assets(hazard_source: str = "sample_hidkal", threshold: float = 0.0) -> Dict[str, Any]:
     """
-    Calculate and return assets GeoJSON with preliminary exposure screening attributes:
-    - assessed (bool)
-    - exposed (bool: depth > 0)
-    - depth_value (float or None)
-    - velocity_value (float or None)
-    - arrival_value (float or None)
-    - sampling_method (str)
-    - category (str)
+    Calculate and return assets GeoJSON with exposure screening attributes.
+    Supports hazard_source ('sample_hidkal' or 'anuga_hidkal_pilot') and configurable threshold.
     """
     global _exposure_assets_cache
+    h_src = hazard_source or "sample_hidkal"
+    t_val = float(threshold) if threshold is not None else (0.10 if h_src == "anuga_hidkal_pilot" else 0.0)
+
     raw_assets = load_raw_assets()
     _, assets_path = resolve_vector_file("assets")
     assets_mtime = assets_path.stat().st_mtime if assets_path else 0.0
 
-    sampler = RasterSampler()
-    cache_key = (assets_mtime, *sampler.mtimes)
+    sampler = RasterSampler(hazard_source=h_src, threshold=t_val)
+    cache_key = (h_src, t_val, assets_mtime, *sampler.mtimes)
 
     if _exposure_assets_cache is not None and _exposure_assets_cache[0] == cache_key:
         return _exposure_assets_cache[1]
+
+    disclaimer_text = (
+        "Hypothetical ANUGA pilot screening — not a forecast or validated Hidkal prediction. Assumed vertical units from source interpretation."
+        if h_src == "anuga_hidkal_pilot"
+        else "preliminary exposure screening based on unverified sample rasters"
+    )
 
     features = []
     for feat in raw_assets["features"]:
@@ -388,17 +448,20 @@ def get_exposure_assets() -> Dict[str, Any]:
 
         if geom_json:
             geom_obj = shape(geom_json)
-            assessed, exposed, d_val, v_val, a_val, method = sample_geometry_exposure(geom_obj, sampler)
+            assessed, exposed, d_val, v_val, a_val, is_init_wet, method = sample_geometry_exposure(geom_obj, sampler)
         else:
-            assessed, exposed, d_val, v_val, a_val, method = False, False, None, None, None, "no_geometry"
+            assessed, exposed, d_val, v_val, a_val, is_init_wet, method = False, False, None, None, None, False, "no_geometry"
 
+        props["hazard_source"] = h_src
+        props["screening_threshold"] = t_val
         props["assessed"] = assessed
         props["exposed"] = exposed
         props["depth_value"] = d_val
         props["velocity_value"] = v_val
         props["arrival_value"] = a_val
+        props["is_initially_wet"] = is_init_wet
         props["sampling_method"] = method
-        props["preliminary_screening_note"] = "preliminary exposure screening based on unverified sample rasters"
+        props["preliminary_screening_note"] = disclaimer_text
 
         features.append({
             "type": "Feature",
@@ -415,27 +478,30 @@ def get_exposure_assets() -> Dict[str, Any]:
     return result
 
 
-def get_exposure_roads() -> Dict[str, Any]:
+def get_exposure_roads(hazard_source: str = "sample_hidkal", threshold: float = 0.0) -> Dict[str, Any]:
     """
-    Calculate and return roads GeoJSON with preliminary exposure screening attributes:
-    - assessed (bool)
-    - exposed (bool: depth > 0)
-    - depth_value (float or None)
-    - velocity_value (float or None)
-    - arrival_value (float or None)
-    - sampling_method (str)
-    - category (str)
+    Calculate and return roads GeoJSON with exposure screening attributes.
+    Supports hazard_source ('sample_hidkal' or 'anuga_hidkal_pilot') and configurable threshold.
     """
     global _exposure_roads_cache
+    h_src = hazard_source or "sample_hidkal"
+    t_val = float(threshold) if threshold is not None else (0.10 if h_src == "anuga_hidkal_pilot" else 0.0)
+
     raw_roads = load_raw_roads()
     _, roads_path = resolve_vector_file("roads")
     roads_mtime = roads_path.stat().st_mtime if roads_path else 0.0
 
-    sampler = RasterSampler()
-    cache_key = (roads_mtime, *sampler.mtimes)
+    sampler = RasterSampler(hazard_source=h_src, threshold=t_val)
+    cache_key = (h_src, t_val, roads_mtime, *sampler.mtimes)
 
     if _exposure_roads_cache is not None and _exposure_roads_cache[0] == cache_key:
         return _exposure_roads_cache[1]
+
+    disclaimer_text = (
+        "Hypothetical ANUGA pilot screening — not a forecast or validated Hidkal prediction. Assumed vertical units from source interpretation."
+        if h_src == "anuga_hidkal_pilot"
+        else "preliminary exposure screening based on unverified sample rasters"
+    )
 
     features = []
     for feat in raw_roads["features"]:
@@ -446,17 +512,20 @@ def get_exposure_roads() -> Dict[str, Any]:
 
         if geom_json:
             geom_obj = shape(geom_json)
-            assessed, exposed, d_val, v_val, a_val, method = sample_geometry_exposure(geom_obj, sampler)
+            assessed, exposed, d_val, v_val, a_val, is_init_wet, method = sample_geometry_exposure(geom_obj, sampler)
         else:
-            assessed, exposed, d_val, v_val, a_val, method = False, False, None, None, None, "no_geometry"
+            assessed, exposed, d_val, v_val, a_val, is_init_wet, method = False, False, None, None, None, False, "no_geometry"
 
+        props["hazard_source"] = h_src
+        props["screening_threshold"] = t_val
         props["assessed"] = assessed
         props["exposed"] = exposed
         props["depth_value"] = d_val
         props["velocity_value"] = v_val
         props["arrival_value"] = a_val
+        props["is_initially_wet"] = is_init_wet
         props["sampling_method"] = method
-        props["preliminary_screening_note"] = "preliminary exposure screening based on unverified sample rasters"
+        props["preliminary_screening_note"] = disclaimer_text
 
         features.append({
             "type": "Feature",
@@ -472,22 +541,25 @@ def get_exposure_roads() -> Dict[str, Any]:
     return result
 
 
-def get_exposure_summary() -> ExposureSummaryResponse:
+def get_exposure_summary(hazard_source: str = "sample_hidkal", threshold: float = 0.0) -> ExposureSummaryResponse:
     """
     Compute Exposure Summary including total, assessed, exposed, not-exposed,
-    and not-assessed counts, plus category breakdowns for assets and roads.
+    and not-assessed counts, plus category breakdowns and reservoir partitioning.
     """
     global _exposure_summary_cache
-    assets_exp = get_exposure_assets()
-    roads_exp = get_exposure_roads()
+    h_src = hazard_source or "sample_hidkal"
+    t_val = float(threshold) if threshold is not None else (0.10 if h_src == "anuga_hidkal_pilot" else 0.0)
+
+    assets_exp = get_exposure_assets(hazard_source=h_src, threshold=t_val)
+    roads_exp = get_exposure_roads(hazard_source=h_src, threshold=t_val)
 
     _, assets_path = resolve_vector_file("assets")
     _, roads_path = resolve_vector_file("roads")
     assets_mtime = assets_path.stat().st_mtime if assets_path else 0.0
     roads_mtime = roads_path.stat().st_mtime if roads_path else 0.0
 
-    sampler = RasterSampler()
-    cache_key = (assets_mtime, roads_mtime, *sampler.mtimes)
+    sampler = RasterSampler(hazard_source=h_src, threshold=t_val)
+    cache_key = (h_src, t_val, assets_mtime, roads_mtime, *sampler.mtimes)
 
     if _exposure_summary_cache is not None and _exposure_summary_cache[0] == cache_key:
         return _exposure_summary_cache[1]
@@ -512,6 +584,7 @@ def get_exposure_summary() -> ExposureSummaryResponse:
     asset_exposed = 0
     asset_not_exposed = 0
     asset_not_assessed = 0
+    asset_init_wet = 0
 
     for feat in assets_exp["features"]:
         props = feat["properties"]
@@ -521,9 +594,13 @@ def get_exposure_summary() -> ExposureSummaryResponse:
 
         assessed = bool(props.get("assessed", False))
         exposed = bool(props.get("exposed", False))
+        is_init = bool(props.get("is_initially_wet", False))
 
         asset_total += 1
         asset_by_cat[cat].total += 1
+
+        if is_init:
+            asset_init_wet += 1
 
         if assessed:
             asset_assessed += 1
@@ -554,6 +631,7 @@ def get_exposure_summary() -> ExposureSummaryResponse:
     road_exposed = 0
     road_not_exposed = 0
     road_not_assessed = 0
+    road_init_wet = 0
 
     for feat in roads_exp["features"]:
         props = feat["properties"]
@@ -563,9 +641,13 @@ def get_exposure_summary() -> ExposureSummaryResponse:
 
         assessed = bool(props.get("assessed", False))
         exposed = bool(props.get("exposed", False))
+        is_init = bool(props.get("is_initially_wet", False))
 
         road_total += 1
         road_by_cat[cat].total += 1
+
+        if is_init:
+            road_init_wet += 1
 
         if assessed:
             road_assessed += 1
@@ -589,11 +671,28 @@ def get_exposure_summary() -> ExposureSummaryResponse:
         by_category=road_by_cat,
     )
 
+    if h_src == "anuga_hidkal_pilot":
+        disclaimer = "Hypothetical ANUGA pilot screening — not a forecast or validated Hidkal prediction. Assumed vertical units from source interpretation."
+        unit_status = "assumed metres based on source interpretation"
+        run_id = "anuga_hidkal_pilot_hypothetical_v1"
+    else:
+        disclaimer = "preliminary exposure screening based on unverified sample rasters. Not a validated hydrodynamic risk assessment or damage analysis."
+        unit_status = "unverified"
+        run_id = None
+
     response = ExposureSummaryResponse(
-        disclaimer="preliminary exposure screening based on unverified sample rasters. Not a validated hydrodynamic risk assessment or damage analysis.",
+        hazard_source=h_src,
+        run_id=run_id,
+        screening_threshold=t_val,
+        unit_status=unit_status,
+        disclaimer=disclaimer,
         methodology_note="Point sampling for points; representative-point/midpoint geometric screening for polygons and lines.",
         assets=assets_summary,
         roads=roads_summary,
+        initially_wet_reservoir_assets=asset_init_wet if h_src == "anuga_hidkal_pilot" else None,
+        initially_wet_reservoir_roads=road_init_wet if h_src == "anuga_hidkal_pilot" else None,
+        newly_inundated_assets=(asset_exposed - asset_init_wet) if h_src == "anuga_hidkal_pilot" else None,
+        newly_inundated_roads=(road_exposed - road_init_wet) if h_src == "anuga_hidkal_pilot" else None,
     )
 
     _exposure_summary_cache = (cache_key, response)
