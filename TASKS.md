@@ -268,3 +268,25 @@ Automated dam-break framework comparing SPH and Delft3D, with inundation, damage
   - [x] Generated `validation/anuga_dam_break/manifest.json` tracking SHA-256 hashes of `run_benchmark.py`, `centerline_t40s.csv`, and `benchmark_summary.json`.
   - [x] Excluded heavy binary SWW simulation files from git tracking via `.gitignore`.
   - [x] Added `backend/tests/test_anuga_benchmark.py` (4 automated tests) verifying manifest checksums, diagnostic bounds, centerline CSV integrity, and Ritter analytical limits. All 83 backend pytest tests passing.
+
+---
+
+## Phase 15: ANUGA Regional Pilot Simulation (Hidkal / Ghataprabha Basin) [COMPLETED]
+- [x] Topographic Preprocessing & Coordinate Reprojection:
+  - [x] Verified raw DEM SHA-256 hash (`ed4c97474857ef24845f0954baa36b8de2555ccc2a0d468cfa99fdd39fab5baf`).
+  - [x] Reprojected DEM from EPSG:4326 to **EPSG:32643** (UTM Zone 43N) at $50\text{ m}$ resolution without modifying raw files.
+  - [x] Filled boundary NaNs via nearest-neighbor distance transform to guarantee 100% finite elevation grid ($600.00\text{ m}$ to $682.31\text{ m}$).
+- [x] Regional Pilot Model Specification (`validation/anuga_hidkal_pilot/`):
+  - [x] `scenario_config.yml`: Explicit assumption metadata, unverified elevation unit/datum warnings, $200\text{ m}$ breach opening, $660.0\text{ m}$ assumed reservoir stage, $n = 0.035$, $0.10\text{ m}$ arrival threshold.
+  - [x] Unstructured triangular mesh: $120 \times 88$ grid cells ($21,120$ triangles, $663.0\text{ km}^2$ domain) adhering to laptop-safe computational guards.
+  - [x] Boundary conditions: Solid reflective on north/south/west watersheds; open transmissive discharge boundary on eastern downstream river valley.
+- [x] Numerical Simulation Execution & Diagnostics:
+  - [x] Initialized and executed ANUGA C-accelerated SWE solver for $T = 1800\text{ s}$ ($30\text{ min}$, $31$ yield steps) in $7.27\text{ s}$ wall time.
+  - [x] Mass balance conservation: Initial stored volume $356.48\text{ MCM} \to$ Final volume $356.48\text{ MCM}$ ($9.20 \times 10^{-15}$ relative difference).
+  - [x] Finite numerics: 100% finite stage, elevation, and momentum across all timesteps.
+- [x] Output Post-Processing & GeoTIFF Export:
+  - [x] Derived peak inundation depth ($24.83\text{ m}$), peak flow velocity ($12.84\text{ m/s}$), inundated area ($197.62\text{ km}^2$), and arrival time range ($0.0\text{ s} - 1800.0\text{ s}$).
+  - [x] Exported GeoTIFFs (`anuga_hidkal_pilot_depth.tif`, `velocity.tif`, `arrival.tif`) in EPSG:32643 under ignored output directory.
+  - [x] Structured numerical summary (`pilot_summary.json`) and SHA-256 cryptographic manifest (`manifest.json`).
+- [x] Automated Unit Tests (`backend/tests/test_anuga_hidkal_pilot.py`):
+  - [x] Added 4 tests validating manifest checksums, honesty status tags (`hypothetical_unverified`), numerical bounds, and GeoTIFF metadata. All 87 backend pytest tests passing.

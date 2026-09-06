@@ -8,4 +8,6 @@ dependencies:
   - scipy
   - matplotlib
   - netcdf4
+  - pyyaml
+  - rasterio
   - pytest

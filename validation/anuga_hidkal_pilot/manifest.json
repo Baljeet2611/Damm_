@@ -1,0 +1,13 @@
+{
+  "manifest_version": "1.0",
+  "scenario_id": "anuga_hidkal_pilot_hypothetical_v1",
+  "generated_at": "2026-09-06T09:49:02Z",
+  "files": {
+    "scenario_config.yml": "2af7d4b27e2b7c7e82059af9e4eb1c854033f521d1a4b0e9dbde6a8d802404bb",
+    "preprocess_dem.py": "200bc1d154400cd68b00490c23388f86aebabc3b528f375060af83ad7a30ef39",
+    "run_anuga_pilot.py": "3f054fefe1af2e4dd4e133304270005581657e9ec997563351429648682022e5",
+    "postprocess_outputs.py": "ea889c924f3007b1c4febf36bda4663730b5980ff8fe8ed67f3ddea92ba1fda3",
+    "breach_diagnostics.json": "f8839c50985fe9106e12740b7c33d5775ff2e5b5c28057332522e2aa21596ef4",
+    "pilot_summary.json": "0e589561868922e33412c480701576fd05fd388b1c7732402a21ff78ab0cf5b8"
+  }
+}

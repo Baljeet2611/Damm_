@@ -1,0 +1,26 @@
+{
+  "scenario_id": "anuga_hidkal_pilot_hypothetical_v1",
+  "scenario_status": "hypothetical_unverified",
+  "effective_breach_width_m": 200.0,
+  "mesh_resolution_dx_m": 200.0,
+  "dam_crest_elevation_assumed_m": 675.0,
+  "assumed_reservoir_stage_m": 660.0,
+  "breach_coordinates_utm43n": {
+    "dam_axis_x_m": 462600.0,
+    "breach_center_y_m": 1792000.0,
+    "breach_y_min_m": 1791900.0,
+    "breach_y_max_m": 1792100.0
+  },
+  "hydraulic_flux_summary": {
+    "peak_breach_discharge_m3ps": 9794.37,
+    "cumulative_breach_released_volume_assumed_m3": 14348619.3,
+    "cumulative_breach_released_volume_assumed_mcm": 14.349,
+    "non_breach_leakage_volume_assumed_m3": 9218.523,
+    "leakage_percentage": 0.064247,
+    "non_breach_dam_leakage_volume_assumed_m3": 9218.523,
+    "north_perimeter_leakage_volume_assumed_m3": 0.0,
+    "south_perimeter_leakage_volume_assumed_m3": 0.0,
+    "west_boundary_leakage_volume_assumed_m3": 0.0,
+    "numerical_containment_status": "VERIFIED_NEGLIGIBLE_LEAKAGE"
+  }
+}

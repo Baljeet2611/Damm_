@@ -1,0 +1,118 @@
+{
+  "scenario_id": "anuga_hidkal_pilot_hypothetical_v1",
+  "scenario_status": "hypothetical_unverified",
+  "timestamp_utc": "2026-09-06T09:49:02Z",
+  "solver": {
+    "name": "ANUGA Shallow Water Finite-Volume Solver",
+    "version": "0.0.0+unknown",
+    "governing_equations": "2D Non-linear Shallow Water Equations",
+    "discretization": "Unstructured Triangular Finite-Volume Method",
+    "flow_algorithm": "DE0 Finite-Volume Method",
+    "cfl_target": 0.9
+  },
+  "assumptions": {
+    "dem_vertical_datum": "unverified",
+    "elevation_units_statement": "assumed metres based on source interpretation",
+    "reservoir_pool_level_assumed_m": 660.0,
+    "dam_crest_elevation_assumed_m": 675.0,
+    "dam_breach_geometry": "hypothetical_pilot_instantaneous_200m_opening_in_raised_embankment",
+    "manning_roughness": 0.035
+  },
+  "breach_mechanics": {
+    "scenario_id": "anuga_hidkal_pilot_hypothetical_v1",
+    "scenario_status": "hypothetical_unverified",
+    "effective_breach_width_m": 200.0,
+    "mesh_resolution_dx_m": 200.0,
+    "dam_crest_elevation_assumed_m": 675.0,
+    "assumed_reservoir_stage_m": 660.0,
+    "breach_coordinates_utm43n": {
+      "dam_axis_x_m": 462600.0,
+      "breach_center_y_m": 1792000.0,
+      "breach_y_min_m": 1791900.0,
+      "breach_y_max_m": 1792100.0
+    },
+    "hydraulic_flux_summary": {
+      "peak_breach_discharge_m3ps": 9794.37,
+      "cumulative_breach_released_volume_assumed_m3": 14348619.3,
+      "cumulative_breach_released_volume_assumed_mcm": 14.349,
+      "non_breach_leakage_volume_assumed_m3": 9218.523,
+      "leakage_percentage": 0.064247,
+      "non_breach_dam_leakage_volume_assumed_m3": 9218.523,
+      "north_perimeter_leakage_volume_assumed_m3": 0.0,
+      "south_perimeter_leakage_volume_assumed_m3": 0.0,
+      "west_boundary_leakage_volume_assumed_m3": 0.0,
+      "numerical_containment_status": "VERIFIED_NEGLIGIBLE_LEAKAGE"
+    }
+  },
+  "spatial_parameters": {
+    "projected_crs": "EPSG:32643",
+    "domain_extent_km2": 663.0,
+    "output_grid_resolution_m": 100.0,
+    "grid_dimensions": [
+      222,
+      301
+    ],
+    "bounds_utm43n": [
+      457200.0,
+      1782250.0,
+      487200.0,
+      1804350.0
+    ],
+    "reprojection_filled_cells_excluded": true,
+    "reprojection_filled_cells_wetted_count": 0
+  },
+  "computational_statistics": {
+    "runtime_seconds": 11.302,
+    "simulated_duration_sec": 1800.0,
+    "saved_yield_frames": 31,
+    "internal_computational_steps": 34,
+    "internal_timestep_min_sec": null,
+    "internal_timestep_max_sec": null,
+    "is_finite_numerics": true
+  },
+  "boundary_analysis": {
+    "boundary_interaction_occurred": false,
+    "min_distance_to_west_boundary_m": 5433.3,
+    "min_distance_to_east_boundary_m": 19633.3,
+    "min_distance_to_south_boundary_m": 8337.7,
+    "min_distance_to_north_boundary_m": 10078.9,
+    "boundary_isolation_verified": true,
+    "boundary_interaction_statement": "no >=0.1 assumed-metre wetting detected within 5.43 km of the boundary"
+  },
+  "area_partitioning_km2": {
+    "initial_reservoir_wet_area_km2": 29.5,
+    "max_total_inundated_area_km2": 44.82,
+    "newly_inundated_area_km2": 15.32
+  },
+  "volume_conservation": {
+    "initial_volume_assumed_m3": 317161860.23,
+    "final_volume_assumed_m3": 317161860.23,
+    "volume_difference_assumed_m3": -0.0,
+    "relative_volume_error": 3.9e-15,
+    "conservation_statement": "Volume conserved within numerical precision (relative difference < 1e-12)"
+  },
+  "inundation_results": {
+    "max_water_depth_assumed_m": 25.898,
+    "mean_wet_depth_assumed_m": 7.782,
+    "max_flow_velocity_mps": 11.638,
+    "mean_wet_velocity_mps": 1.34,
+    "arrival_time_description": "model-derived first detected arrival at 60 s output resolution",
+    "newly_wetted_arrival_time_range_sec": [
+      60.0,
+      1800.0
+    ],
+    "arrival_depth_threshold_m": 0.1,
+    "initial_reservoir_arrival_encoded_value": 0.0,
+    "unflooded_nodata_value": 9999.0
+  },
+  "numerical_integrity": {
+    "is_finite": true,
+    "non_negative_depth": true,
+    "spatial_coverage_non_empty": true,
+    "reprojection_filled_cells_isolated": true
+  },
+  "verdict": {
+    "status": "PILOT_SIMULATION_SUCCESSFUL",
+    "scientific_disclosure": "Real ANUGA finite-volume regional pilot model executed over Ghataprabha topography. Explicit physical barrier confines water release exclusively to the 200 m breach opening. Inputs and breach conditions remain hypothetical unverified research assumptions. Volume is conserved within numerical precision with no >=0.1 assumed-metre wetting detected within 1.54 km of the boundary."
+  }
+}

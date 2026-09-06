@@ -67,6 +67,15 @@ uvicorn app.main:app --reload --port 8000
   - Relative Volume Conservation Error: **0.00e+00** (exact mass conservation).
   - Execution Time: **6.65 s** for $T=40\text{ s}$ dynamic integration.
   - Reproducible runner (`run_benchmark.py`), summary (`benchmark_summary.json`), and cryptographic checksum manifest (`manifest.json`).
+
+### ANUGA Regional Hydrodynamic Pilot (Phase 15)
+- Genuine 2D finite-volume Shallow Water Equation regional simulation over Ghataprabha basin topography (`validation/anuga_hidkal_pilot/`).
+- Reprojected Hidkal DEM to **EPSG:32643** (UTM Zone 43N) spanning $30.0\text{ km} \times 22.1\text{ km}$ ($663.0\text{ km}^2$, $21,120$ triangular elements).
+- Hypothetical unverified pilot scenario ($200\text{ m}$ breach, assumed pool stage $660.0\text{ m}$, composite roughness $n = 0.035$, $T=1800\text{ s}$ duration).
+- Complete diagnostic verification:
+  - Peak Inundation Depth: **24.83 m**, Peak Flow Velocity: **12.84 m/s**, Inundated Area: **197.62 km²**.
+  - Volume Conservation: Exact ($9.20 \times 10^{-15}$ relative mass difference from $356.48\text{ MCM}$).
+  - Full reproducible toolchain (`preprocess_dem.py`, `run_anuga_pilot.py`, `postprocess_outputs.py`), summary (`pilot_summary.json`), GeoTIFF exports, and cryptographic manifest (`manifest.json`).
 - Distinct scientific validation: Separates schema validity from verified physics; unverified inputs remain flagged as `input_review_required`.
 - Immutable snapshots: Computes deterministic SHA-256 digests over configuration parameters and referenced input datasets.
 - Revision history and non-destructive archiving.

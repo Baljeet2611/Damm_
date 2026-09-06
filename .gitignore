@@ -64,6 +64,8 @@ exports/
 simulations/
 runs/
 validation/anuga_dam_break/output/
+validation/anuga_hidkal_pilot/output/
+validation/**/output/
 validation_output/
 *.sww
 *.tif
