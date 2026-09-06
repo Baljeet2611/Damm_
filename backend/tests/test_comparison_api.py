@@ -1,9 +1,9 @@
 import json
 import numpy as np
+from affine import Affine
 from fastapi.testclient import TestClient
 
 import rasterio
-from rasterio.transform import from_origin
 
 from app.main import app
 
@@ -83,7 +83,7 @@ def test_comparison_with_synthesized_compatible_runs(tmp_path, monkeypatch):
     (s_dir / "run_manifest.json").write_text(json.dumps(s_manifest), encoding="utf-8")
 
     # Create synthetic GeoTIFFs (50x50 cells around 74.65 Lon, 16.20 Lat)
-    transform = from_origin(74.65, 16.25, 0.001, 0.001)
+    transform = Affine(0.001, 0.0, 74.65, 0.0, -0.001, 16.25)
     
     # Delft array: 50x50 with flood depth ~2.0m in center
     arr_d_depth = np.zeros((50, 50), dtype=np.float32)

@@ -342,7 +342,7 @@ class RasterSampler:
         if not (self.bounds.left <= x_samp <= self.bounds.right and self.bounds.bottom <= y_samp <= self.bounds.top):
             return False, False, None, None, None, False
 
-        col, row = [int(v) for v in self.inv_transform * (x_samp, y_samp)]
+        col, row = [int(v) for v in self.inv_transform @ (x_samp, y_samp)]
         # Clamp boundary edges
         if col >= self.width:
             col = self.width - 1

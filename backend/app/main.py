@@ -121,6 +121,9 @@ from app.onboarding_service import (
     get_dam_project_dem_metadata,
     get_dam_project_dem_point_value,
     get_dam_project_dem_tile,
+    get_dam_project_dam_axis_geometry,
+    get_dam_project_reservoir_geometry,
+    get_dam_project_breach_geometry,
 )
 
 logger = logging.getLogger("app.main")
@@ -845,4 +848,31 @@ def get_dam_project_dem_tile_endpoint(
         media_type="image/png",
         headers={"Cache-Control": "public, max-age=3600"},
     )
+
+
+@app.get(
+    "/api/dam-projects/{project_id}/geometry/dam-axis",
+    summary="Get reprojected dam axis vector geometry (EPSG:4326)",
+    description="Returns EPSG:4326 GeoJSON FeatureCollection of the user-supplied dam axis.",
+)
+def get_dam_project_dam_axis_geometry_endpoint(project_id: str) -> Dict[str, Any]:
+    return get_dam_project_dam_axis_geometry(project_id)
+
+
+@app.get(
+    "/api/dam-projects/{project_id}/geometry/reservoir",
+    summary="Get reprojected reservoir boundary vector geometry (EPSG:4326)",
+    description="Returns EPSG:4326 GeoJSON FeatureCollection of the user-supplied reservoir pool boundary.",
+)
+def get_dam_project_reservoir_geometry_endpoint(project_id: str) -> Dict[str, Any]:
+    return get_dam_project_reservoir_geometry(project_id)
+
+
+@app.get(
+    "/api/dam-projects/{project_id}/geometry/breach",
+    summary="Get hypothetical breach location Point geometry (EPSG:4326)",
+    description="Returns EPSG:4326 GeoJSON FeatureCollection containing a single Point representing the hypothetical breach center.",
+)
+def get_dam_project_breach_geometry_endpoint(project_id: str) -> Dict[str, Any]:
+    return get_dam_project_breach_geometry(project_id)
 

@@ -74,6 +74,9 @@ export interface DamProjectSummary {
   project_id: string
   project_name: string
   status: string
+  available: boolean
+  integrity_status: string
+  integrity_error?: string | null
   created_at: string
   crs: string
   bounds: RasterBounds

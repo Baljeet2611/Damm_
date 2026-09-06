@@ -526,7 +526,7 @@ def get_anuga_raster_point_value(
                 detail=f"Transformed coordinates ({x_utm:.1f}, {y_utm:.1f}) are outside raster bounds."
             )
 
-        col, row = [int(v) for v in (~src.transform) * (x_utm, y_utm)]
+        col, row = [int(v) for v in (~src.transform) @ (x_utm, y_utm)]
         col = min(max(col, 0), src.width - 1)
         row = min(max(row, 0), src.height - 1)
 

@@ -18,7 +18,7 @@ import json
 import pytest
 import numpy as np
 import rasterio
-from rasterio.transform import from_origin
+from affine import Affine
 from fastapi.testclient import TestClient
 
 from app.main import app
@@ -40,7 +40,7 @@ def create_test_geotiff_bytes(
 ) -> bytes:
     """Create in-memory GeoTIFF bytes for testing."""
     buf = io.BytesIO()
-    transform = from_origin(origin_x, origin_y, res, res)
+    transform = Affine(res, 0.0, origin_x, 0.0, -res, origin_y)
     profile = {
         "driver": "GTiff",
         "height": height,

@@ -656,6 +656,9 @@ class DamProjectSummary(BaseModel):
     project_id: str
     project_name: str
     status: str = "validated_unverified"
+    available: bool = True
+    integrity_status: str = "integrity_ok"
+    integrity_error: Optional[str] = None
     created_at: str
     crs: str
     bounds: RasterBounds

@@ -3,7 +3,8 @@ import maplibregl, { Map as MapLibreMap, Marker, Popup } from 'maplibre-gl'
 import 'maplibre-gl/dist/maplibre-gl.css'
 import './App.css'
 import { DamOnboardingPanel } from './components/onboarding/DamOnboardingPanel'
-import { getDamProjectDemTileUrl } from './api/damProjects'
+import { DamProjectMapLegend } from './components/onboarding/DamProjectMapLegend'
+import { useDamProjectMap } from './components/onboarding/useDamProjectMap'
 import type { DamProjectSummary, DamProjectDetailResponse } from './types/damProjects'
 
 type LayerId = 'dem' | 'depth' | 'velocity' | 'arrival'
@@ -522,9 +523,15 @@ function App() {
   const [exportError, setExportError] = useState<string | null>(null)
   const [exportSuccessMsg, setExportSuccessMsg] = useState<string | null>(null)
 
+  // Custom Onboarded Dam Project Map Visualization Hook
+  const [activeCustomDamProject, setActiveCustomDamProject] = useState<DamProjectSummary | DamProjectDetailResponse | null>(null)
+  const { displayDamProjectOnMap, clearDamProjectMap } = useDamProjectMap(mapRef)
+
   // Handle Hazard Source Switching with explicit state clearing to prevent stale data bleed
   const handleHazardSourceChange = (newSource: 'sample_hidkal' | 'anuga_hidkal_pilot' | 'anuga_hidkal_refined') => {
     if (newSource === hazardSource) return
+    clearDamProjectMap()
+    setActiveCustomDamProject(null)
     setHazardSource(newSource)
     setLegend(null)
     setDamageResult(null)
@@ -533,43 +540,15 @@ function App() {
     setExposureSummary(null)
   }
 
-  const handleDisplayProjectDem = (project: DamProjectSummary | DamProjectDetailResponse) => {
-    const map = mapRef.current
-    if (!map) return
+  const handleDisplayProjectDem = async (project: DamProjectSummary | DamProjectDetailResponse) => {
+    setActiveCustomDamProject(project)
+    await displayDamProjectOnMap(project)
+  }
 
-    const sourceId = 'custom-dem-tiles-source'
-    const layerId = 'custom-dem-tiles-layer'
-    const tileUrl = getDamProjectDemTileUrl(project.project_id)
-
-    if (map.getLayer(layerId)) {
-      map.removeLayer(layerId)
-    }
-    if (map.getSource(sourceId)) {
-      map.removeSource(sourceId)
-    }
-
-    const b = 'bounds' in project ? project.bounds : project.raster_metadata?.bounds
-    if (b && b.left < b.right && b.bottom < b.top) {
-      if (b.left >= -180 && b.right <= 180 && b.bottom >= -90 && b.top <= 90) {
-        map.fitBounds([[b.left, b.bottom], [b.right, b.top]], { padding: 40 })
-      }
-    }
-
-    map.addSource(sourceId, {
-      type: 'raster',
-      tiles: [tileUrl],
-      tileSize: 256,
-    })
-
-    map.addLayer({
-      id: layerId,
-      type: 'raster',
-      source: sourceId,
-      paint: {
-        'raster-opacity': 0.85,
-        'raster-fade-duration': 150,
-      },
-    })
+  const handleCloseCustomDamView = () => {
+    clearDamProjectMap()
+    setActiveCustomDamProject(null)
+    fitToHidkal()
   }
 
   const apiBaseUrl = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'
@@ -1946,6 +1925,14 @@ function App() {
       {/* Main Workspace with Map & Floating Panels */}
       <main className="map-workspace">
         <div ref={mapContainerRef} className="map-canvas" id="map-container" />
+
+        {/* Active Custom Dam Project Legend & Scientific Notice Overlay */}
+        {activeCustomDamProject && (
+          <DamProjectMapLegend
+            project={activeCustomDamProject}
+            onClose={handleCloseCustomDamView}
+          />
+        )}
 
         {/* Route Picking Mode Indicator Banner */}
         {routePickMode && (

@@ -763,6 +763,96 @@ def save_dam_project(
     return DamProjectDetailResponse(**project_dict)
 
 
+def verify_project_integrity(project_id: str) -> Dict[str, Any]:
+    """
+    Validates project UUID, verifies the physical directory, reads manifest.json,
+    and recalculates SHA-256 for each registered file.
+    Raises sanitized HTTP 409 if any file is missing, modified, or corrupted.
+    Never exposes absolute paths or tracebacks.
+    Returns the parsed manifest dictionary.
+    """
+    valid_id = validate_project_uuid(project_id)
+    proj_dir = get_dam_projects_dir() / valid_id
+    if not proj_dir.is_dir():
+        raise HTTPException(status_code=404, detail=f"Dam project '{valid_id}' not found.")
+
+    manifest_path = proj_dir / "manifest.json"
+    if not manifest_path.is_file():
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "project_integrity_failed",
+                "message": f"Project integrity manifest is missing for project '{valid_id}'."
+            },
+        )
+
+    try:
+        manifest_data = json.loads(manifest_path.read_text(encoding="utf-8"))
+        files_dict = manifest_data.get("files", {})
+        if not files_dict:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "project_integrity_failed",
+                    "message": f"Manifest contains no recorded file hashes for project '{valid_id}'."
+                },
+            )
+
+        for rel_name, expected_sha in files_dict.items():
+            # Security check on manifest filenames: prevent traversal
+            if ".." in rel_name or "/" in rel_name or "\\" in rel_name:
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "code": "project_integrity_failed",
+                        "message": f"Manifest contains invalid file reference '{rel_name}'."
+                    },
+                )
+            target_file = proj_dir / rel_name
+            if not target_file.is_file():
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "code": "project_integrity_failed",
+                        "message": f"Registered file '{rel_name}' is missing in project '{valid_id}'."
+                    },
+                )
+            computed_sha = compute_file_sha256(target_file)
+            if computed_sha != expected_sha:
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "code": "project_integrity_failed",
+                        "message": f"SHA-256 integrity check failed for file '{rel_name}' in project '{valid_id}'."
+                    },
+                )
+
+        return manifest_data
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "project_integrity_failed",
+                "message": f"Integrity verification encountered an unreadable file or manifest in project '{valid_id}'."
+            },
+        )
+
+
+def check_project_integrity_safe(project_id: str) -> Tuple[bool, Optional[str]]:
+    """Safe integrity check for listing projects without raising exceptions."""
+    try:
+        verify_project_integrity(project_id)
+        return True, None
+    except HTTPException as e:
+        if isinstance(e.detail, dict):
+            return False, e.detail.get("message", "Integrity check failed")
+        return False, str(e.detail)
+    except Exception:
+        return False, "Project files are unreadable or corrupted"
+
+
 def list_dam_projects() -> List[DamProjectSummary]:
     """List all registered custom dam projects from runtime storage."""
     base_dir = get_dam_projects_dir()
@@ -783,11 +873,24 @@ def list_dam_projects() -> List[DamProjectSummary]:
                     if manifest_json.is_file():
                         manifest_hash = compute_file_sha256(manifest_json) or ""
 
+                    p_id = data.get("project_id", entry.name)
+                    is_intact, integrity_err = check_project_integrity_safe(p_id)
+
+                    notes = [
+                        "Custom user-onboarded dam dataset",
+                        "Validated geometry and parameter bounds; unverified physical datum",
+                    ]
+                    if not is_intact:
+                        notes.append(f"Integrity check failed: {integrity_err}")
+
                     results.append(
                         DamProjectSummary(
-                            project_id=data.get("project_id", entry.name),
+                            project_id=p_id,
                             project_name=data.get("project_name", "Untitled Dam Project"),
-                            status=data.get("status", "validated_unverified"),
+                            status="integrity_failed" if not is_intact else data.get("status", "validated_unverified"),
+                            available=is_intact,
+                            integrity_status="integrity_ok" if is_intact else "integrity_failed",
+                            integrity_error=integrity_err if not is_intact else None,
                             created_at=data.get("created_at", ""),
                             crs=r_meta.get("crs", "UNKNOWN"),
                             bounds=RasterBounds(**bounds_dict),
@@ -797,10 +900,7 @@ def list_dam_projects() -> List[DamProjectSummary]:
                             onboarding_validation_passed=data.get("onboarding_validation_passed", True),
                             scientifically_verified=False,
                             manifest_sha256=manifest_hash,
-                            notes=[
-                                "Custom user-onboarded dam dataset",
-                                "Validated geometry and parameter bounds; unverified physical datum",
-                            ],
+                            notes=notes,
                         )
                     )
                 except Exception:
@@ -812,6 +912,7 @@ def list_dam_projects() -> List[DamProjectSummary]:
 
 def get_dam_project(project_id: str) -> DamProjectDetailResponse:
     """Retrieve full detail for a registered dam project by UUID v4."""
+    manifest_data = verify_project_integrity(project_id)
     valid_id = validate_project_uuid(project_id)
     proj_dir = get_dam_projects_dir() / valid_id
     proj_json = proj_dir / "project.json"
@@ -821,20 +922,7 @@ def get_dam_project(project_id: str) -> DamProjectDetailResponse:
 
     try:
         data = json.loads(proj_json.read_text(encoding="utf-8"))
-        if "manifest" not in data:
-            manifest_json = proj_dir / "manifest.json"
-            if manifest_json.is_file():
-                data["manifest"] = json.loads(manifest_json.read_text(encoding="utf-8"))
-            else:
-                data["manifest"] = {
-                    "manifest_version": "1.0",
-                    "project_id": valid_id,
-                    "project_name": data.get("project_name", ""),
-                    "created_at": data.get("created_at", ""),
-                    "status": data.get("status", "validated_unverified"),
-                    "scientifically_verified": False,
-                    "files": {},
-                }
+        data["manifest"] = manifest_data
         return DamProjectDetailResponse(**data)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to load dam project data: {str(e)}")
@@ -842,6 +930,7 @@ def get_dam_project(project_id: str) -> DamProjectDetailResponse:
 
 def get_dam_project_dem_metadata(project_id: str) -> RasterMetadataResponse:
     """Retrieve raster metadata for an onboarded dam project DEM."""
+    verify_project_integrity(project_id)
     valid_id = validate_project_uuid(project_id)
     dem_path = get_dam_projects_dir() / valid_id / "dem.tif"
 
@@ -881,6 +970,7 @@ def get_dam_project_dem_metadata(project_id: str) -> RasterMetadataResponse:
 
 def get_dam_project_dem_point_value(project_id: str, lon: float, lat: float) -> RasterPointValueResponse:
     """Query single point elevation value on an onboarded dam project DEM."""
+    verify_project_integrity(project_id)
     valid_id = validate_project_uuid(project_id)
     dem_path = get_dam_projects_dir() / valid_id / "dem.tif"
 
@@ -936,6 +1026,7 @@ def get_dam_project_dem_point_value(project_id: str, lon: float, lat: float) -> 
 
 def get_dam_project_dem_tile(project_id: str, z: int, x: int, y: int) -> bytes:
     """Render 256x256 Web Mercator PNG tile for an onboarded dam project DEM."""
+    verify_project_integrity(project_id)
     valid_id = validate_project_uuid(project_id)
     dem_path = get_dam_projects_dir() / valid_id / "dem.tif"
 
@@ -965,3 +1056,199 @@ def get_dam_project_dem_tile(project_id: str, z: int, x: int, y: int) -> bytes:
 
     except Exception:
         return EMPTY_TILE_PNG
+
+
+def get_dam_project_dam_axis_geometry(project_id: str) -> Dict[str, Any]:
+    """Retrieve dam axis geometry as EPSG:4326 GeoJSON FeatureCollection."""
+    verify_project_integrity(project_id)
+    valid_id = validate_project_uuid(project_id)
+    proj_dir = get_dam_projects_dir() / valid_id
+    axis_path = proj_dir / "dam_axis.geojson"
+    proj_json = proj_dir / "project.json"
+
+    if not axis_path.is_file():
+        raise HTTPException(status_code=404, detail=f"Dam axis geometry file not found for project '{valid_id}'.")
+
+    geometry_crs = "EPSG:4326"
+    if proj_json.is_file():
+        try:
+            p_data = json.loads(proj_json.read_text(encoding="utf-8"))
+            geometry_crs = p_data.get("user_provided_metadata", {}).get("geometry_crs", "EPSG:4326")
+        except Exception:
+            pass
+
+    try:
+        axis_raw = json.loads(axis_path.read_text(encoding="utf-8"))
+        features = []
+        if axis_raw.get("type") == "FeatureCollection":
+            features = axis_raw.get("features", [])
+        elif axis_raw.get("type") == "Feature":
+            features = [axis_raw]
+        elif "type" in axis_raw and axis_raw["type"] in ("LineString", "MultiLineString"):
+            features = [{"type": "Feature", "geometry": axis_raw, "properties": {}}]
+
+        src_crs = CRS.from_user_input(geometry_crs)
+        target_crs = CRS.from_user_input("EPSG:4326")
+        needs_transform = (src_crs != target_crs)
+        transformer = Transformer.from_crs(src_crs, target_crs, always_xy=True) if needs_transform else None
+
+        out_features = []
+        for feat in features:
+            geom_dict = feat.get("geometry")
+            if not geom_dict:
+                continue
+            sh_geom = shape(geom_dict)
+            if needs_transform and transformer:
+                sh_geom = shapely_transform(transformer.transform, sh_geom)
+
+            out_features.append({
+                "type": "Feature",
+                "geometry": json.loads(json.dumps(sh_geom.__geo_interface__)),
+                "properties": {
+                    "layer": "dam_axis",
+                    "label": "User-provided Dam Axis",
+                    "provenance": "user_declared_unverified",
+                    "original_crs": geometry_crs,
+                    "simulation_status": "no_simulation_executed",
+                }
+            })
+
+        return {
+            "type": "FeatureCollection",
+            "crs": {"type": "name", "properties": {"name": "urn:ogc:def:crs:OGC:1.3:CRS84"}},
+            "features": out_features,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to process dam axis geometry: {str(e)}")
+
+
+def get_dam_project_reservoir_geometry(project_id: str) -> Dict[str, Any]:
+    """Retrieve reservoir boundary geometry as EPSG:4326 GeoJSON FeatureCollection."""
+    verify_project_integrity(project_id)
+    valid_id = validate_project_uuid(project_id)
+    proj_dir = get_dam_projects_dir() / valid_id
+    res_path = proj_dir / "reservoir_boundary.geojson"
+    proj_json = proj_dir / "project.json"
+
+    if not res_path.is_file():
+        raise HTTPException(status_code=404, detail=f"No reservoir boundary geometry registered for project '{valid_id}'.")
+
+    geometry_crs = "EPSG:4326"
+    if proj_json.is_file():
+        try:
+            p_data = json.loads(proj_json.read_text(encoding="utf-8"))
+            if not p_data.get("reservoir_boundary_file"):
+                raise HTTPException(status_code=404, detail=f"No reservoir boundary geometry registered for project '{valid_id}'.")
+            geometry_crs = p_data.get("user_provided_metadata", {}).get("geometry_crs", "EPSG:4326")
+        except HTTPException:
+            raise
+        except Exception:
+            pass
+
+    try:
+        res_raw = json.loads(res_path.read_text(encoding="utf-8"))
+        features = []
+        if res_raw.get("type") == "FeatureCollection":
+            features = res_raw.get("features", [])
+        elif res_raw.get("type") == "Feature":
+            features = [res_raw]
+        elif "type" in res_raw and res_raw["type"] in ("Polygon", "MultiPolygon"):
+            features = [{"type": "Feature", "geometry": res_raw, "properties": {}}]
+
+        src_crs = CRS.from_user_input(geometry_crs)
+        target_crs = CRS.from_user_input("EPSG:4326")
+        needs_transform = (src_crs != target_crs)
+        transformer = Transformer.from_crs(src_crs, target_crs, always_xy=True) if needs_transform else None
+
+        out_features = []
+        for feat in features:
+            geom_dict = feat.get("geometry")
+            if not geom_dict:
+                continue
+            sh_geom = shape(geom_dict)
+            if needs_transform and transformer:
+                sh_geom = shapely_transform(transformer.transform, sh_geom)
+
+            out_features.append({
+                "type": "Feature",
+                "geometry": json.loads(json.dumps(sh_geom.__geo_interface__)),
+                "properties": {
+                    "layer": "reservoir_boundary",
+                    "label": "User-provided Reservoir Boundary",
+                    "provenance": "user_declared_unverified",
+                    "original_crs": geometry_crs,
+                    "simulation_status": "no_simulation_executed",
+                }
+            })
+
+        return {
+            "type": "FeatureCollection",
+            "crs": {"type": "name", "properties": {"name": "urn:ogc:def:crs:OGC:1.3:CRS84"}},
+            "features": out_features,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to process reservoir boundary geometry: {str(e)}")
+
+
+def get_dam_project_breach_geometry(project_id: str) -> Dict[str, Any]:
+    """Retrieve hypothetical breach location Point as EPSG:4326 GeoJSON FeatureCollection."""
+    verify_project_integrity(project_id)
+    valid_id = validate_project_uuid(project_id)
+    proj_dir = get_dam_projects_dir() / valid_id
+    proj_json = proj_dir / "project.json"
+
+    if not proj_json.is_file():
+        raise HTTPException(status_code=404, detail=f"Dam project '{valid_id}' not found.")
+
+    try:
+        p_data = json.loads(proj_json.read_text(encoding="utf-8"))
+        user_meta = p_data.get("user_provided_metadata", {})
+        breach_params = p_data.get("breach_parameters", {})
+
+        breach_center = user_meta.get("breach_center") or breach_params.get("breach_center")
+        if not breach_center or len(breach_center) != 2:
+            raise HTTPException(status_code=404, detail=f"No breach center coordinates found for project '{valid_id}'.")
+
+        bx, by = float(breach_center[0]), float(breach_center[1])
+        geometry_crs = user_meta.get("geometry_crs", "EPSG:4326")
+
+        src_crs = CRS.from_user_input(geometry_crs)
+        target_crs = CRS.from_user_input("EPSG:4326")
+        if src_crs != target_crs:
+            t = Transformer.from_crs(src_crs, target_crs, always_xy=True)
+            lon_wgs84, lat_wgs84 = t.transform(bx, by)
+        else:
+            lon_wgs84, lat_wgs84 = bx, by
+
+        feature = {
+            "type": "Feature",
+            "geometry": {
+                "type": "Point",
+                "coordinates": [lon_wgs84, lat_wgs84]
+            },
+            "properties": {
+                "layer": "breach_point",
+                "label": "Hypothetical Breach Location",
+                "provenance": "user_declared_unverified",
+                "breach_width_m": breach_params.get("breach_width") or user_meta.get("breach_width"),
+                "reservoir_level": breach_params.get("reservoir_level") or user_meta.get("reservoir_level"),
+                "breach_formation_time_hr": breach_params.get("breach_formation_time_hr") or user_meta.get("breach_formation_time_hr"),
+                "original_coordinates": [bx, by],
+                "original_crs": geometry_crs,
+                "simulation_status": "no_simulation_executed",
+            }
+        }
+
+        return {
+            "type": "FeatureCollection",
+            "crs": {"type": "name", "properties": {"name": "urn:ogc:def:crs:OGC:1.3:CRS84"}},
+            "features": [feature],
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to process breach location geometry: {str(e)}")

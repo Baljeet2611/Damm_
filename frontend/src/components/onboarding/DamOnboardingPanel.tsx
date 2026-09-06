@@ -366,7 +366,7 @@ export const DamOnboardingPanel: React.FC<DamOnboardingPanelProps> = ({ onDispla
                   : '❌ Validation Failed'}
               </span>
               <span className="legend-tag">
-                {validationResult.scientifically_verified ? 'VERIFIED' : 'UNVERIFIED'}
+                UNVERIFIED INPUT
               </span>
             </div>
 
@@ -529,36 +529,67 @@ export const DamOnboardingPanel: React.FC<DamOnboardingPanelProps> = ({ onDispla
             <div className="legend-error">No custom dam projects registered yet.</div>
           ) : (
             <div className="saved-projects-list">
-              {projectsList.map((p) => (
-                <div key={p.project_id} className="saved-project-card">
-                  <div className="saved-project-header">
-                    <span className="saved-project-title">🏷️ {p.project_name}</span>
-                    <span className="saved-project-badge badge-unverified">{p.status}</span>
-                  </div>
+              {projectsList.map((p) => {
+                const isIntegrityFailed = !p.available || p.integrity_status === 'failed' || p.integrity_status === 'corrupted' || p.integrity_status === 'integrity_failed'
+                return (
+                  <div key={p.project_id} className="saved-project-card">
+                    <div className="saved-project-header">
+                      <span className="saved-project-title">🏷️ {p.project_name}</span>
+                      <div style={{ display: 'flex', gap: '0.4rem', alignItems: 'center' }}>
+                        <span className="saved-project-badge badge-unverified">
+                          UNVERIFIED INPUT
+                        </span>
+                        <span className={`saved-project-badge ${isIntegrityFailed ? 'badge-corrupted' : 'badge-ok'}`}>
+                          {isIntegrityFailed ? '❌ Integrity Failed' : '✅ Integrity OK'}
+                        </span>
+                      </div>
+                    </div>
 
-                  <div className="saved-project-details font-mono">
-                    <span>CRS: {p.crs}</span>
-                    <span>Created: {p.created_at ? new Date(p.created_at).toLocaleDateString() : 'N/A'}</span>
-                    <span>Reservoir Vector: {p.has_reservoir_boundary ? 'Yes' : 'None'}</span>
-                  </div>
+                    <div className="saved-project-details font-mono">
+                      <span>CRS: {p.crs}</span>
+                      <span>Created: {p.created_at ? new Date(p.created_at).toLocaleDateString() : 'N/A'}</span>
+                      <span>Reservoir Vector: {p.has_reservoir_boundary ? 'Yes' : 'None'}</span>
+                    </div>
 
-                  <div className="saved-project-actions">
-                    <button
-                      className="btn-project-action"
-                      onClick={() => onDisplayProjectDem && onDisplayProjectDem(p)}
-                      title="Display custom DEM layer on MapLibre view"
-                    >
-                      🗺️ Display DEM on Map
-                    </button>
-                    <button
-                      className="btn-project-action"
-                      onClick={() => setSelectedProjectDetail(selectedProjectDetail?.project_id === p.project_id ? null : (p as any))}
-                    >
-                      📋 Info
-                    </button>
+                    {isIntegrityFailed && (
+                      <div className="damage-error-box font-mono" style={{ padding: '0.35rem 0.5rem', fontSize: '0.72rem' }}>
+                        ⛔ Integrity check failed: {p.integrity_error || 'File SHA-256 hash mismatch or missing files.'}
+                      </div>
+                    )}
+
+                    <div className="saved-project-actions">
+                      <button
+                        className="btn-project-action"
+                        onClick={() => onDisplayProjectDem && onDisplayProjectDem(p)}
+                        disabled={isIntegrityFailed}
+                        title={isIntegrityFailed ? 'Cannot display corrupted project' : 'Display custom DEM, dam axis, reservoir and breach marker on Map'}
+                        style={isIntegrityFailed ? { opacity: 0.4, cursor: 'not-allowed' } : {}}
+                      >
+                        🗺️ View on Map
+                      </button>
+                      <button
+                        className="btn-project-action"
+                        onClick={() => setSelectedProjectDetail(selectedProjectDetail?.project_id === p.project_id ? null : (p as any))}
+                      >
+                        📋 Info
+                      </button>
+                    </div>
+
+                    {selectedProjectDetail?.project_id === p.project_id && (
+                      <div className="val-metadata-grid" style={{ marginTop: '0.4rem' }}>
+                        <div className="val-meta-item" style={{ gridColumn: 'span 2' }}>
+                          <span className="val-meta-label">Project ID</span>
+                          <span className="val-meta-value">{p.project_id}</span>
+                        </div>
+                        <div className="val-meta-item" style={{ gridColumn: 'span 2' }}>
+                          <span className="val-meta-label">Manifest SHA-256</span>
+                          <span className="val-meta-value">{p.manifest_sha256 ? `${p.manifest_sha256.slice(0, 16)}...` : 'N/A'}</span>
+                        </div>
+                      </div>
+                    )}
                   </div>
-                </div>
-              ))}
+                )
+              })}
             </div>
           )}
         </div>
