@@ -1,4 +1,3 @@
-import os
 import io
 import json
 import zipfile
@@ -6,7 +5,6 @@ import pytest
 from unittest.mock import patch, MagicMock
 import subprocess
 from fastapi.testclient import TestClient
-from pathlib import Path
 
 from app.main import app
 

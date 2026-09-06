@@ -6,7 +6,6 @@ tile rendering with bilinear/nearest resampling, and coordinate reprojection.
 """
 
 import io
-import os
 import json
 import hashlib
 from pathlib import Path
@@ -16,7 +15,7 @@ import rasterio
 from PIL import Image
 from pyproj import Transformer
 from rio_tiler.io import Reader
-from rio_tiler.errors import TileOutsideBounds, PointOutsideBounds, RioTilerError
+from rio_tiler.errors import TileOutsideBounds, PointOutsideBounds
 from fastapi import HTTPException
 
 from app.schemas import (

@@ -11,12 +11,10 @@ from app.main import app
 from app.raster_service import (
     set_registered_datasets,
     reset_registered_datasets,
-    clear_cache as clear_raster_cache,
 )
 from app.vector_service import (
     set_registered_vector_datasets,
     reset_registered_vector_datasets,
-    clear_vector_cache,
 )
 from app.damage_service import (
     interpolate_damage_ratio,

@@ -10,8 +10,6 @@ from app.main import app
 from app.raster_service import (
     set_registered_datasets,
     reset_registered_datasets,
-    clear_cache,
-    DEFAULT_REGISTERED_DATASETS,
 )
 
 client = TestClient(app)

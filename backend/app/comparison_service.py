@@ -15,16 +15,15 @@ SCIENTIFIC CONSTRAINTS & HONEST BENCHMARKING:
    without altering original run artifacts.
 """
 
-import os
 import json
 import logging
 from pathlib import Path
-from typing import Dict, Any, List, Optional, Tuple
+from typing import List, Optional
 import numpy as np
 
 try:
     import rasterio
-    from rasterio.warp import calculate_default_transform, reproject, Resampling
+    from rasterio.warp import reproject, Resampling
     from rasterio.crs import CRS
     RASTERIO_AVAILABLE = True
 except ImportError:
@@ -37,8 +36,8 @@ from app.schemas import (
     RasterMetricStats,
     MethodologyComparisonResponse,
 )
-from app.simulation_service import list_simulation_runs, get_simulation_run
-from app.sph_service import list_sph_runs, get_sph_run, SPH_RUNS_DIR
+from app.simulation_service import list_simulation_runs
+from app.sph_service import list_sph_runs, SPH_RUNS_DIR
 
 logger = logging.getLogger(__name__)
 

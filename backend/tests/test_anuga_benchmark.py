@@ -4,10 +4,8 @@ Validates the benchmark manifest checksums, result summary parser, centerline CS
 and Ritter analytical solution verification.
 """
 
-import os
 import sys
 import json
-import hashlib
 from pathlib import Path
 import numpy as np
 import pytest

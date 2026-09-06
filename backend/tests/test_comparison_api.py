@@ -1,17 +1,11 @@
-import os
 import json
-import pytest
-from unittest.mock import patch
 import numpy as np
-from pathlib import Path
 from fastapi.testclient import TestClient
 
 import rasterio
 from rasterio.transform import from_origin
 
 from app.main import app
-from app.simulation_service import get_runs_dir
-from app.sph_service import get_sph_runs_dir
 
 client = TestClient(app)
 

@@ -505,6 +505,12 @@ function App() {
     routePickModeRef.current = routePickMode
   }, [routePickMode])
 
+  // Ref to track opacity without triggering unnecessary raster layer recreation
+  const opacityRef = useRef<number>(opacity)
+  useEffect(() => {
+    opacityRef.current = opacity
+  }, [opacity])
+
   // Phase 9: Geospatial Export State
   const [exportLayer, setExportLayer] = useState<'assets' | 'roads' | 'route'>('assets')
   const [exportFilter, setExportFilter] = useState<'all' | 'screening_positive' | 'not_exposed' | 'not_assessed'>('all')
@@ -554,6 +560,7 @@ function App() {
 
   // Fetch Exposure Summary (sensitive to hazard source)
   useEffect(() => {
+    // oxlint-disable-next-line react/set-state-in-effect
     setSummaryLoading(true)
     fetch(`${apiBaseUrl}/api/exposure/summary?hazard_source=${hazardSource}`)
       .then((res) => {
@@ -590,6 +597,7 @@ function App() {
   // Fetch legend when active layer or hazard source changes
   useEffect(() => {
     let isMounted = true
+    // oxlint-disable-next-line react/set-state-in-effect -- Loading indicator required immediately on layer/hazard switch
     setLegendLoading(true)
 
     const legendUrl =
@@ -717,7 +725,7 @@ function App() {
         type: 'raster',
         source: sourceId,
         paint: {
-          'raster-opacity': opacity,
+          'raster-opacity': opacityRef.current,
           'raster-fade-duration': 150,
         },
       },
@@ -984,17 +992,28 @@ function App() {
       })
     }
 
+    const onMouseEnter = () => {
+      if (!routePickModeRef.current) map.getCanvas().style.cursor = 'pointer'
+    }
+    const onMouseLeave = () => {
+      if (!routePickModeRef.current) map.getCanvas().style.cursor = ''
+    }
+
     // Attach click and hover handlers
     layerIds.forEach((id) => {
       map.on('click', id, handleVectorFeatureClick)
-      map.on('mouseenter', id, () => {
-        if (!routePickModeRef.current) map.getCanvas().style.cursor = 'pointer'
-      })
-      map.on('mouseleave', id, () => {
-        if (!routePickModeRef.current) map.getCanvas().style.cursor = ''
-      })
+      map.on('mouseenter', id, onMouseEnter)
+      map.on('mouseleave', id, onMouseLeave)
     })
-  }, [apiBaseUrl, showAssets, mapLoaded, handleVectorFeatureClick])
+
+    return () => {
+      layerIds.forEach((id) => {
+        map.off('click', id, handleVectorFeatureClick)
+        map.off('mouseenter', id, onMouseEnter)
+        map.off('mouseleave', id, onMouseLeave)
+      })
+    }
+  }, [apiBaseUrl, showAssets, hazardSource, mapLoaded, handleVectorFeatureClick])
 
   // Update Start & Destination Markers on Map
   useEffect(() => {
@@ -1382,31 +1401,29 @@ function App() {
   }
 
   // Phase 10 & 11 Action Handlers
-  const fetchCapabilities = () => {
+  const fetchCapabilities = useCallback(() => {
     fetch(`${apiBaseUrl}/api/simulation/capabilities`)
       .then((res) => res.json())
       .then((data: SimulationCapabilities) => setCapabilities(data))
       .catch(() => {})
-  }
+  }, [apiBaseUrl])
 
-  const fetchScenarios = (archived = includeArchived) => {
+  const fetchScenarios = useCallback((archived = includeArchived) => {
     setScenariosLoading(true)
     fetch(`${apiBaseUrl}/api/scenarios?include_archived=${archived}`)
       .then((res) => res.json())
       .then((data: ScenarioItem[]) => {
         setScenarios(data)
         setScenariosLoading(false)
-        if (data.length > 0 && !selectedScenarioId) {
-          setSelectedScenarioId(data[0].id)
-        }
+        setSelectedScenarioId((prev) => (data.length > 0 && !prev ? data[0].id : prev))
       })
       .catch((err) => {
         setScenarioError(err.message || 'Failed to load scenarios')
         setScenariosLoading(false)
       })
-  }
+  }, [apiBaseUrl, includeArchived])
 
-  const fetchRuns = () => {
+  const fetchRuns = useCallback(() => {
     setRunsLoading(true)
     fetch(`${apiBaseUrl}/api/runs`)
       .then((res) => res.json())
@@ -1415,17 +1432,17 @@ function App() {
         setRunsLoading(false)
       })
       .catch(() => setRunsLoading(false))
-  }
+  }, [apiBaseUrl])
 
   // Phase 12: SPH Fetchers & Handlers
-  const fetchSphCapabilities = () => {
+  const fetchSphCapabilities = useCallback(() => {
     fetch(`${apiBaseUrl}/api/sph/capabilities`)
       .then((res) => res.json())
       .then((data: SPHCapabilities) => setSphCapabilities(data))
       .catch(() => {})
-  }
+  }, [apiBaseUrl])
 
-  const fetchSphRuns = () => {
+  const fetchSphRuns = useCallback(() => {
     setSphRunsLoading(true)
     fetch(`${apiBaseUrl}/api/sph-runs`)
       .then((res) => res.json())
@@ -1434,7 +1451,7 @@ function App() {
         setSphRunsLoading(false)
       })
       .catch(() => setSphRunsLoading(false))
-  }
+  }, [apiBaseUrl])
 
   const handleBuildSphPackage = async (scId: string) => {
     setSphBuildingScenarioId(scId)
@@ -1495,25 +1512,25 @@ function App() {
       if (!res.ok) throw new Error('Failed to fetch SPH run logs')
       const data: SimulationLogs = await res.json()
       setRunLogsModal(data)
-    } catch (err) {
+    } catch {
       alert('Could not retrieve execution logs for this SPH run.')
     }
   }
 
   // Phase 12: Comparison Fetchers & Handlers
-  const fetchComparisonReadiness = () => {
+  const fetchComparisonReadiness = useCallback(() => {
     fetch(`${apiBaseUrl}/api/comparison/readiness`)
       .then((res) => res.json())
       .then((data: ComparisonReadiness) => setComparisonReadiness(data))
       .catch(() => {})
-  }
+  }, [apiBaseUrl])
 
-  const fetchMethodologyMatrix = () => {
+  const fetchMethodologyMatrix = useCallback(() => {
     fetch(`${apiBaseUrl}/api/comparison/methodology`)
       .then((res) => res.json())
       .then((data: MethodologyComparison) => setMethodologyMatrix(data))
       .catch(() => {})
-  }
+  }, [apiBaseUrl])
 
   const handleRunComparison = async () => {
     const selectedDelftRun = runs.find((r) => r.run_id === selectedDelftRunId)
@@ -1578,19 +1595,19 @@ function App() {
   }
 
   // Phase 12: Earth Engine Fetchers & Handlers
-  const fetchGeeCapabilities = () => {
+  const fetchGeeCapabilities = useCallback(() => {
     fetch(`${apiBaseUrl}/api/gee/capabilities`)
       .then((res) => res.json())
       .then((data: GEECapabilities) => setGeeCapabilities(data))
       .catch(() => {})
-  }
+  }, [apiBaseUrl])
 
-  const fetchGeeDatasets = () => {
+  const fetchGeeDatasets = useCallback(() => {
     fetch(`${apiBaseUrl}/api/gee/datasets`)
       .then((res) => res.json())
       .then((data: GEEDatasetInfo[]) => setGeeDatasets(data))
       .catch(() => {})
-  }
+  }, [apiBaseUrl])
 
   const handleCreateGeePlan = async () => {
     if (!geeCapabilities?.gee_available) {
@@ -1635,8 +1652,10 @@ function App() {
     }
   }
 
+  // Initial bootstrap on mount or API base URL change
   useEffect(() => {
     fetchCapabilities()
+    // oxlint-disable-next-line react/set-state-in-effect -- Initial bootstrap of scenario and simulation data
     fetchScenarios(false)
     fetchRuns()
     fetchSphCapabilities()
@@ -1645,21 +1664,28 @@ function App() {
     fetchMethodologyMatrix()
     fetchGeeCapabilities()
     fetchGeeDatasets()
-  }, [apiBaseUrl])
+  }, [
+    fetchCapabilities,
+    fetchScenarios,
+    fetchRuns,
+    fetchSphCapabilities,
+    fetchSphRuns,
+    fetchComparisonReadiness,
+    fetchMethodologyMatrix,
+    fetchGeeCapabilities,
+    fetchGeeDatasets,
+  ])
 
+  // Refresh scenario and model runs when switching to scenarios tab or toggling archived filter
   useEffect(() => {
     if (activeTab === 'scenarios') {
-      fetchCapabilities()
+      // oxlint-disable-next-line react/set-state-in-effect -- Tab switch reload for scenario and run list
       fetchScenarios(includeArchived)
       fetchRuns()
-      fetchSphCapabilities()
       fetchSphRuns()
       fetchComparisonReadiness()
-      fetchMethodologyMatrix()
-      fetchGeeCapabilities()
-      fetchGeeDatasets()
     }
-  }, [activeTab, includeArchived, scenarioSubTab])
+  }, [activeTab, includeArchived, scenarioSubTab, fetchScenarios, fetchRuns, fetchSphRuns, fetchComparisonReadiness])
 
 
   const selectedScenario = scenarios.find((s) => s.id === selectedScenarioId) || null
@@ -1822,7 +1848,7 @@ function App() {
       if (!res.ok) throw new Error('Failed to fetch run logs')
       const data: SimulationLogs = await res.json()
       setRunLogsModal(data)
-    } catch (err) {
+    } catch {
       alert('Could not retrieve execution logs for this run.')
     }
   }

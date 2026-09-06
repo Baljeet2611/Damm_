@@ -6,7 +6,6 @@ from pathlib import Path
 from typing import Dict, Any, List, Optional, Tuple
 import xml.sax.saxutils as saxutils
 import geopandas as gpd
-from shapely.geometry import shape, Point, LineString, Polygon, MultiPoint, MultiLineString, MultiPolygon
 from fastapi import HTTPException
 from fastapi.responses import Response
 

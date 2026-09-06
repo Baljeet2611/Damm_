@@ -1,16 +1,14 @@
-import os
 import json
 from pathlib import Path
-from typing import Dict, Any, Optional, Tuple, List
+from typing import Dict, Any, Optional, Tuple
 import numpy as np
 import rasterio
 import networkx as nx
 from shapely import wkt
-from shapely.geometry import shape, Point, LineString, Polygon, MultiPolygon, MultiLineString, mapping
+from shapely.geometry import shape, LineString, mapping
 from fastapi import HTTPException
 
 from app.schemas import (
-    CategoryCount,
     ExposureDatasetSummary,
     ExposureSummaryResponse,
 )
@@ -237,7 +235,7 @@ def load_raw_roads() -> Dict[str, Any]:
 
 
 from pyproj import Transformer
-from app.anuga_service import resolve_anuga_layer_file, check_anuga_outputs_available
+from app.anuga_service import resolve_anuga_layer_file
 
 # Transformer from EPSG:4326 to EPSG:32643 for ANUGA pilot
 _wgs84_to_utm43n = Transformer.from_crs("EPSG:4326", "EPSG:32643", always_xy=True)

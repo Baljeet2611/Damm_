@@ -5,7 +5,6 @@ breach mechanics barrier and flux audit, numerical diagnostics,
 reprojection mask isolation, area partitioning, and output provenance.
 """
 
-import os
 import sys
 import json
 import numpy as np

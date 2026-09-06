@@ -1,8 +1,6 @@
 import pytest
 from unittest.mock import patch
 import networkx as nx
-from shapely.geometry import LineString
-from shapely import wkt
 from fastapi.testclient import TestClient
 
 from app.main import app

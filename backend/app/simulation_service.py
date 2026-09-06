@@ -1,5 +1,4 @@
 import os
-import sys
 import json
 import uuid
 import shutil
@@ -7,9 +6,8 @@ import zipfile
 import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, Any, List, Optional, Tuple
+from typing import Dict, Any, List, Tuple
 from fastapi import HTTPException
-from fastapi.responses import FileResponse
 
 from app.schemas import (
     SimulationCapabilitiesResponse,

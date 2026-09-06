@@ -1,5 +1,4 @@
 import io
-import json
 import zipfile
 import xml.etree.ElementTree as ET
 import pytest
@@ -14,7 +13,7 @@ from app.export_service import (
 )
 from app.vector_service import resolve_vector_file
 import geopandas as gpd
-from shapely.geometry import Point, LineString, Polygon
+from shapely.geometry import Point
 
 client = TestClient(app)
 

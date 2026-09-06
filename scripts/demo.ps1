@@ -37,7 +37,7 @@ foreach ($file in $requiredFiles) {
 }
 
 if ($missingFiles.Count -gt 0) {
-    Write-Host "   [ERROR] Missing required dataset files in $dataDir:" -ForegroundColor Red
+    Write-Host "   [ERROR] Missing required dataset files in ${dataDir}:" -ForegroundColor Red
     foreach ($m in $missingFiles) {
         Write-Host "     - $m" -ForegroundColor Red
     }
