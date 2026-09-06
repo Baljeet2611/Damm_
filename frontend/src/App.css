@@ -2512,3 +2512,34 @@
     grid-template-columns: 1fr;
   }
 }
+
+.basemap-offline-banner {
+  position: absolute;
+  top: 1rem;
+  right: 4rem;
+  z-index: 15;
+  background: rgba(30, 41, 59, 0.92);
+  border: 1px solid rgba(245, 158, 11, 0.5);
+  border-radius: 6px;
+  padding: 0.4rem 0.8rem;
+  font-size: 0.75rem;
+  color: #fbbf24;
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  backdrop-filter: blur(8px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+}
+
+.btn-dismiss-mini {
+  background: transparent;
+  border: none;
+  color: #94a3b8;
+  font-size: 0.8rem;
+  cursor: pointer;
+  padding: 0 0.2rem;
+}
+
+.btn-dismiss-mini:hover {
+  color: #ffffff;
+}

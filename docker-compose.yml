@@ -1,0 +1,39 @@
+# ==============================================================================
+# Dam Break Decision Support System - Multi-Container Deployment Template
+# ==============================================================================
+# UNVERIFIED TEMPLATE: Docker is not installed in the local validation environment.
+# Configured for production deployment with read-only data mounts and isolated runtime volume.
+# ==============================================================================
+
+version: '3.8'
+
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: sih-dam-break-api
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      - SIH_RUNTIME_DIR=/app/data/runtime
+      - CORS_ORIGINS=http://localhost:5173,http://localhost:80,http://127.0.0.1:5173
+      - ENABLE_DFLOWFM_EXECUTION=false
+      - ENABLE_PYSPH_EXECUTION=false
+      - ENABLE_GEE_TASKS=false
+    volumes:
+      # Mount local raw geospatial rasters and OSM datasets as read-only
+      - ./data/raw:/app/data/raw:ro
+      # Persistent local storage for user scenarios and execution logs
+      - sih-runtime-data:/app/data/runtime
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+volumes:
+  sih-runtime-data:
+    driver: local

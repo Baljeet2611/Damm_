@@ -102,13 +102,38 @@ app = FastAPI(
     version="0.9.0",
 )
 
+import os
+import logging
+from starlette.middleware.gzip import GZipMiddleware
+from fastapi.responses import JSONResponse
+from fastapi import Request
+
+logger = logging.getLogger("app.main")
+
+cors_env = os.environ.get("CORS_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173,http://localhost:3000,http://127.0.0.1:3000")
+allowed_origins = [origin.strip() for origin in cors_env.split(",") if origin.strip()]
+if not allowed_origins:
+    allowed_origins = ["http://localhost:5173", "http://127.0.0.1:5173"]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173"],
+    allow_origins=allowed_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+app.add_middleware(GZipMiddleware, minimum_size=1000)
+
+
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    logger.exception("Unhandled server error processing request %s: %s", request.url.path, exc)
+    return JSONResponse(
+        status_code=500,
+        content={"detail": "An internal server error occurred while processing the request."},
+    )
+
 
 
 @app.get("/api/health")

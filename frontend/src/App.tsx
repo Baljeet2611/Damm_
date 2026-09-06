@@ -374,6 +374,7 @@ function App() {
   const [mapLoaded, setMapLoaded] = useState<boolean>(false)
   const [probe, setProbe] = useState<ProbeData | null>(null)
   const [sidebarOpen, setSidebarOpen] = useState<boolean>(true)
+  const [basemapOffline, setBasemapOffline] = useState<boolean>(false)
 
   // Vector Layer Toggles & Exposure Summary
   const [showAssets, setShowAssets] = useState<boolean>(true)
@@ -593,6 +594,13 @@ function App() {
         },
         layers: [
           {
+            id: 'neutral-background',
+            type: 'background',
+            paint: {
+              'background-color': '#0f172a',
+            },
+          },
+          {
             id: 'osm-tiles',
             type: 'raster',
             source: 'osm',
@@ -612,6 +620,13 @@ function App() {
 
     map.on('load', () => {
       setMapLoaded(true)
+    })
+
+    map.on('error', (e: any) => {
+      const errMsg = e?.error?.message || String(e?.error || '')
+      if (errMsg.includes('openstreetmap') || e?.sourceId === 'osm' || errMsg.includes('tile.openstreetmap.org')) {
+        setBasemapOffline(true)
+      }
     })
 
     mapRef.current = map
@@ -1791,6 +1806,15 @@ function App() {
             <button className="btn-cancel-pick" onClick={() => setRoutePickMode(null)}>✕ Cancel</button>
           </div>
         )}
+
+        {/* Non-blocking Basemap Offline Banner */}
+        {basemapOffline && (
+          <div className="basemap-offline-banner">
+            <span>🌐 External OSM Basemap Offline • Local raster and vector screening layers remain fully operational over dark canvas</span>
+            <button className="btn-dismiss-mini" onClick={() => setBasemapOffline(false)} title="Dismiss">✕</button>
+          </div>
+        )}
+
 
         {/* Floating Sidebar / Control HUD */}
         {sidebarOpen && (
