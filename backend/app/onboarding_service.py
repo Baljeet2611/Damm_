@@ -19,6 +19,7 @@ import uuid
 import shutil
 import hashlib
 import tempfile
+import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, Any, List, Optional, Tuple
@@ -45,6 +46,8 @@ from app.schemas import (
     DamProjectValidationResponse,
     DamProjectSummary,
     DamProjectDetailResponse,
+    DamProjectAnugaPreflightResponse,
+    DamProjectAnugaPackageResponse,
 )
 from app.raster_service import EMPTY_TILE_PNG, apply_colormap_and_transparency
 from app.scenario_storage import get_runtime_dir, compute_file_sha256
@@ -118,6 +121,10 @@ def validate_dam_project_dataset(
     dam_axis_filename: str,
     reservoir_bytes: Optional[bytes] = None,
     reservoir_filename: Optional[str] = None,
+    model_domain_bytes: Optional[bytes] = None,
+    model_domain_filename: Optional[str] = None,
+    downstream_outlet_bytes: Optional[bytes] = None,
+    downstream_outlet_filename: Optional[str] = None,
     project_name: str = "New Dam Project",
     vertical_unit: Optional[str] = None,
     vertical_datum: Optional[str] = None,
@@ -127,6 +134,11 @@ def validate_dam_project_dataset(
     breach_center_y: Optional[float] = None,
     breach_formation_time_hr: Optional[float] = 1.0,
     manning_roughness: Optional[float] = 0.035,
+    dam_crest_elevation: Optional[float] = None,
+    breach_invert_elevation: Optional[float] = None,
+    target_mesh_resolution_m: Optional[float] = None,
+    simulation_duration_s: Optional[float] = None,
+    output_interval_s: Optional[float] = None,
     geometry_crs: str = "EPSG:4326",
 ) -> DamProjectValidationResponse:
     """
@@ -149,6 +161,16 @@ def validate_dam_project_dataset(
         raise HTTPException(
             status_code=413,
             detail=f"Reservoir boundary file '{reservoir_filename}' size exceeds maximum limit of {MAX_UPLOAD_SIZE_BYTES / (1024*1024):.0f} MB.",
+        )
+    if model_domain_bytes and len(model_domain_bytes) > MAX_UPLOAD_SIZE_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail=f"Model domain file '{model_domain_filename}' size exceeds maximum limit of {MAX_UPLOAD_SIZE_BYTES / (1024*1024):.0f} MB.",
+        )
+    if downstream_outlet_bytes and len(downstream_outlet_bytes) > MAX_UPLOAD_SIZE_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail=f"Downstream outlet file '{downstream_outlet_filename}' size exceeds maximum limit of {MAX_UPLOAD_SIZE_BYTES / (1024*1024):.0f} MB.",
         )
 
     errors: List[str] = []
@@ -173,6 +195,16 @@ def validate_dam_project_dataset(
         if not res_safe and res_err:
             errors.append(res_err)
 
+    if model_domain_bytes and model_domain_filename:
+        dom_safe, dom_err = validate_filename_security(model_domain_filename, ALLOWED_GEOJSON_EXTENSIONS)
+        if not dom_safe and dom_err:
+            errors.append(dom_err)
+
+    if downstream_outlet_bytes and downstream_outlet_filename:
+        out_safe, out_err = validate_filename_security(downstream_outlet_filename, ALLOWED_GEOJSON_EXTENSIONS)
+        if not out_safe and out_err:
+            errors.append(out_err)
+
     if errors:
         return DamProjectValidationResponse(
             valid=False,
@@ -189,6 +221,8 @@ def validate_dam_project_dataset(
     raster_derived_meta: Optional[RasterDerivedMetadata] = None
     axis_meta: Optional[GeometryValidationMetadata] = None
     res_meta: Optional[GeometryValidationMetadata] = None
+    domain_meta: Optional[GeometryValidationMetadata] = None
+    outlet_meta: Optional[GeometryValidationMetadata] = None
     breach_on_axis = False
     breach_dist_m: Optional[float] = None
     distance_crs_used: Optional[str] = None
@@ -198,98 +232,94 @@ def validate_dam_project_dataset(
         temp_dem_path = temp_path / "temp_dem.tif"
         temp_dem_path.write_bytes(dem_bytes)
 
-        # 3. DEM GeoTIFF Inspection
-        dem_crs_obj: Optional[CRS] = None
-        dem_box: Optional[box] = None
+        # 3. Comprehensive DEM Inspection
+        dem_box = None
+        dem_crs_obj = None
+        dam_axis_geom_dem_crs = None
+        dam_axis_centroid_lon_lat = None
+        domain_geom_src = None
+
         try:
             with rasterio.open(temp_dem_path) as src:
-                # Pixel count check (HTTP 413)
-                total_pixels = src.width * src.height
-                if total_pixels > MAX_RASTER_PIXELS:
-                    raise HTTPException(
-                        status_code=413,
-                        detail=f"DEM raster dimension ({src.width}x{src.height} = {total_pixels:,} pixels) exceeds maximum allowed {MAX_RASTER_PIXELS:,} pixels.",
-                    )
-
-                # Validate single band
                 if src.count != 1:
-                    errors.append(f"DEM raster must be single-band. Found {src.count} bands in '{dem_filename}'.")
+                    errors.append(f"GeoTIFF has {src.count} bands. Exactly single-band (1 band) numeric elevation raster is required.")
 
-                # Validate numeric dtype
-                dtype_name = src.dtypes[0]
-                if not np.issubdtype(np.dtype(dtype_name), np.number):
-                    errors.append(f"DEM raster dtype '{dtype_name}' is not numeric.")
+                dtype_str = str(src.dtypes[0])
+                if not ("int" in dtype_str or "float" in dtype_str):
+                    errors.append(f"Unsupported raster data type '{dtype_str}'. Must be a numeric elevation band.")
 
-                # Validate CRS
-                if src.crs is None or not str(src.crs).strip():
-                    errors.append(f"DEM raster '{dem_filename}' has no defined Coordinate Reference System (CRS).")
+                crs_wkt = src.crs.to_wkt() if src.crs else ""
+                if not crs_wkt or not src.crs:
+                    errors.append("GeoTIFF does not specify a valid Coordinate Reference System (CRS).")
                 else:
                     dem_crs_obj = src.crs
 
-                # Bounding box & resolution
-                b = src.bounds
-                res_x = abs(src.res[0])
-                res_y = abs(src.res[1])
+                res_x, res_y = abs(src.res[0]), abs(src.res[1])
+                bounds_left, bounds_bottom, bounds_right, bounds_top = src.bounds
+                total_pixels = src.width * src.height
 
-                if b.left >= b.right or b.bottom >= b.top:
-                    errors.append(f"DEM raster '{dem_filename}' has invalid spatial bounds: {b}.")
-                else:
-                    dem_box = box(b.left, b.bottom, b.right, b.top)
+                if total_pixels > MAX_RASTER_PIXELS:
+                    raise HTTPException(
+                        status_code=413,
+                        detail=f"DEM dimensions ({src.width}x{src.height} = {total_pixels:,} pixels) exceed maximum limit of {MAX_RASTER_PIXELS:,} pixels.",
+                    )
 
-                # Min / Max Elevation Calculation via Block Windows (Streaming / Memory Safe)
+                nodata_val = float(src.nodata) if src.nodata is not None else None
+                dem_box = box(bounds_left, bounds_bottom, bounds_right, bounds_top)
+
+                # Block-wise min/max computation
                 min_elev = float("inf")
                 max_elev = float("-inf")
-                valid_cells = 0
-                try:
-                    for _, window in src.block_windows(1):
-                        block_arr = src.read(1, window=window, masked=True)
-                        if block_arr.count() > 0:
-                            b_min = float(np.nanmin(block_arr))
-                            b_max = float(np.nanmax(block_arr))
-                            if b_min < min_elev:
-                                min_elev = b_min
-                            if b_max > max_elev:
-                                max_elev = b_max
-                            valid_cells += int(block_arr.count())
+                has_valid_pixels = False
 
-                    if valid_cells == 0:
-                        errors.append(f"DEM raster '{dem_filename}' contains only NoData values.")
-                        min_elev_val = None
-                        max_elev_val = None
+                for _, window in src.block_windows(1):
+                    block = src.read(1, window=window)
+                    if nodata_val is not None:
+                        valid_mask = ~np.isnan(block) & ~np.isclose(block, nodata_val)
                     else:
-                        min_elev_val = min_elev
-                        max_elev_val = max_elev
-                except Exception as e:
-                    warnings.append(f"Could not calculate DEM min/max elevation: {e}")
-                    min_elev_val = None
-                    max_elev_val = None
+                        valid_mask = ~np.isnan(block)
+
+                    if np.any(valid_mask):
+                        has_valid_pixels = True
+                        valid_data = block[valid_mask]
+                        min_elev = min(min_elev, float(np.min(valid_data)))
+                        max_elev = max(max_elev, float(np.max(valid_data)))
+
+                if not has_valid_pixels:
+                    errors.append("DEM GeoTIFF contains no valid numeric elevation pixels (all NoData/NaN).")
+                    min_elev_res = None
+                    max_elev_res = None
+                else:
+                    min_elev_res = min_elev
+                    max_elev_res = max_elev
 
                 raster_derived_meta = RasterDerivedMetadata(
                     width=src.width,
                     height=src.height,
                     band_count=src.count,
-                    dtype=dtype_name,
-                    crs=str(src.crs) if src.crs else "UNKNOWN",
-                    bounds=RasterBounds(left=b.left, bottom=b.bottom, right=b.right, top=b.top),
+                    total_pixels=total_pixels,
+                    dtype=dtype_str,
+                    crs=src.crs.to_string() if src.crs else "UNKNOWN",
+                    bounds=RasterBounds(
+                        left=bounds_left,
+                        bottom=bounds_bottom,
+                        right=bounds_right,
+                        top=bounds_top,
+                    ),
                     resolution=RasterResolution(x=res_x, y=res_y),
-                    nodata=src.nodata,
-                    min_elevation=min_elev_val,
-                    max_elevation=max_elev_val,
+                    nodata=nodata_val,
+                    min_elevation=min_elev_res,
+                    max_elevation=max_elev_res,
                     vertical_unit_in_header="unknown",
                     vertical_datum_in_header="unknown",
                 )
 
-                if res_x > 100.0 or res_y > 100.0:
-                    warnings.append(f"DEM resolution is coarse ({res_x:.1f} x {res_y:.1f}). Simulation accuracy may require spatial mesh refinement.")
-
         except HTTPException:
             raise
         except Exception as e:
-            errors.append(f"Failed to parse DEM GeoTIFF '{dem_filename}': {str(e)}")
+            errors.append(f"Failed to read DEM raster file: {str(e)}")
 
         # 4. Dam Axis GeoJSON Inspection (Only LineString / MultiLineString permitted)
-        dam_axis_geom_dem_crs = None
-        dam_axis_centroid_lon_lat: Optional[Tuple[float, float]] = None
         try:
             axis_data = json.loads(dam_axis_bytes.decode("utf-8"))
             features = []
@@ -299,8 +329,6 @@ def validate_dam_project_dataset(
                 features = [axis_data]
             elif "type" in axis_data and axis_data["type"] in ("LineString", "MultiLineString"):
                 features = [{"type": "Feature", "geometry": axis_data, "properties": {}}]
-            else:
-                errors.append(f"Dam axis file '{dam_axis_filename}' is not a valid GeoJSON object or FeatureCollection.")
 
             if len(features) > MAX_GEOJSON_FEATURES:
                 raise HTTPException(
@@ -309,26 +337,24 @@ def validate_dam_project_dataset(
                 )
 
             if not features:
-                errors.append(f"Dam axis file '{dam_axis_filename}' contains 0 geometric features.")
+                errors.append("Dam axis GeoJSON contains no valid features or geometries.")
             else:
                 geom_types = set()
-                all_geoms = []
+                geoms = []
                 for idx, feat in enumerate(features):
                     g_dict = feat.get("geometry")
-                    if not g_dict:
-                        errors.append(f"Dam axis feature {idx} has no geometry.")
-                        continue
-                    sh_geom = shape(g_dict)
-                    if not sh_geom.is_valid:
-                        errors.append(f"Dam axis feature {idx} geometry is topologically invalid.")
-                    g_type = sh_geom.geom_type
-                    geom_types.add(g_type)
-                    if g_type not in ("LineString", "MultiLineString"):
-                        errors.append(f"Dam axis must contain only LineString or MultiLineString geometries. Found '{g_type}' in feature {idx}.")
-                    all_geoms.append(sh_geom)
+                    if g_dict:
+                        sh_geom = shape(g_dict)
+                        if not sh_geom.is_valid:
+                            errors.append(f"Dam axis feature {idx} geometry is topologically invalid.")
+                        g_type = sh_geom.geom_type
+                        geom_types.add(g_type)
+                        if g_type not in ("LineString", "MultiLineString"):
+                            errors.append(f"Dam axis must contain only LineString or MultiLineString geometries. Found '{g_type}' in feature {idx}.")
+                        geoms.append(sh_geom)
 
-                if all_geoms and not any(t not in ("LineString", "MultiLineString") for t in geom_types):
-                    dam_axis_geom_src = all_geoms[0] if len(all_geoms) == 1 else MultiLineString([g for g in all_geoms if isinstance(g, (LineString, MultiLineString))])
+                if geoms and not any(t not in ("LineString", "MultiLineString") for t in geom_types):
+                    dam_axis_geom_src = geoms[0] if len(geoms) == 1 else MultiLineString([g for g in geoms if isinstance(g, (LineString, MultiLineString))])
                     raw_centroid = (float(dam_axis_geom_src.centroid.x), float(dam_axis_geom_src.centroid.y))
 
                     src_geom_crs = CRS.from_user_input(geometry_crs or "EPSG:4326")
@@ -374,13 +400,8 @@ def validate_dam_project_dataset(
                         fully_within_dem_bounds=fully_within_dem,
                         centroid_coords=raw_centroid,
                     )
-
-        except HTTPException:
-            raise
-        except json.JSONDecodeError as e:
-            errors.append(f"Dam axis file '{dam_axis_filename}' is not valid JSON: {str(e)}")
         except Exception as e:
-            errors.append(f"Failed to process dam axis GeoJSON '{dam_axis_filename}': {str(e)}")
+            errors.append(f"Failed to process dam axis: {e}")
 
         # 5. Reservoir Boundary GeoJSON Inspection (Only Polygon / MultiPolygon permitted)
         if reservoir_bytes and reservoir_filename:
@@ -458,7 +479,157 @@ def validate_dam_project_dataset(
             except Exception as e:
                 errors.append(f"Failed to process reservoir boundary GeoJSON '{reservoir_filename}': {str(e)}")
 
-        # 6. Breach Parameters & Metric Distance Calculation
+        # 6. Model Domain GeoJSON Inspection (Polygon / MultiPolygon)
+        if model_domain_bytes and model_domain_filename:
+            try:
+                dom_data = json.loads(model_domain_bytes.decode("utf-8"))
+                d_features = []
+                if dom_data.get("type") == "FeatureCollection":
+                    d_features = dom_data.get("features", [])
+                elif dom_data.get("type") == "Feature":
+                    d_features = [dom_data]
+                elif "type" in dom_data and dom_data["type"] in ("Polygon", "MultiPolygon"):
+                    d_features = [{"type": "Feature", "geometry": dom_data, "properties": {}}]
+
+                if len(d_features) > MAX_GEOJSON_FEATURES:
+                    raise HTTPException(
+                        status_code=413,
+                        detail=f"Model domain feature count ({len(d_features)}) exceeds maximum limit of {MAX_GEOJSON_FEATURES}.",
+                    )
+
+                if d_features:
+                    d_types = set()
+                    d_geoms = []
+                    for idx, feat in enumerate(d_features):
+                        g_dict = feat.get("geometry")
+                        if g_dict:
+                            sh_geom = shape(g_dict)
+                            if not sh_geom.is_valid:
+                                errors.append(f"Model domain feature {idx} geometry is topologically invalid.")
+                            dg_type = sh_geom.geom_type
+                            d_types.add(dg_type)
+                            if dg_type not in ("Polygon", "MultiPolygon"):
+                                errors.append(f"Model domain must contain only Polygon or MultiPolygon geometries. Found '{dg_type}' in feature {idx}.")
+                            d_geoms.append(sh_geom)
+
+                    if d_geoms and not any(t not in ("Polygon", "MultiPolygon") for t in d_types):
+                        domain_geom_src = d_geoms[0] if len(d_geoms) == 1 else MultiPolygon([g for g in d_geoms if isinstance(g, (Polygon, MultiPolygon))])
+                        d_centroid = (float(domain_geom_src.centroid.x), float(domain_geom_src.centroid.y))
+
+                        src_geom_crs = CRS.from_user_input(geometry_crs or "EPSG:4326")
+                        d_intersects_dem = False
+                        d_fully_within_dem = False
+
+                        if dem_box and dem_crs_obj:
+                            try:
+                                if src_geom_crs != dem_crs_obj:
+                                    transformer = Transformer.from_crs(src_geom_crs, dem_crs_obj, always_xy=True)
+                                    dom_geom_dem_crs = shapely_transform(transformer.transform, domain_geom_src)
+                                else:
+                                    dom_geom_dem_crs = domain_geom_src
+
+                                d_intersects_dem = bool(dem_box.intersects(dom_geom_dem_crs))
+                                d_fully_within_dem = bool(dem_box.contains(dom_geom_dem_crs))
+
+                                if not d_intersects_dem:
+                                    errors.append("Model domain geometry is completely outside the DEM bounding extent.")
+                                elif not d_fully_within_dem:
+                                    warnings.append("Model domain geometry extends partially outside the DEM bounding extent.")
+                            except Exception as e:
+                                errors.append(f"Failed to reproject model domain geometry into DEM CRS: {e}")
+
+                        domain_meta = GeometryValidationMetadata(
+                            layer_name="model_domain",
+                            feature_count=len(d_features),
+                            geometry_types=list(d_types),
+                            is_valid=domain_geom_src.is_valid if domain_geom_src else False,
+                            intersects_dem_bounds=d_intersects_dem,
+                            fully_within_dem_bounds=d_fully_within_dem,
+                            centroid_coords=d_centroid,
+                        )
+
+            except HTTPException:
+                raise
+            except json.JSONDecodeError as e:
+                errors.append(f"Model domain file '{model_domain_filename}' is not valid JSON: {str(e)}")
+            except Exception as e:
+                errors.append(f"Failed to process model domain GeoJSON '{model_domain_filename}': {str(e)}")
+
+        # 7. Downstream Outlet GeoJSON Inspection (Point / LineString)
+        if downstream_outlet_bytes and downstream_outlet_filename:
+            try:
+                out_data = json.loads(downstream_outlet_bytes.decode("utf-8"))
+                o_features = []
+                if out_data.get("type") == "FeatureCollection":
+                    o_features = out_data.get("features", [])
+                elif out_data.get("type") == "Feature":
+                    o_features = [out_data]
+                elif "type" in out_data and out_data["type"] in ("Point", "MultiPoint", "LineString", "MultiLineString"):
+                    o_features = [{"type": "Feature", "geometry": out_data, "properties": {}}]
+
+                if len(o_features) > MAX_GEOJSON_FEATURES:
+                    raise HTTPException(
+                        status_code=413,
+                        detail=f"Downstream outlet feature count ({len(o_features)}) exceeds maximum limit of {MAX_GEOJSON_FEATURES}.",
+                    )
+
+                if o_features:
+                    o_types = set()
+                    o_geoms = []
+                    for idx, feat in enumerate(o_features):
+                        g_dict = feat.get("geometry")
+                        if g_dict:
+                            sh_geom = shape(g_dict)
+                            if not sh_geom.is_valid:
+                                errors.append(f"Downstream outlet feature {idx} geometry is topologically invalid.")
+                            og_type = sh_geom.geom_type
+                            o_types.add(og_type)
+                            if og_type not in ("Point", "MultiPoint", "LineString", "MultiLineString"):
+                                errors.append(f"Downstream outlet must contain only Point or LineString geometries. Found '{og_type}' in feature {idx}.")
+                            o_geoms.append(sh_geom)
+
+                    if o_geoms and not any(t not in ("Point", "MultiPoint", "LineString", "MultiLineString") for t in o_types):
+                        outlet_geom_src = o_geoms[0] if len(o_geoms) == 1 else MultiPoint([g for g in o_geoms if isinstance(g, (Point, MultiPoint))])
+                        o_centroid = (float(outlet_geom_src.centroid.x), float(outlet_geom_src.centroid.y))
+
+                        src_geom_crs = CRS.from_user_input(geometry_crs or "EPSG:4326")
+                        o_intersects_dem = False
+                        o_fully_within_dem = False
+
+                        if dem_box and dem_crs_obj:
+                            try:
+                                if src_geom_crs != dem_crs_obj:
+                                    transformer = Transformer.from_crs(src_geom_crs, dem_crs_obj, always_xy=True)
+                                    outlet_geom_dem_crs = shapely_transform(transformer.transform, outlet_geom_src)
+                                else:
+                                    outlet_geom_dem_crs = outlet_geom_src
+
+                                o_intersects_dem = bool(dem_box.intersects(outlet_geom_dem_crs))
+                                o_fully_within_dem = bool(dem_box.contains(outlet_geom_dem_crs))
+
+                                if not o_intersects_dem:
+                                    errors.append("Downstream outlet geometry is completely outside the DEM bounding extent.")
+                            except Exception as e:
+                                errors.append(f"Failed to reproject downstream outlet geometry into DEM CRS: {e}")
+
+                        outlet_meta = GeometryValidationMetadata(
+                            layer_name="downstream_outlet",
+                            feature_count=len(o_features),
+                            geometry_types=list(o_types),
+                            is_valid=outlet_geom_src.is_valid if outlet_geom_src else False,
+                            intersects_dem_bounds=o_intersects_dem,
+                            fully_within_dem_bounds=o_fully_within_dem,
+                            centroid_coords=o_centroid,
+                        )
+
+            except HTTPException:
+                raise
+            except json.JSONDecodeError as e:
+                errors.append(f"Downstream outlet file '{downstream_outlet_filename}' is not valid JSON: {str(e)}")
+            except Exception as e:
+                errors.append(f"Failed to process downstream outlet GeoJSON '{downstream_outlet_filename}': {str(e)}")
+
+        # 8. Breach Parameters & Metric Distance Calculation
         breach_pt_in_dem = False
         if reservoir_level is not None:
             if reservoir_level <= 0.0:
@@ -481,6 +652,28 @@ def validate_dam_project_dataset(
         if manning_roughness is not None:
             if manning_roughness <= 0.005 or manning_roughness > 0.3:
                 warnings.append(f"Manning roughness n={manning_roughness} is outside standard hydraulic channel bounds (0.01 - 0.20).")
+
+        if dam_crest_elevation is not None:
+            if dam_crest_elevation <= 0.0:
+                errors.append(f"Dam crest elevation ({dam_crest_elevation}) must be a positive numeric value.")
+
+        if breach_invert_elevation is not None:
+            if breach_invert_elevation <= 0.0:
+                errors.append(f"Breach invert elevation ({breach_invert_elevation}) must be a positive numeric value.")
+
+        if target_mesh_resolution_m is not None:
+            if target_mesh_resolution_m <= 0.0 or target_mesh_resolution_m > 5000.0:
+                errors.append(f"Target mesh resolution ({target_mesh_resolution_m} m) must be a positive numeric value <= 5000 m.")
+
+        if simulation_duration_s is not None:
+            if simulation_duration_s <= 0.0 or simulation_duration_s > 604800.0:
+                errors.append(f"Simulation duration ({simulation_duration_s} s) must be between 1 and 604800 seconds (7 days).")
+
+        if output_interval_s is not None:
+            if output_interval_s <= 0.0:
+                errors.append(f"Output interval ({output_interval_s} s) must be a positive numeric value.")
+            elif simulation_duration_s is not None and output_interval_s > simulation_duration_s:
+                errors.append(f"Output interval ({output_interval_s} s) cannot exceed simulation duration ({simulation_duration_s} s).")
 
         # Metric Distance Calculation (True Metres, Never Degree Euclidean Distance)
         if breach_center_x is not None and breach_center_y is not None:
@@ -537,7 +730,7 @@ def validate_dam_project_dataset(
                 except Exception as e:
                     warnings.append(f"Could not compute metric distance between breach center and dam axis: {e}")
 
-    # 7. Explicit Assumptions Requiring Confirmation
+    # 9. Explicit Assumptions Requiring Confirmation
     metadata_declared = bool(vertical_unit and str(vertical_unit).strip() and vertical_datum and str(vertical_datum).strip())
     if metadata_declared:
         warnings.append("Metadata is user-declared and has not been independently verified.")
@@ -554,7 +747,7 @@ def validate_dam_project_dataset(
     if manning_roughness is not None:
         assumptions.append(f"Channel Manning's roughness coefficient n={manning_roughness} is an uncalibrated baseline assumption.")
 
-    # 8. Readiness Flags
+    # 10. Readiness Flags
     is_valid = len(errors) == 0
 
     onboarding_validation_passed = (
@@ -563,6 +756,8 @@ def validate_dam_project_dataset(
         and axis_meta is not None
         and axis_meta.fully_within_dem_bounds
         and (res_meta is None or res_meta.fully_within_dem_bounds)
+        and (domain_meta is None or domain_meta.fully_within_dem_bounds)
+        and (outlet_meta is None or outlet_meta.fully_within_dem_bounds)
         and breach_center_x is not None
         and breach_center_y is not None
         and breach_pt_in_dem
@@ -582,6 +777,11 @@ def validate_dam_project_dataset(
         breach_center=(breach_center_x, breach_center_y) if breach_center_x is not None and breach_center_y is not None else None,
         breach_formation_time_hr=breach_formation_time_hr,
         manning_roughness=manning_roughness,
+        dam_crest_elevation=dam_crest_elevation,
+        breach_invert_elevation=breach_invert_elevation,
+        target_mesh_resolution_m=target_mesh_resolution_m,
+        simulation_duration_s=simulation_duration_s,
+        output_interval_s=output_interval_s,
         geometry_crs=geometry_crs or "EPSG:4326",
     )
 
@@ -591,6 +791,8 @@ def validate_dam_project_dataset(
         user_provided_metadata=user_meta,
         dam_axis_metadata=axis_meta,
         reservoir_metadata=res_meta,
+        model_domain_metadata=domain_meta,
+        downstream_outlet_metadata=outlet_meta,
         breach_on_dam_axis=breach_on_axis,
         breach_distance_to_axis_m=breach_dist_m,
         distance_calculation_crs=distance_crs_used,
@@ -616,6 +818,10 @@ def save_dam_project(
     dam_axis_filename: str,
     reservoir_bytes: Optional[bytes] = None,
     reservoir_filename: Optional[str] = None,
+    model_domain_bytes: Optional[bytes] = None,
+    model_domain_filename: Optional[str] = None,
+    downstream_outlet_bytes: Optional[bytes] = None,
+    downstream_outlet_filename: Optional[str] = None,
     project_name: str = "New Dam Project",
     vertical_unit: Optional[str] = None,
     vertical_datum: Optional[str] = None,
@@ -625,6 +831,11 @@ def save_dam_project(
     breach_center_y: Optional[float] = None,
     breach_formation_time_hr: Optional[float] = 1.0,
     manning_roughness: Optional[float] = 0.035,
+    dam_crest_elevation: Optional[float] = None,
+    breach_invert_elevation: Optional[float] = None,
+    target_mesh_resolution_m: Optional[float] = None,
+    simulation_duration_s: Optional[float] = None,
+    output_interval_s: Optional[float] = None,
     geometry_crs: str = "EPSG:4326",
     acknowledge_unverified_metadata: bool = False,
 ) -> DamProjectDetailResponse:
@@ -634,7 +845,7 @@ def save_dam_project(
     - Requires onboarding_validation_passed=True.
     - Requires acknowledge_unverified_metadata=True.
     - Generates server-side UUID v4.
-    - Stores dem.tif, dam_axis.geojson, reservoir_boundary.geojson, project.json, and manifest.json.
+    - Stores dem.tif, dam_axis.geojson, reservoir_boundary.geojson, model_domain.geojson, downstream_outlet.geojson, project.json, and manifest.json.
     - Status is validated_unverified; scientifically_verified remains False.
     """
     if not acknowledge_unverified_metadata:
@@ -650,6 +861,10 @@ def save_dam_project(
         dam_axis_filename=dam_axis_filename,
         reservoir_bytes=reservoir_bytes,
         reservoir_filename=reservoir_filename,
+        model_domain_bytes=model_domain_bytes,
+        model_domain_filename=model_domain_filename,
+        downstream_outlet_bytes=downstream_outlet_bytes,
+        downstream_outlet_filename=downstream_outlet_filename,
         project_name=project_name,
         vertical_unit=vertical_unit,
         vertical_datum=vertical_datum,
@@ -659,6 +874,11 @@ def save_dam_project(
         breach_center_y=breach_center_y,
         breach_formation_time_hr=breach_formation_time_hr,
         manning_roughness=manning_roughness,
+        dam_crest_elevation=dam_crest_elevation,
+        breach_invert_elevation=breach_invert_elevation,
+        target_mesh_resolution_m=target_mesh_resolution_m,
+        simulation_duration_s=simulation_duration_s,
+        output_interval_s=output_interval_s,
         geometry_crs=geometry_crs,
     )
 
@@ -694,7 +914,27 @@ def save_dam_project(
             res_file_path.write_bytes(reservoir_bytes)
             res_rel_name = "reservoir_boundary.geojson"
 
+        dom_rel_name: Optional[str] = None
+        if model_domain_bytes:
+            dom_file_path = staging_dir / "model_domain.geojson"
+            dom_file_path.write_bytes(model_domain_bytes)
+            dom_rel_name = "model_domain.geojson"
+
+        out_rel_name: Optional[str] = None
+        if downstream_outlet_bytes:
+            out_file_path = staging_dir / "downstream_outlet.geojson"
+            out_file_path.write_bytes(downstream_outlet_bytes)
+            out_rel_name = "downstream_outlet.geojson"
+
         norm_meta = val_res.normalized_metadata
+        sim_params = {
+            "dam_crest_elevation": dam_crest_elevation,
+            "breach_invert_elevation": breach_invert_elevation,
+            "target_mesh_resolution_m": target_mesh_resolution_m,
+            "simulation_duration_s": simulation_duration_s,
+            "output_interval_s": output_interval_s,
+        }
+
         project_dict: Dict[str, Any] = {
             "project_id": project_id,
             "project_name": norm_meta.project_name,
@@ -703,10 +943,14 @@ def save_dam_project(
             "dem_file": "dem.tif",
             "dam_axis_file": "dam_axis.geojson",
             "reservoir_boundary_file": res_rel_name,
+            "model_domain_file": dom_rel_name,
+            "downstream_outlet_file": out_rel_name,
             "raster_metadata": norm_meta.raster_metadata.model_dump() if norm_meta.raster_metadata else {},
             "user_provided_metadata": norm_meta.user_provided_metadata.model_dump() if norm_meta.user_provided_metadata else {},
             "dam_axis_metadata": norm_meta.dam_axis_metadata.model_dump() if norm_meta.dam_axis_metadata else {},
             "reservoir_metadata": norm_meta.reservoir_metadata.model_dump() if norm_meta.reservoir_metadata else None,
+            "model_domain_metadata": norm_meta.model_domain_metadata.model_dump() if norm_meta.model_domain_metadata else None,
+            "downstream_outlet_metadata": norm_meta.downstream_outlet_metadata.model_dump() if norm_meta.downstream_outlet_metadata else None,
             "breach_parameters": {
                 "reservoir_level": reservoir_level,
                 "breach_width": breach_width,
@@ -717,6 +961,8 @@ def save_dam_project(
                 "breach_distance_to_axis_m": norm_meta.breach_distance_to_axis_m,
                 "distance_calculation_crs": norm_meta.distance_calculation_crs,
             },
+            "simulation_parameters": sim_params,
+            "anuga_package_built": False,
             "assumptions_requiring_confirmation": val_res.assumptions_requiring_confirmation,
             "metadata_declared": val_res.metadata_declared,
             "onboarding_validation_passed": True,
@@ -735,6 +981,10 @@ def save_dam_project(
         }
         if res_rel_name:
             file_hashes[res_rel_name] = compute_file_sha256(staging_dir / res_rel_name) or ""
+        if dom_rel_name:
+            file_hashes[dom_rel_name] = compute_file_sha256(staging_dir / dom_rel_name) or ""
+        if out_rel_name:
+            file_hashes[out_rel_name] = compute_file_sha256(staging_dir / out_rel_name) or ""
 
         manifest_dict: Dict[str, Any] = {
             "manifest_version": "1.0",
@@ -923,6 +1173,10 @@ def get_dam_project(project_id: str) -> DamProjectDetailResponse:
     try:
         data = json.loads(proj_json.read_text(encoding="utf-8"))
         data["manifest"] = manifest_data
+        zip_path = proj_dir / "packages" / "anuga_package.zip"
+        if zip_path.is_file():
+            data["anuga_package_built"] = True
+            data["anuga_package_sha256"] = compute_file_sha256(zip_path)
         return DamProjectDetailResponse(**data)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to load dam project data: {str(e)}")
@@ -1252,3 +1506,906 @@ def get_dam_project_breach_geometry(project_id: str) -> Dict[str, Any]:
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to process breach location geometry: {str(e)}")
+
+
+def get_dam_project_model_domain_geometry(project_id: str) -> Dict[str, Any]:
+    """Retrieve model domain geometry as EPSG:4326 GeoJSON FeatureCollection."""
+    verify_project_integrity(project_id)
+    valid_id = validate_project_uuid(project_id)
+    proj_dir = get_dam_projects_dir() / valid_id
+    dom_path = proj_dir / "model_domain.geojson"
+    proj_json = proj_dir / "project.json"
+
+    if not dom_path.is_file():
+        raise HTTPException(status_code=404, detail=f"No model domain geometry registered for project '{valid_id}'.")
+
+    geometry_crs = "EPSG:4326"
+    if proj_json.is_file():
+        try:
+            p_data = json.loads(proj_json.read_text(encoding="utf-8"))
+            if not p_data.get("model_domain_file"):
+                raise HTTPException(status_code=404, detail=f"No model domain geometry registered for project '{valid_id}'.")
+            geometry_crs = p_data.get("user_provided_metadata", {}).get("geometry_crs", "EPSG:4326")
+        except HTTPException:
+            raise
+        except Exception:
+            pass
+
+    try:
+        dom_raw = json.loads(dom_path.read_text(encoding="utf-8"))
+        features = []
+        if dom_raw.get("type") == "FeatureCollection":
+            features = dom_raw.get("features", [])
+        elif dom_raw.get("type") == "Feature":
+            features = [dom_raw]
+        elif "type" in dom_raw and dom_raw["type"] in ("Polygon", "MultiPolygon"):
+            features = [{"type": "Feature", "geometry": dom_raw, "properties": {}}]
+
+        src_crs = CRS.from_user_input(geometry_crs)
+        target_crs = CRS.from_user_input("EPSG:4326")
+        needs_transform = (src_crs != target_crs)
+        transformer = Transformer.from_crs(src_crs, target_crs, always_xy=True) if needs_transform else None
+
+        out_features = []
+        for feat in features:
+            geom_dict = feat.get("geometry")
+            if not geom_dict:
+                continue
+            sh_geom = shape(geom_dict)
+            if needs_transform and transformer:
+                sh_geom = shapely_transform(transformer.transform, sh_geom)
+
+            out_features.append({
+                "type": "Feature",
+                "geometry": json.loads(json.dumps(sh_geom.__geo_interface__)),
+                "properties": {
+                    "layer": "model_domain",
+                    "label": "User-provided Model Domain",
+                    "provenance": "user_declared_unverified",
+                    "original_crs": geometry_crs,
+                    "simulation_status": "no_simulation_executed",
+                }
+            })
+
+        return {
+            "type": "FeatureCollection",
+            "crs": {"type": "name", "properties": {"name": "urn:ogc:def:crs:OGC:1.3:CRS84"}},
+            "features": out_features,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to process model domain geometry: {str(e)}")
+
+
+def get_dam_project_outlet_geometry(project_id: str) -> Dict[str, Any]:
+    """Retrieve downstream outlet boundary geometry as EPSG:4326 GeoJSON FeatureCollection."""
+    verify_project_integrity(project_id)
+    valid_id = validate_project_uuid(project_id)
+    proj_dir = get_dam_projects_dir() / valid_id
+    out_path = proj_dir / "downstream_outlet.geojson"
+    proj_json = proj_dir / "project.json"
+
+    if not out_path.is_file():
+        raise HTTPException(status_code=404, detail=f"No downstream outlet geometry registered for project '{valid_id}'.")
+
+    geometry_crs = "EPSG:4326"
+    if proj_json.is_file():
+        try:
+            p_data = json.loads(proj_json.read_text(encoding="utf-8"))
+            if not p_data.get("downstream_outlet_file"):
+                raise HTTPException(status_code=404, detail=f"No downstream outlet geometry registered for project '{valid_id}'.")
+            geometry_crs = p_data.get("user_provided_metadata", {}).get("geometry_crs", "EPSG:4326")
+        except HTTPException:
+            raise
+        except Exception:
+            pass
+
+    try:
+        out_raw = json.loads(out_path.read_text(encoding="utf-8"))
+        features = []
+        if out_raw.get("type") == "FeatureCollection":
+            features = out_raw.get("features", [])
+        elif out_raw.get("type") == "Feature":
+            features = [out_raw]
+        elif "type" in out_raw and out_raw["type"] in ("Point", "MultiPoint", "LineString", "MultiLineString"):
+            features = [{"type": "Feature", "geometry": out_raw, "properties": {}}]
+
+        src_crs = CRS.from_user_input(geometry_crs)
+        target_crs = CRS.from_user_input("EPSG:4326")
+        needs_transform = (src_crs != target_crs)
+        transformer = Transformer.from_crs(src_crs, target_crs, always_xy=True) if needs_transform else None
+
+        out_features = []
+        for feat in features:
+            geom_dict = feat.get("geometry")
+            if not geom_dict:
+                continue
+            sh_geom = shape(geom_dict)
+            if needs_transform and transformer:
+                sh_geom = shapely_transform(transformer.transform, sh_geom)
+
+            out_features.append({
+                "type": "Feature",
+                "geometry": json.loads(json.dumps(sh_geom.__geo_interface__)),
+                "properties": {
+                    "layer": "downstream_outlet",
+                    "label": "User-provided Downstream Outlet",
+                    "provenance": "user_declared_unverified",
+                    "original_crs": geometry_crs,
+                    "simulation_status": "no_simulation_executed",
+                }
+            })
+
+        return {
+            "type": "FeatureCollection",
+            "crs": {"type": "name", "properties": {"name": "urn:ogc:def:crs:OGC:1.3:CRS84"}},
+            "features": out_features,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to process downstream outlet geometry: {str(e)}")
+
+
+def assess_anuga_preflight(project_id: str) -> DamProjectAnugaPreflightResponse:
+    """Assess simulation-readiness for an onboarded dam project against ANUGA requirements.
+
+    Never modifies project files. Verifies integrity prior to assessment.
+    """
+    verify_project_integrity(project_id)
+    valid_id = validate_project_uuid(project_id)
+    proj_dir = get_dam_projects_dir() / valid_id
+    proj_json = proj_dir / "project.json"
+
+    if not proj_json.is_file():
+        raise HTTPException(status_code=404, detail=f"Dam project '{valid_id}' not found.")
+
+    try:
+        p_data = json.loads(proj_json.read_text(encoding="utf-8"))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to load project manifest: {str(e)}")
+
+    user_meta = p_data.get("user_provided_metadata", {})
+    norm_meta = p_data.get("normalized_metadata", {})
+    raster_meta = p_data.get("raster_metadata", {})
+    sim_params = p_data.get("simulation_parameters", {})
+
+    blockers: List[str] = []
+    warnings: List[str] = []
+    derived_checks: Dict[str, Any] = {}
+    proposed_configuration: Dict[str, Any] = {}
+
+    # 1. Reservoir boundary requirement
+    has_res = bool(p_data.get("reservoir_boundary_file"))
+    res_meta = p_data.get("reservoir_metadata")
+    res_shape = None
+    if not has_res or not res_meta:
+        blockers.append("Reservoir boundary geometry is required for hydrodynamic initial condition specification.")
+    elif not res_meta.get("is_valid", False):
+        blockers.append("Reservoir boundary geometry is topologically invalid.")
+    elif not res_meta.get("fully_within_dem_bounds", False):
+        blockers.append("Reservoir boundary geometry extends outside the DEM bounding extent.")
+    else:
+        res_file = proj_dir / "reservoir_boundary.geojson"
+        if res_file.is_file():
+            try:
+                res_raw = json.loads(res_file.read_text(encoding="utf-8"))
+                r_feats = res_raw.get("features", [res_raw]) if res_raw.get("type") in ("FeatureCollection", "Feature") else [{"geometry": res_raw}]
+                r_geoms = [shape(f["geometry"]) for f in r_feats if f.get("geometry")]
+                if r_geoms:
+                    res_shape = r_geoms[0] if len(r_geoms) == 1 else MultiPolygon([g for g in r_geoms if isinstance(g, (Polygon, MultiPolygon))])
+            except Exception:
+                pass
+
+    # 2. Model domain requirement (Must be fully inside DEM coverage)
+    has_domain = bool(p_data.get("model_domain_file"))
+    domain_meta = p_data.get("model_domain_metadata")
+    dom_shape = None
+    if not has_domain or not domain_meta:
+        blockers.append("Model domain boundary (Polygon) is required to generate the ANUGA 2D triangular computational mesh.")
+    elif not domain_meta.get("is_valid", False):
+        blockers.append("Model domain geometry is topologically invalid.")
+    elif not domain_meta.get("fully_within_dem_bounds", False):
+        blockers.append("Model domain geometry extends outside the DEM bounding extent.")
+    else:
+        dom_file = proj_dir / "model_domain.geojson"
+        if dom_file.is_file():
+            try:
+                dom_raw = json.loads(dom_file.read_text(encoding="utf-8"))
+                feats = dom_raw.get("features", [dom_raw]) if dom_raw.get("type") in ("FeatureCollection", "Feature") else [{"geometry": dom_raw}]
+                geoms = [shape(f["geometry"]) for f in feats if f.get("geometry")]
+                if geoms:
+                    dom_shape = geoms[0] if len(geoms) == 1 else MultiPolygon([g for g in geoms if isinstance(g, (Polygon, MultiPolygon))])
+            except Exception:
+                pass
+
+    # Reservoir must be fully inside model domain
+    if dom_shape is not None and res_shape is not None:
+        try:
+            diff = res_shape.difference(dom_shape)
+            if not diff.is_empty and diff.area > 1e-7:
+                blockers.append("Reservoir boundary geometry must be fully contained within the computational model domain polygon.")
+        except Exception as e:
+            warnings.append(f"Could not verify containment of reservoir within model domain: {e}")
+
+    # 3. Downstream outlet requirement (Must be LineString/MultiLineString touching model domain exterior boundary)
+    has_outlet = bool(p_data.get("downstream_outlet_file"))
+    outlet_meta = p_data.get("downstream_outlet_metadata")
+    outlet_shape = None
+    if not has_outlet or not outlet_meta:
+        blockers.append("Downstream outlet boundary (LineString) is required to establish hydrodynamic open boundary conditions.")
+    elif not outlet_meta.get("is_valid", False):
+        blockers.append("Downstream outlet geometry is topologically invalid.")
+    elif not outlet_meta.get("fully_within_dem_bounds", False):
+        blockers.append("Downstream outlet geometry extends outside the DEM bounding extent.")
+    else:
+        out_types = outlet_meta.get("geometry_types", [])
+        if any(t in ("Point", "MultiPoint") for t in out_types):
+            blockers.append(
+                "Downstream outlet for ANUGA simulation must be a LineString or MultiLineString along the model domain boundary "
+                "(Point geometries cannot establish open boundary condition segments)."
+            )
+
+        out_file = proj_dir / "downstream_outlet.geojson"
+        if out_file.is_file():
+            try:
+                out_raw = json.loads(out_file.read_text(encoding="utf-8"))
+                feats = out_raw.get("features", [out_raw]) if out_raw.get("type") in ("FeatureCollection", "Feature") else [{"geometry": out_raw}]
+                geoms = [shape(f["geometry"]) for f in feats if f.get("geometry")]
+                if geoms:
+                    outlet_shape = geoms[0]
+            except Exception:
+                pass
+
+        if dom_shape is not None and outlet_shape is not None:
+            try:
+                # Must touch or intersect exterior boundary of model domain
+                boundary_geom = dom_shape.boundary if hasattr(dom_shape, "boundary") else None
+                touches_ext = False
+                if boundary_geom is not None:
+                    touches_ext = boundary_geom.intersects(outlet_shape) or boundary_geom.distance(outlet_shape) < 1e-4
+                if not touches_ext:
+                    blockers.append("Downstream outlet LineString must touch or intersect the exterior boundary of the model domain.")
+            except Exception as e:
+                warnings.append(f"Could not verify outlet boundary contact: {e}")
+
+    # 4. Dam Axis requirement (Single LineString, inside domain, touches reservoir)
+    axis_file = proj_dir / "dam_axis.geojson"
+    axis_shape = None
+    if axis_file.is_file():
+        try:
+            axis_raw = json.loads(axis_file.read_text(encoding="utf-8"))
+            ax_feats = axis_raw.get("features", [axis_raw]) if axis_raw.get("type") in ("FeatureCollection", "Feature") else [{"geometry": axis_raw}]
+            ax_geoms = [shape(f["geometry"]) for f in ax_feats if f.get("geometry")]
+            if len(ax_geoms) == 1 and ax_geoms[0].geom_type == "LineString":
+                axis_shape = ax_geoms[0]
+            elif len(ax_geoms) > 1 or (ax_geoms and ax_geoms[0].geom_type != "LineString"):
+                blockers.append("Dam axis geometry must resolve to a single continuous LineString for hydrodynamic crest burning.")
+        except Exception:
+            blockers.append("Failed to load dam axis geometry.")
+
+    if dom_shape is not None and axis_shape is not None:
+        try:
+            diff_axis = axis_shape.difference(dom_shape)
+            if not diff_axis.is_empty and diff_axis.length > 1e-5:
+                blockers.append("Dam axis geometry must lie within the computational model domain polygon.")
+        except Exception as e:
+            warnings.append(f"Could not verify dam axis containment within model domain: {e}")
+
+    if res_shape is not None and axis_shape is not None:
+        try:
+            touches_res = res_shape.intersects(axis_shape) or res_shape.boundary.intersects(axis_shape) or res_shape.distance(axis_shape) < 1e-4
+            if not touches_res:
+                blockers.append("Dam axis must touch or intersect the reservoir boundary geometry.")
+        except Exception as e:
+            warnings.append(f"Could not verify dam axis intersection with reservoir boundary: {e}")
+
+    # 5. Vertical Unit & Datum
+    v_unit = user_meta.get("vertical_unit")
+    v_datum = user_meta.get("vertical_datum")
+    if not v_unit or str(v_unit).strip().lower() in ("unknown", ""):
+        blockers.append("DEM vertical unit is missing or unknown. An authoritative unit (e.g. 'meters') is required to define physical elevation heads.")
+    if not v_datum or str(v_datum).strip().lower() in ("unknown", ""):
+        blockers.append("DEM vertical datum is missing or unknown. An authoritative datum (e.g. 'MSL', 'EGM96') is required for hydrodynamic water level reference.")
+
+    # 6. Reservoir Level & Physical Elevations (Dam crest > Reservoir level > Breach invert)
+    res_lvl = user_meta.get("reservoir_level")
+    crest_elev = user_meta.get("dam_crest_elevation")
+    invert_elev = user_meta.get("breach_invert_elevation")
+
+    if res_lvl is None or res_lvl <= 0.0:
+        blockers.append("Reservoir full supply water level (FSL) is missing or invalid.")
+
+    if crest_elev is None or crest_elev <= 0.0:
+        blockers.append("Dam crest elevation is missing or invalid.")
+
+    if invert_elev is None or invert_elev <= 0.0:
+        blockers.append("Breach invert elevation is missing or invalid.")
+
+    if crest_elev is not None and res_lvl is not None:
+        if crest_elev <= res_lvl:
+            blockers.append(f"Dam crest elevation ({crest_elev:.2f} {v_unit or 'm'}) must be strictly greater than reservoir water level ({res_lvl:.2f} {v_unit or 'm'}).")
+
+    if invert_elev is not None and res_lvl is not None:
+        if invert_elev >= res_lvl:
+            blockers.append(f"Breach invert elevation ({invert_elev:.2f} {v_unit or 'm'}) must be strictly less than reservoir water level ({res_lvl:.2f} {v_unit or 'm'}).")
+
+    if invert_elev is not None and crest_elev is not None:
+        if invert_elev >= crest_elev:
+            blockers.append(f"Breach invert elevation ({invert_elev:.2f} {v_unit or 'm'}) must be strictly less than dam crest elevation ({crest_elev:.2f} {v_unit or 'm'}).")
+
+    # Sample local DEM at breach center
+    breach_center = user_meta.get("breach_center")
+    if breach_center and len(breach_center) == 2 and invert_elev is not None:
+        dem_file_path = proj_dir / "dem.tif"
+        if dem_file_path.is_file():
+            try:
+                with rasterio.open(dem_file_path) as d_src:
+                    bx, by = float(breach_center[0]), float(breach_center[1])
+                    geom_crs_str = user_meta.get("geometry_crs", "EPSG:4326")
+                    src_crs = CRS.from_user_input(geom_crs_str)
+                    if d_src.crs and src_crs != d_src.crs:
+                        t = Transformer.from_crs(src_crs, d_src.crs, always_xy=True)
+                        bx, by = t.transform(bx, by)
+                    row, col = d_src.index(bx, by)
+                    if 0 <= row < d_src.height and 0 <= col < d_src.width:
+                        local_val = float(d_src.read(1, window=Window(col, row, 1, 1))[0, 0])
+                        if not np.isnan(local_val) and local_val > -9000:
+                            if invert_elev < local_val:
+                                warnings.append(
+                                    f"Breach invert elevation ({invert_elev:.2f} m) is lower than local baseline DEM terrain ({local_val:.2f} m) at breach location; verify scour/invert assumption."
+                                )
+            except Exception:
+                pass
+
+    # 7. Breach Parameters & Proximity to Axis
+    b_width = user_meta.get("breach_width")
+    if b_width is None or b_width <= 0.0:
+        blockers.append("Breach width is missing or invalid.")
+
+    if not breach_center or len(breach_center) != 2:
+        blockers.append("Breach center coordinates are missing.")
+
+    breach_params = p_data.get("breach_parameters", {})
+    breach_on_axis = breach_params.get("breach_on_dam_axis", True)
+    breach_dist_m = breach_params.get("breach_distance_to_axis_m", 0.0)
+    if not breach_on_axis:
+        blockers.append(f"Breach center is located {breach_dist_m:.1f} m from the dam axis geometry (exceeds allowable tolerance).")
+
+    # 8. Mesh and Simulation Time Parameters
+    mesh_res_m = user_meta.get("target_mesh_resolution_m") or sim_params.get("target_mesh_resolution_m")
+    sim_dur_s = user_meta.get("simulation_duration_s") or sim_params.get("simulation_duration_s")
+    out_int_s = user_meta.get("output_interval_s") or sim_params.get("output_interval_s")
+
+    if mesh_res_m is None or mesh_res_m <= 0.0 or mesh_res_m > 5000.0:
+        blockers.append("Target mesh resolution is missing or invalid (must be between 1 and 5000 metres).")
+
+    if sim_dur_s is None or sim_dur_s <= 0.0 or sim_dur_s > 604800.0:
+        blockers.append("Simulation duration is missing or invalid (must be between 1 and 604800 seconds).")
+
+    if out_int_s is None or out_int_s <= 0.0:
+        blockers.append("Output interval is missing or invalid (must be a positive numeric value in seconds).")
+    elif sim_dur_s is not None and out_int_s > sim_dur_s:
+        blockers.append(f"Output interval ({out_int_s} s) cannot exceed simulation duration ({sim_dur_s} s).")
+
+    # 9. Formation Time and Manning Roughness Warnings
+    form_time_hr = user_meta.get("breach_formation_time_hr")
+    if form_time_hr is not None and form_time_hr > 0.0:
+        warnings.append(
+            f"Breach formation time ({form_time_hr} hr) is reported as unsupported in this ANUGA script release; "
+            "an instantaneous hypothetical dam-break formulation is implemented instead."
+        )
+
+    warnings.append("All simulation parameters and elevation records are user-declared and have not been independently verified.")
+
+    manning_n = user_meta.get("manning_roughness")
+    if manning_n is not None and (manning_n < 0.01 or manning_n > 0.20):
+        warnings.append(f"Manning roughness coefficient n={manning_n} is outside standard hydraulic channel bounds (0.01 - 0.20).")
+
+    # 10. Derived Computations
+    domain_area_km2 = None
+    estimated_triangles = None
+    max_triangle_area_m2 = None
+
+    if dom_shape is not None:
+        try:
+            geom_crs_str = user_meta.get("geometry_crs", "EPSG:4326")
+            src_crs = CRS.from_user_input(geom_crs_str)
+            if src_crs.is_geographic:
+                c_lon, c_lat = dom_shape.centroid.x, dom_shape.centroid.y
+                utm_crs_str = get_utm_epsg_for_lon_lat(c_lon, c_lat)
+                utm_crs = CRS.from_user_input(utm_crs_str)
+                transformer = Transformer.from_crs(src_crs, utm_crs, always_xy=True)
+                dom_shape_metric = shapely_transform(transformer.transform, dom_shape)
+            else:
+                dom_shape_metric = dom_shape
+
+            area_m2 = float(dom_shape_metric.area)
+            domain_area_km2 = round(area_m2 / 1_000_000.0, 4)
+
+            if mesh_res_m and mesh_res_m > 0:
+                max_triangle_area_m2 = round(0.5 * (mesh_res_m ** 2), 2)
+                estimated_triangles = int(area_m2 / max_triangle_area_m2) if max_triangle_area_m2 > 0 else None
+        except Exception:
+            pass
+
+    water_head_m = None
+    if res_lvl is not None and invert_elev is not None and res_lvl > invert_elev:
+        water_head_m = round(res_lvl - invert_elev, 2)
+
+    freeboard_m = None
+    if crest_elev is not None and res_lvl is not None and crest_elev > res_lvl:
+        freeboard_m = round(crest_elev - res_lvl, 2)
+
+    output_steps = None
+    if sim_dur_s and out_int_s and out_int_s > 0:
+        output_steps = int(sim_dur_s / out_int_s)
+
+    derived_checks = {
+        "model_domain_area_km2": domain_area_km2,
+        "estimated_mesh_triangles": estimated_triangles,
+        "water_head_above_invert_m": water_head_m,
+        "freeboard_m": freeboard_m,
+        "output_steps_count": output_steps,
+        "breach_distance_to_axis_m": breach_dist_m,
+        "notes": "estimated_mesh_triangles is a pre-triangulation geometric estimate based on domain area and target resolution.",
+    }
+
+    proposed_configuration = {
+        "target_mesh_resolution_m": mesh_res_m,
+        "max_triangle_area_m2": max_triangle_area_m2,
+        "simulation_duration_s": sim_dur_s,
+        "output_interval_s": out_int_s,
+        "output_steps_count": output_steps,
+        "manning_roughness": manning_n or 0.035,
+        "solver_type": "anuga_shallow_water_2d",
+        "breach_formulation": "instantaneous_hypothetical",
+        "datum_declared": f"{v_unit} ({v_datum})" if (v_unit and v_datum) else "unknown",
+    }
+
+    preflight_passed = (len(blockers) == 0)
+
+    return DamProjectAnugaPreflightResponse(
+        project_id=valid_id,
+        project_name=p_data.get("project_name", "Untitled Dam Project"),
+        preflight_passed=preflight_passed,
+        blockers=blockers,
+        warnings=warnings,
+        derived_checks=derived_checks,
+        proposed_configuration=proposed_configuration,
+        scientific_status="hypothetical_unverified",
+    )
+
+
+def generate_anuga_run_script() -> str:
+    """Generate reproducible, standalone ANUGA 2D shallow water hydrodynamic dam-break simulation script.
+
+    PURE STATIC SCRIPT: Reads all configuration dynamically from config.json.
+    Zero string interpolation of user text (eliminates code injection risk).
+    Burns hypothetical dam crest and exact breach gap into working terrain without modifying original dem.tif.
+    """
+    return '''"""
+ANUGA Hydrodynamic Dam-Break Simulation Script
+Generated by Dam Safety Intelligence Hub (SIH PS 26161)
+Scientific Status: Hypothetical Unverified Simulation Scenario
+WARNING: This script defines a hypothetical scenario. It has not been field calibrated or certified.
+"""
+
+import os
+import sys
+import json
+import logging
+from pathlib import Path
+import numpy as np
+
+# Configure logging
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+logger = logging.getLogger("anuga_simulation")
+
+try:
+    import anuga
+    from anuga import Domain
+    from anuga.geometry.polygon import read_polygon
+except ImportError:
+    logger.error("ANUGA is not installed in the active environment.")
+    logger.error("Please install ANUGA (e.g. via conda-forge: `conda install -c conda-forge anuga`) to execute.")
+    sys.exit(1)
+
+try:
+    import rasterio
+    from shapely.geometry import shape, Point, Polygon, MultiPolygon, LineString
+    from shapely.ops import transform as shapely_transform
+    from pyproj import CRS, Transformer
+except ImportError as e:
+    logger.error(f"Missing required spatial dependency: {e}")
+    sys.exit(1)
+
+SCRIPT_DIR = Path(__file__).resolve().parent
+CONFIG_FILE = SCRIPT_DIR / "config.json"
+
+
+def run():
+    logger.info("Initializing ANUGA Dam-Break Hydrodynamic Simulation...")
+
+    if not CONFIG_FILE.is_file():
+        logger.error(f"Configuration file '{CONFIG_FILE}' not found.")
+        sys.exit(1)
+
+    with open(CONFIG_FILE, "r", encoding="utf-8") as f:
+        cfg = json.load(f)
+
+    # 1. Inspect and load input files
+    dem_path = SCRIPT_DIR / cfg.get("dem_file", "dem.tif")
+    domain_path = SCRIPT_DIR / cfg.get("model_domain_file", "model_domain.geojson")
+    reservoir_path = SCRIPT_DIR / cfg.get("reservoir_boundary_file", "reservoir_boundary.geojson")
+    outlet_path = SCRIPT_DIR / cfg.get("downstream_outlet_file", "downstream_outlet.geojson")
+    dam_axis_path = SCRIPT_DIR / cfg.get("dam_axis_file", "dam_axis.geojson")
+
+    for p in [dem_path, domain_path, reservoir_path, outlet_path, dam_axis_path]:
+        if not p.is_file():
+            logger.error(f"Required input file '{p}' is missing.")
+            sys.exit(1)
+
+    # 2. Simulation parameters
+    sim_params = cfg.get("simulation_parameters", {})
+    target_res_m = float(sim_params.get("target_mesh_resolution_m", 50.0))
+    duration_s = float(sim_params.get("simulation_duration_s", 3600.0))
+    interval_s = float(sim_params.get("output_interval_s", 60.0))
+    manning_n = float(sim_params.get("manning_roughness", 0.035))
+
+    reservoir_level = float(cfg.get("reservoir_level", 0.0))
+    breach_width = float(cfg.get("breach_width", 50.0))
+    breach_invert = float(cfg.get("breach_invert_elevation", 0.0))
+    dam_crest = float(cfg.get("dam_crest_elevation", 0.0))
+    breach_center = cfg.get("breach_center")
+
+    logger.info(f"Target Mesh Resolution: {target_res_m} m (Max Triangle Area: {0.5 * (target_res_m ** 2)} m2)")
+    logger.info(f"Simulation Duration: {duration_s} s, Output Interval: {interval_s} s")
+    logger.info(f"Reservoir Level: {reservoir_level} m, Breach Invert: {breach_invert} m, Crest: {dam_crest} m")
+
+    # 3. Load Domain Geometry
+    with open(domain_path, "r", encoding="utf-8") as f:
+        dom_data = json.load(f)
+    feats = dom_data.get("features", [dom_data]) if dom_data.get("type") in ("FeatureCollection", "Feature") else [{"geometry": dom_data}]
+    dom_geom = shape(feats[0]["geometry"])
+
+    # Extract bounding polygon coordinates for ANUGA mesh creation
+    if isinstance(dom_geom, Polygon):
+        poly_coords = list(dom_geom.exterior.coords)
+    elif isinstance(dom_geom, MultiPolygon):
+        poly_coords = list(dom_geom.geoms[0].exterior.coords)
+    else:
+        logger.error(f"Unsupported model domain geometry type: {dom_geom.geom_type}")
+        sys.exit(1)
+
+    # 4. Create ANUGA Domain
+    max_triangle_area = 0.5 * (target_res_m ** 2)
+    output_dir = SCRIPT_DIR / "output"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    scenario_name = f"dam_break_{cfg.get('project_id', 'sim')}"
+
+    logger.info("Generating 2D unstructured triangular mesh...")
+    try:
+        domain = anuga.create_domain_from_regions(
+            bounding_polygon=poly_coords,
+            boundary_tags={'bottom': [0], 'right': [1], 'top': [2], 'left': [3]},
+            maximum_triangle_area=max_triangle_area,
+            mesh_filename=str(output_dir / f"{scenario_name}.msh"),
+            use_cache=False,
+            verbose=True
+        )
+    except Exception as e:
+        logger.warning(f"Using direct domain fallback: {e}")
+        domain = anuga.Domain(bounding_polygon=poly_coords, use_cache=False)
+
+    domain.set_name(str(output_dir / scenario_name))
+    domain.set_datadir(str(output_dir))
+
+    # 5. Build Explicit Dam Crest Ridge & Breach Gap on Working Terrain
+    # Original dem.tif is preserved unchanged.
+    logger.info("Setting elevation quantity with burned dam crest and instantaneous breach gap...")
+    with open(dam_axis_path, "r", encoding="utf-8") as f:
+        axis_data = json.load(f)
+    ax_feats = axis_data.get("features", [axis_data]) if axis_data.get("type") in ("FeatureCollection", "Feature") else [{"geometry": axis_data}]
+    axis_geom = shape(ax_feats[0]["geometry"])
+
+    # Define dam crest ridge buffer and breach gap geometry
+    dam_buffer_width = max(target_res_m, 15.0)
+    dam_poly = axis_geom.buffer(dam_buffer_width / 2.0)
+
+    breach_pt = Point(float(breach_center[0]), float(breach_center[1])) if breach_center else None
+    breach_poly = None
+    if breach_pt is not None:
+        breach_poly = breach_pt.buffer(breach_width / 2.0)
+
+    # Set baseline elevation from DEM
+    domain.set_quantity('elevation', filename=str(dem_path), use_cache=False, verbose=False)
+
+    # Modify working terrain in memory for dam ridge and breach gap
+    elev_vals = domain.get_quantity('elevation').get_values()
+    pts = domain.get_nodes()
+    if pts is not None and len(pts) > 0:
+        modified_elev = np.copy(elev_vals)
+        for idx, (px, py) in enumerate(pts):
+            p = Point(px, py)
+            if breach_poly and breach_poly.contains(p):
+                # Breach gap lowered to breach invert elevation
+                modified_elev[idx] = min(modified_elev[idx], breach_invert)
+            elif dam_poly.contains(p):
+                # Dam crest raised to dam crest elevation
+                modified_elev[idx] = max(modified_elev[idx], dam_crest)
+        domain.set_quantity('elevation', modified_elev)
+
+    # 6. Set Friction (Manning's n)
+    domain.set_quantity('friction', manning_n)
+
+    # 7. Set Initial Water Stage (Reservoir Boundary)
+    with open(reservoir_path, "r", encoding="utf-8") as f:
+        res_data = json.load(f)
+    r_feats = res_data.get("features", [res_data]) if res_data.get("type") in ("FeatureCollection", "Feature") else [{"geometry": res_data}]
+    res_geom = shape(r_feats[0]["geometry"])
+
+    logger.info("Setting initial reservoir stage inside reservoir boundary polygon...")
+    def stage_function(x, y):
+        stages = []
+        for px, py in zip(x, y):
+            p = Point(px, py)
+            if res_geom.contains(p):
+                stages.append(reservoir_level)
+            else:
+                stages.append(0.0)
+        return np.array(stages)
+
+    try:
+        domain.set_quantity('stage', expression='elevation')
+        domain.set_quantity('stage', stage_function)
+    except Exception as e:
+        logger.info(f"Setting initial stage expression: {e}")
+        domain.set_quantity('stage', expression=f'elevation + (elevation < {reservoir_level})')
+
+    # 8. Boundary Conditions (Transmissive Outlet / Reflective elsewhere)
+    logger.info("Configuring boundary conditions (Transmissive downstream outlet / Reflective walls)...")
+    Bs = anuga.Transmissive_boundary(domain)
+    Br = anuga.Reflective_boundary(domain)
+    domain.set_boundary({'bottom': Bs, 'right': Bs, 'top': Br, 'left': Br})
+
+    # 9. Execute Evolution Loop
+    logger.info(f"Starting ANUGA evolution (0 -> {duration_s}s with step {interval_s}s)...")
+    for t in domain.evolve(yieldstep=interval_s, finaltime=duration_s):
+        logger.info(domain.timestepping_statistics())
+
+    logger.info("Hydrodynamic simulation execution completed successfully.")
+    logger.info(f"Output SWW file written to: {output_dir / f'{scenario_name}.sww'}")
+
+
+if __name__ == "__main__":
+    run()
+'''
+
+
+
+def build_dam_project_anuga_package(project_id: str) -> DamProjectAnugaPackageResponse:
+    """Build immutable reproducible ANUGA simulation package ZIP for an onboarded dam project.
+
+    Only builds when preflight assessment passes (preflight_passed=True).
+    Never fabricates fake simulation results or SWW files.
+    """
+    preflight = assess_anuga_preflight(project_id)
+    if not preflight.preflight_passed:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "message": "Cannot generate ANUGA simulation package: project failed preflight assessment.",
+                "blockers": preflight.blockers,
+            },
+        )
+
+    valid_id = validate_project_uuid(project_id)
+    proj_dir = get_dam_projects_dir() / valid_id
+    proj_json = proj_dir / "project.json"
+
+    p_data = json.loads(proj_json.read_text(encoding="utf-8"))
+    project_name = p_data.get("project_name", "dam_project")
+    user_meta = p_data.get("user_provided_metadata", {})
+    sim_params = p_data.get("simulation_parameters", {})
+
+    # Package output directory
+    packages_dir = proj_dir / "packages"
+    packages_dir.mkdir(parents=True, exist_ok=True)
+    zip_path = packages_dir / "anuga_package.zip"
+
+    # Deterministic caching: If package already built and exists, return existing package
+    if zip_path.is_file():
+        try:
+            with zipfile.ZipFile(zip_path, "r") as zf:
+                if "manifest.json" in zf.namelist():
+                    cached_manifest = json.loads(zf.read("manifest.json").decode("utf-8"))
+                    return DamProjectAnugaPackageResponse(
+                        project_id=valid_id,
+                        project_name=project_name,
+                        package_filename="anuga_package.zip",
+                        package_size_bytes=zip_path.stat().st_size,
+                        package_sha256=compute_file_sha256(zip_path) or "",
+                        created_at=cached_manifest.get("created_at", datetime.now(timezone.utc).isoformat()),
+                        files_included=zf.namelist(),
+                        scientific_status="hypothetical_unverified",
+                        simulation_executed=False,
+                        message="ANUGA simulation package ready (existing package returned).",
+                    )
+        except Exception:
+            pass
+
+    # Create config.json content
+    config_dict = {
+        "project_id": valid_id,
+        "project_name": project_name,
+        "scientific_status": "hypothetical_unverified",
+        "dem_file": "dem.tif",
+        "dam_axis_file": "dam_axis.geojson",
+        "reservoir_boundary_file": "reservoir_boundary.geojson",
+        "model_domain_file": "model_domain.geojson",
+        "downstream_outlet_file": "downstream_outlet.geojson",
+        "reservoir_level": user_meta.get("reservoir_level"),
+        "dam_crest_elevation": user_meta.get("dam_crest_elevation"),
+        "breach_invert_elevation": user_meta.get("breach_invert_elevation"),
+        "breach_width": user_meta.get("breach_width"),
+        "breach_center": user_meta.get("breach_center"),
+        "breach_formation_time_hr": user_meta.get("breach_formation_time_hr"),
+        "vertical_unit": user_meta.get("vertical_unit"),
+        "vertical_datum": user_meta.get("vertical_datum"),
+        "geometry_crs": user_meta.get("geometry_crs", "EPSG:4326"),
+        "simulation_parameters": {
+            "target_mesh_resolution_m": sim_params.get("target_mesh_resolution_m") or user_meta.get("target_mesh_resolution_m", 50.0),
+            "simulation_duration_s": sim_params.get("simulation_duration_s") or user_meta.get("simulation_duration_s", 3600.0),
+            "output_interval_s": sim_params.get("output_interval_s") or user_meta.get("output_interval_s", 60.0),
+            "manning_roughness": user_meta.get("manning_roughness", 0.035),
+            "solver": "anuga_shallow_water_2d",
+            "breach_formulation": "instantaneous_hypothetical",
+        },
+        "disclaimer": "This package defines a hypothetical simulation scenario. Simulation has NOT been executed.",
+    }
+
+    config_bytes = json.dumps(config_dict, indent=2).encode("utf-8")
+
+    # Generate Python run script (static template reading dynamically from config.json)
+    run_script_str = generate_anuga_run_script()
+    run_script_bytes = run_script_str.encode("utf-8")
+
+    # Generate README_LIMITATIONS.txt
+    readme_text = f"""================================================================================
+ANUGA DAM-BREAK HYDRODYNAMIC SIMULATION PACKAGE
+Project: {project_name} ({valid_id})
+Generated: {datetime.now(timezone.utc).isoformat()}
+================================================================================
+
+SCIENTIFIC STATUS: HYPOTHETICAL UNVERIFIED
+
+IMPORTANT NOTICES & SCIENTIFIC LIMITATIONS:
+1. NO SIMULATION HAS BEEN EXECUTED on the server. No SWW or result files have
+   been fabricated or included in this package.
+2. The model parameters (elevations, breach geometry, Manning roughness) are
+   user-declared and have not been field-verified against official dam-safety records.
+3. BREACH FORMULATION: The generated script utilizes an instantaneous hypothetical
+   breach formulation. Progressive breach formation time is reported as unsupported
+   in this baseline ANUGA script release.
+4. COORDINATE & VERTICAL REFERENCE:
+   - Geometry CRS: {user_meta.get('geometry_crs', 'EPSG:4326')}
+   - Declared Unit / Datum: {user_meta.get('vertical_unit', 'unknown')} ({user_meta.get('vertical_datum', 'unknown')})
+5. This package is intended strictly for research and numerical method validation.
+   It MUST NOT be used for real-time flood warning, emergency operations, or official
+   evacuation planning without independent hydrological verification.
+
+EXECUTION INSTRUCTIONS:
+1. Ensure ANUGA is installed in your Python environment:
+   conda env create -f environment_anuga.yml
+   conda activate sih-anuga
+   pip install -r requirements.txt
+2. Run the simulation:
+   python run_anuga.py
+3. Hydrodynamic SWW outputs will be written to the `output/` directory.
+================================================================================
+"""
+    readme_bytes = readme_text.encode("utf-8")
+
+    # Generate requirements.txt with pinned dependencies
+    requirements_text = """# Pinned Python dependencies for reproducible ANUGA Dam-Break Simulation
+anuga>=3.1.0,<=4.0.0
+numpy>=1.20.0,<2.0.0
+scipy>=1.7.0
+rasterio>=1.2.0
+shapely>=2.0.0
+pyproj>=3.0.0
+"""
+    requirements_bytes = requirements_text.encode("utf-8")
+
+    # Collect all package files and compute package manifest
+    package_files_content: Dict[str, bytes] = {
+        "config.json": config_bytes,
+        "run_anuga.py": run_script_bytes,
+        "requirements.txt": requirements_bytes,
+        "README_LIMITATIONS.txt": readme_bytes,
+    }
+
+    # Include environment_anuga.yml from root repo if available
+    repo_env_yml = Path(__file__).resolve().parent.parent.parent / "environment_anuga.yml"
+    if repo_env_yml.is_file():
+        package_files_content["environment_anuga.yml"] = repo_env_yml.read_bytes()
+
+    # Add source input files from project directory
+    source_filenames = [
+        "dem.tif",
+        "dam_axis.geojson",
+        "reservoir_boundary.geojson",
+        "model_domain.geojson",
+        "downstream_outlet.geojson",
+    ]
+    for fn in source_filenames:
+        src_path = proj_dir / fn
+        if src_path.is_file():
+            package_files_content[fn] = src_path.read_bytes()
+
+    # Compute manifest with SHA-256 for each bundled file
+    internal_manifest: Dict[str, Any] = {
+        "project_id": valid_id,
+        "project_name": project_name,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "scientific_status": "hypothetical_unverified",
+        "simulation_executed": False,
+        "files": {},
+    }
+
+    for fn, content in package_files_content.items():
+        h = hashlib.sha256(content).hexdigest()
+        internal_manifest["files"][fn] = {
+            "size_bytes": len(content),
+            "sha256": h,
+        }
+
+    manifest_bytes = json.dumps(internal_manifest, indent=2).encode("utf-8")
+    package_files_content["manifest.json"] = manifest_bytes
+
+    # Write atomic ZIP archive
+    temp_zip = packages_dir / f"anuga_package_{uuid.uuid4().hex[:8]}.tmp"
+    try:
+        with zipfile.ZipFile(temp_zip, mode="w", compression=zipfile.ZIP_DEFLATED) as zf:
+            for fn, content in package_files_content.items():
+                zf.writestr(fn, content)
+
+        if zip_path.is_file():
+            zip_path.unlink()
+        temp_zip.rename(zip_path)
+    except Exception as e:
+        if temp_zip.is_file():
+            temp_zip.unlink()
+        raise HTTPException(status_code=500, detail=f"Failed to generate ANUGA package ZIP: {str(e)}")
+
+    package_sha256 = compute_file_sha256(zip_path) or ""
+
+    return DamProjectAnugaPackageResponse(
+        project_id=valid_id,
+        project_name=project_name,
+        package_filename="anuga_package.zip",
+        package_size_bytes=zip_path.stat().st_size,
+        package_sha256=package_sha256,
+        created_at=datetime.now(timezone.utc).isoformat(),
+        files_included=list(package_files_content.keys()),
+        scientific_status="hypothetical_unverified",
+        simulation_executed=False,
+        message="ANUGA simulation package generated successfully. Simulation has not been executed.",
+    )
+
+
+def get_dam_project_anuga_package_path(project_id: str) -> Path:
+    """Retrieve absolute file path of built ANUGA package ZIP after integrity verification."""
+    verify_project_integrity(project_id)
+    valid_id = validate_project_uuid(project_id)
+    zip_path = get_dam_projects_dir() / valid_id / "packages" / "anuga_package.zip"
+
+    if not zip_path.is_file():
+        raise HTTPException(
+            status_code=404,
+            detail=f"ANUGA package has not been built for project '{valid_id}'. Please run preflight and generate package first.",
+        )
+
+    return zip_path

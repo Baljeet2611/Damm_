@@ -10,6 +10,7 @@ import {
   saveDamProject,
   listDamProjects,
 } from '../../api/damProjects'
+import { DamProjectAnugaReadiness } from './DamProjectAnugaReadiness'
 import './DamOnboardingPanel.css'
 
 interface DamOnboardingPanelProps {
@@ -21,6 +22,8 @@ export const DamOnboardingPanel: React.FC<DamOnboardingPanelProps> = ({ onDispla
   const [demFile, setDemFile] = useState<File | null>(null)
   const [damAxisFile, setDamAxisFile] = useState<File | null>(null)
   const [reservoirFile, setReservoirFile] = useState<File | null>(null)
+  const [modelDomainFile, setModelDomainFile] = useState<File | null>(null)
+  const [downstreamOutletFile, setDownstreamOutletFile] = useState<File | null>(null)
 
   // Form values
   const [formValues, setFormValues] = useState<OnboardingFormValues>({
@@ -33,6 +36,11 @@ export const DamOnboardingPanel: React.FC<DamOnboardingPanelProps> = ({ onDispla
     breachCenterY: '',
     breachFormationTimeHr: '1.0',
     manningRoughness: '0.035',
+    damCrestElevation: '',
+    breachInvertElevation: '',
+    targetMeshResolutionM: '50',
+    simulationDurationS: '3600',
+    outputIntervalS: '60',
     geometryCrs: 'EPSG:4326',
   })
 
@@ -50,6 +58,7 @@ export const DamOnboardingPanel: React.FC<DamOnboardingPanelProps> = ({ onDispla
   const [projectsList, setProjectsList] = useState<DamProjectSummary[]>([])
   const [loadingProjects, setLoadingProjects] = useState<boolean>(false)
   const [selectedProjectDetail, setSelectedProjectDetail] = useState<DamProjectDetailResponse | null>(null)
+  const [activeReadinessProjectId, setActiveReadinessProjectId] = useState<string | null>(null)
 
   const loadProjects = async () => {
     try {
@@ -84,6 +93,12 @@ export const DamOnboardingPanel: React.FC<DamOnboardingPanelProps> = ({ onDispla
     if (reservoirFile) {
       fd.append('reservoir_boundary_file', reservoirFile)
     }
+    if (modelDomainFile) {
+      fd.append('model_domain_file', modelDomainFile)
+    }
+    if (downstreamOutletFile) {
+      fd.append('downstream_outlet_file', downstreamOutletFile)
+    }
     fd.append('project_name', formValues.projectName.trim() || 'New Dam Project')
     if (formValues.verticalUnit.trim()) fd.append('vertical_unit', formValues.verticalUnit.trim())
     if (formValues.verticalDatum.trim()) fd.append('vertical_datum', formValues.verticalDatum.trim())
@@ -93,6 +108,11 @@ export const DamOnboardingPanel: React.FC<DamOnboardingPanelProps> = ({ onDispla
     if (formValues.breachCenterY.trim()) fd.append('breach_center_y', formValues.breachCenterY.trim())
     if (formValues.breachFormationTimeHr.trim()) fd.append('breach_formation_time_hr', formValues.breachFormationTimeHr.trim())
     if (formValues.manningRoughness.trim()) fd.append('manning_roughness', formValues.manningRoughness.trim())
+    if (formValues.damCrestElevation.trim()) fd.append('dam_crest_elevation', formValues.damCrestElevation.trim())
+    if (formValues.breachInvertElevation.trim()) fd.append('breach_invert_elevation', formValues.breachInvertElevation.trim())
+    if (formValues.targetMeshResolutionM.trim()) fd.append('target_mesh_resolution_m', formValues.targetMeshResolutionM.trim())
+    if (formValues.simulationDurationS.trim()) fd.append('simulation_duration_s', formValues.simulationDurationS.trim())
+    if (formValues.outputIntervalS.trim()) fd.append('output_interval_s', formValues.outputIntervalS.trim())
     fd.append('geometry_crs', formValues.geometryCrs.trim() || 'EPSG:4326')
 
     if (isSave) {
@@ -143,6 +163,7 @@ export const DamOnboardingPanel: React.FC<DamOnboardingPanelProps> = ({ onDispla
     try {
       const saved = await saveDamProject(fd)
       setSavedProject(saved)
+      setActiveReadinessProjectId(saved.project_id)
       await loadProjects()
     } catch (err: any) {
       setSaveError(err.message || 'Failed to save project.')
@@ -203,6 +224,34 @@ export const DamOnboardingPanel: React.FC<DamOnboardingPanelProps> = ({ onDispla
               className="file-input-control"
             />
             {reservoirFile && <span className="file-selected-name">💧 {reservoirFile.name} ({(reservoirFile.size / 1024).toFixed(1)} KB)</span>}
+          </div>
+
+          <div className="file-input-group">
+            <label className="file-input-label">Model Domain Boundary (Optional *.geojson for ANUGA Mesh)</label>
+            <input
+              type="file"
+              accept=".geojson,.json"
+              onChange={(e) => {
+                setModelDomainFile(e.target.files?.[0] || null)
+                setValidationResult(null)
+              }}
+              className="file-input-control"
+            />
+            {modelDomainFile && <span className="file-selected-name">🌐 {modelDomainFile.name} ({(modelDomainFile.size / 1024).toFixed(1)} KB)</span>}
+          </div>
+
+          <div className="file-input-group">
+            <label className="file-input-label">Downstream Outlet Boundary (Optional *.geojson for ANUGA Outflow)</label>
+            <input
+              type="file"
+              accept=".geojson,.json"
+              onChange={(e) => {
+                setDownstreamOutletFile(e.target.files?.[0] || null)
+                setValidationResult(null)
+              }}
+              className="file-input-control"
+            />
+            {downstreamOutletFile && <span className="file-selected-name">🚪 {downstreamOutletFile.name} ({(downstreamOutletFile.size / 1024).toFixed(1)} KB)</span>}
           </div>
         </div>
 
@@ -271,6 +320,31 @@ export const DamOnboardingPanel: React.FC<DamOnboardingPanelProps> = ({ onDispla
 
           <div className="onboarding-grid-2">
             <div className="config-field">
+              <label>Dam Crest Elevation</label>
+              <input
+                type="number"
+                step="0.1"
+                value={formValues.damCrestElevation}
+                onChange={(e) => handleInputChange('damCrestElevation', e.target.value)}
+                className="config-input font-mono"
+                placeholder="e.g. 665.0 (must be > FRL)"
+              />
+            </div>
+            <div className="config-field">
+              <label>Breach Invert Elevation</label>
+              <input
+                type="number"
+                step="0.1"
+                value={formValues.breachInvertElevation}
+                onChange={(e) => handleInputChange('breachInvertElevation', e.target.value)}
+                className="config-input font-mono"
+                placeholder="e.g. 590.0 (must be < FRL)"
+              />
+            </div>
+          </div>
+
+          <div className="onboarding-grid-2">
+            <div className="config-field">
               <label>Breach Center X (Lon in CRS) *</label>
               <input
                 type="number"
@@ -313,6 +387,42 @@ export const DamOnboardingPanel: React.FC<DamOnboardingPanelProps> = ({ onDispla
                 value={formValues.manningRoughness}
                 onChange={(e) => handleInputChange('manningRoughness', e.target.value)}
                 className="config-input font-mono"
+              />
+            </div>
+          </div>
+
+          <div className="onboarding-grid-3">
+            <div className="config-field">
+              <label>Target Mesh Res (m)</label>
+              <input
+                type="number"
+                step="1"
+                value={formValues.targetMeshResolutionM}
+                onChange={(e) => handleInputChange('targetMeshResolutionM', e.target.value)}
+                className="config-input font-mono"
+                placeholder="50"
+              />
+            </div>
+            <div className="config-field">
+              <label>Sim Duration (s)</label>
+              <input
+                type="number"
+                step="10"
+                value={formValues.simulationDurationS}
+                onChange={(e) => handleInputChange('simulationDurationS', e.target.value)}
+                className="config-input font-mono"
+                placeholder="3600"
+              />
+            </div>
+            <div className="config-field">
+              <label>Output Interval (s)</label>
+              <input
+                type="number"
+                step="5"
+                value={formValues.outputIntervalS}
+                onChange={(e) => handleInputChange('outputIntervalS', e.target.value)}
+                className="config-input font-mono"
+                placeholder="60"
               />
             </div>
           </div>
@@ -509,6 +619,12 @@ export const DamOnboardingPanel: React.FC<DamOnboardingPanelProps> = ({ onDispla
             ✅ Project Registered Successfully! ID: <code>{savedProject.project_id}</code>
             <br />
             Status: <strong>{savedProject.status}</strong> | Manifest files: {Object.keys(savedProject.manifest.files).join(', ')}
+            <div style={{ marginTop: '0.8rem' }}>
+              <DamProjectAnugaReadiness
+                project={savedProject}
+                onPackageBuilt={loadProjects}
+              />
+            </div>
           </div>
         )}
 
@@ -531,6 +647,7 @@ export const DamOnboardingPanel: React.FC<DamOnboardingPanelProps> = ({ onDispla
             <div className="saved-projects-list">
               {projectsList.map((p) => {
                 const isIntegrityFailed = !p.available || p.integrity_status === 'failed' || p.integrity_status === 'corrupted' || p.integrity_status === 'integrity_failed'
+                const isReadinessOpen = activeReadinessProjectId === p.project_id
                 return (
                   <div key={p.project_id} className="saved-project-card">
                     <div className="saved-project-header">
@@ -548,7 +665,9 @@ export const DamOnboardingPanel: React.FC<DamOnboardingPanelProps> = ({ onDispla
                     <div className="saved-project-details font-mono">
                       <span>CRS: {p.crs}</span>
                       <span>Created: {p.created_at ? new Date(p.created_at).toLocaleDateString() : 'N/A'}</span>
-                      <span>Reservoir Vector: {p.has_reservoir_boundary ? 'Yes' : 'None'}</span>
+                      <span>Reservoir: {p.has_reservoir_boundary ? 'Yes' : 'None'}</span>
+                      <span>Domain: {p.has_model_domain ? 'Yes' : 'None'}</span>
+                      <span>Outlet: {p.has_downstream_outlet ? 'Yes' : 'None'}</span>
                     </div>
 
                     {isIntegrityFailed && (
@@ -569,11 +688,29 @@ export const DamOnboardingPanel: React.FC<DamOnboardingPanelProps> = ({ onDispla
                       </button>
                       <button
                         className="btn-project-action"
+                        onClick={() => setActiveReadinessProjectId(isReadinessOpen ? null : p.project_id)}
+                        disabled={isIntegrityFailed}
+                        style={{ borderColor: isReadinessOpen ? 'var(--neon-cyan, #00ffff)' : undefined }}
+                      >
+                        ⚡ Readiness & Package
+                      </button>
+                      <button
+                        className="btn-project-action"
                         onClick={() => setSelectedProjectDetail(selectedProjectDetail?.project_id === p.project_id ? null : (p as any))}
                       >
                         📋 Info
                       </button>
                     </div>
+
+                    {/* Simulation Readiness Section */}
+                    {isReadinessOpen && (
+                      <div style={{ marginTop: '0.6rem' }}>
+                        <DamProjectAnugaReadiness
+                          project={p}
+                          onPackageBuilt={loadProjects}
+                        />
+                      </div>
+                    )}
 
                     {selectedProjectDetail?.project_id === p.project_id && (
                       <div className="val-metadata-grid" style={{ marginTop: '0.4rem' }}>

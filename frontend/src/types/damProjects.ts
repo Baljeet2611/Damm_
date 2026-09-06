@@ -34,6 +34,11 @@ export interface UserProvidedMetadata {
   breach_center?: [number, number] | null
   breach_formation_time_hr?: number | null
   manning_roughness?: number | null
+  dam_crest_elevation?: number | null
+  breach_invert_elevation?: number | null
+  target_mesh_resolution_m?: number | null
+  simulation_duration_s?: number | null
+  output_interval_s?: number | null
   geometry_crs: string
 }
 
@@ -53,6 +58,8 @@ export interface NormalizedProjectMetadata {
   user_provided_metadata?: UserProvidedMetadata | null
   dam_axis_metadata?: GeometryValidationMetadata | null
   reservoir_metadata?: GeometryValidationMetadata | null
+  model_domain_metadata?: GeometryValidationMetadata | null
+  downstream_outlet_metadata?: GeometryValidationMetadata | null
   breach_on_dam_axis: boolean
   breach_distance_to_axis_m?: number | null
   distance_calculation_crs?: string | null
@@ -82,6 +89,8 @@ export interface DamProjectSummary {
   bounds: RasterBounds
   resolution: RasterResolution
   has_reservoir_boundary: boolean
+  has_model_domain?: boolean
+  has_downstream_outlet?: boolean
   metadata_declared: boolean
   onboarding_validation_passed: boolean
   scientifically_verified: boolean
@@ -97,19 +106,31 @@ export interface DamProjectDetailResponse {
   dem_file: string
   dam_axis_file: string
   reservoir_boundary_file?: string | null
+  model_domain_file?: string | null
+  downstream_outlet_file?: string | null
   raster_metadata: RasterDerivedMetadata
   user_provided_metadata: UserProvidedMetadata
   dam_axis_metadata: GeometryValidationMetadata
   reservoir_metadata?: GeometryValidationMetadata | null
+  model_domain_metadata?: GeometryValidationMetadata | null
+  downstream_outlet_metadata?: GeometryValidationMetadata | null
   breach_parameters: {
     reservoir_level?: number | null
     breach_width?: number | null
     breach_center?: [number, number] | null
     breach_formation_time_hr?: number | null
     manning_roughness?: number | null
+    dam_crest_elevation?: number | null
+    breach_invert_elevation?: number | null
     breach_on_dam_axis: boolean
     breach_distance_to_axis_m?: number | null
     distance_calculation_crs?: string | null
+  }
+  simulation_parameters?: {
+    target_mesh_resolution_m?: number | null
+    simulation_duration_s?: number | null
+    output_interval_s?: number | null
+    manning_roughness?: number | null
   }
   manifest: {
     manifest_version: string
@@ -124,7 +145,49 @@ export interface DamProjectDetailResponse {
   metadata_declared: boolean
   onboarding_validation_passed: boolean
   scientifically_verified: boolean
+  anuga_package_built?: boolean
+  anuga_package_sha256?: string | null
   warnings: string[]
+}
+
+export interface DamProjectAnugaPreflightResponse {
+  project_id: string
+  project_name: string
+  preflight_passed: boolean
+  blockers: string[]
+  warnings: string[]
+  derived_checks: {
+    model_domain_area_km2?: number | null
+    estimated_mesh_triangles?: number | null
+    water_head_above_invert_m?: number | null
+    freeboard_m?: number | null
+    output_steps_count?: number | null
+    breach_distance_to_axis_m?: number | null
+  }
+  proposed_configuration: {
+    target_mesh_resolution_m?: number | null
+    max_triangle_area_m2?: number | null
+    simulation_duration_s?: number | null
+    output_interval_s?: number | null
+    output_steps_count?: number | null
+    manning_roughness?: number | null
+    solver_type?: string
+    breach_formulation?: string
+    datum_declared?: string
+  }
+  scientific_status: string
+}
+
+export interface DamProjectAnugaPackageResponse {
+  project_id: string
+  project_name: string
+  package_filename: string
+  package_size_bytes: number
+  package_sha256: string
+  files_included: string[]
+  scientific_status: string
+  simulation_executed: boolean
+  message: string
 }
 
 export interface OnboardingFormValues {
@@ -137,5 +200,10 @@ export interface OnboardingFormValues {
   breachCenterY: string
   breachFormationTimeHr: string
   manningRoughness: string
+  damCrestElevation: string
+  breachInvertElevation: string
+  targetMeshResolutionM: string
+  simulationDurationS: string
+  outputIntervalS: string
   geometryCrs: string
 }

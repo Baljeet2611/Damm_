@@ -45,6 +45,8 @@ from app.schemas import (
     DamProjectValidationResponse,
     DamProjectSummary,
     DamProjectDetailResponse,
+    DamProjectAnugaPreflightResponse,
+    DamProjectAnugaPackageResponse,
 )
 
 from app.raster_service import (
@@ -124,6 +126,11 @@ from app.onboarding_service import (
     get_dam_project_dam_axis_geometry,
     get_dam_project_reservoir_geometry,
     get_dam_project_breach_geometry,
+    get_dam_project_model_domain_geometry,
+    get_dam_project_outlet_geometry,
+    assess_anuga_preflight,
+    build_dam_project_anuga_package,
+    get_dam_project_anuga_package_path,
 )
 
 logger = logging.getLogger("app.main")
@@ -698,6 +705,8 @@ async def post_validate_dam_project(
     dem_file: UploadFile = File(..., description="DEM GeoTIFF file (.tif or .tiff)"),
     dam_axis_file: UploadFile = File(..., description="Dam axis alignment GeoJSON file (.geojson or .json)"),
     reservoir_boundary_file: Optional[UploadFile] = File(default=None, description="Optional reservoir pool boundary GeoJSON (.geojson or .json)"),
+    model_domain_file: Optional[UploadFile] = File(default=None, description="Optional model domain computational boundary GeoJSON (.geojson or .json)"),
+    downstream_outlet_file: Optional[UploadFile] = File(default=None, description="Optional downstream outlet boundary GeoJSON (.geojson or .json)"),
     project_name: str = Form(default="New Dam Project"),
     vertical_unit: Optional[str] = Form(default=None, description="User-verified vertical elevation unit (e.g. meters)"),
     vertical_datum: Optional[str] = Form(default=None, description="User-verified vertical datum (e.g. MSL, EGM96)"),
@@ -707,6 +716,11 @@ async def post_validate_dam_project(
     breach_center_y: Optional[float] = Form(default=None, description="Breach center latitude or Y coordinate in geometry_crs"),
     breach_formation_time_hr: Optional[float] = Form(default=1.0, description="Breach formation time in hours"),
     manning_roughness: Optional[float] = Form(default=0.035, description="Channel Manning's roughness coefficient"),
+    dam_crest_elevation: Optional[float] = Form(default=None, description="Dam crest elevation in vertical datum units"),
+    breach_invert_elevation: Optional[float] = Form(default=None, description="Breach bottom / invert elevation in vertical datum units"),
+    target_mesh_resolution_m: Optional[float] = Form(default=None, description="Target computational mesh resolution in meters"),
+    simulation_duration_s: Optional[float] = Form(default=None, description="Total simulation duration in seconds"),
+    output_interval_s: Optional[float] = Form(default=None, description="Simulation output timestep interval in seconds"),
     geometry_crs: Optional[str] = Form(default="EPSG:4326", description="Coordinate Reference System of input GeoJSON geometries and breach coordinates"),
 ) -> DamProjectValidationResponse:
     """
@@ -718,6 +732,8 @@ async def post_validate_dam_project(
     dem_bytes = await dem_file.read()
     dam_axis_bytes = await dam_axis_file.read()
     res_bytes = await reservoir_boundary_file.read() if reservoir_boundary_file else None
+    domain_bytes = await model_domain_file.read() if model_domain_file else None
+    outlet_bytes = await downstream_outlet_file.read() if downstream_outlet_file else None
 
     return validate_dam_project_dataset(
         dem_bytes=dem_bytes,
@@ -726,6 +742,10 @@ async def post_validate_dam_project(
         dam_axis_filename=dam_axis_file.filename or "dam_axis.geojson",
         reservoir_bytes=res_bytes,
         reservoir_filename=reservoir_boundary_file.filename if reservoir_boundary_file else None,
+        model_domain_bytes=domain_bytes,
+        model_domain_filename=model_domain_file.filename if model_domain_file else None,
+        downstream_outlet_bytes=outlet_bytes,
+        downstream_outlet_filename=downstream_outlet_file.filename if downstream_outlet_file else None,
         project_name=project_name,
         vertical_unit=vertical_unit,
         vertical_datum=vertical_datum,
@@ -735,6 +755,11 @@ async def post_validate_dam_project(
         breach_center_y=breach_center_y,
         breach_formation_time_hr=breach_formation_time_hr,
         manning_roughness=manning_roughness,
+        dam_crest_elevation=dam_crest_elevation,
+        breach_invert_elevation=breach_invert_elevation,
+        target_mesh_resolution_m=target_mesh_resolution_m,
+        simulation_duration_s=simulation_duration_s,
+        output_interval_s=output_interval_s,
         geometry_crs=geometry_crs or "EPSG:4326",
     )
 
@@ -749,6 +774,8 @@ async def create_dam_project_endpoint(
     dem_file: UploadFile = File(..., description="DEM GeoTIFF raster (*.tif, *.tiff)"),
     dam_axis_file: UploadFile = File(..., description="Dam axis vector GeoJSON (*.geojson, *.json)"),
     reservoir_boundary_file: Optional[UploadFile] = File(default=None, description="Optional reservoir boundary GeoJSON"),
+    model_domain_file: Optional[UploadFile] = File(default=None, description="Optional model domain computational boundary GeoJSON"),
+    downstream_outlet_file: Optional[UploadFile] = File(default=None, description="Optional downstream outlet boundary GeoJSON"),
     project_name: str = Form(default="New Dam Project", description="Human-readable project title"),
     vertical_unit: Optional[str] = Form(default=None, description="User-verified vertical unit (e.g. meters, feet)"),
     vertical_datum: Optional[str] = Form(default=None, description="User-verified vertical datum (e.g. MSL, EGM96)"),
@@ -758,6 +785,11 @@ async def create_dam_project_endpoint(
     breach_center_y: Optional[float] = Form(default=None, description="Breach center latitude or Y coordinate in geometry_crs"),
     breach_formation_time_hr: Optional[float] = Form(default=1.0, description="Breach formation time in hours"),
     manning_roughness: Optional[float] = Form(default=0.035, description="Channel Manning's roughness coefficient"),
+    dam_crest_elevation: Optional[float] = Form(default=None, description="Dam crest elevation in vertical datum units"),
+    breach_invert_elevation: Optional[float] = Form(default=None, description="Breach bottom / invert elevation in vertical datum units"),
+    target_mesh_resolution_m: Optional[float] = Form(default=None, description="Target computational mesh resolution in meters"),
+    simulation_duration_s: Optional[float] = Form(default=None, description="Total simulation duration in seconds"),
+    output_interval_s: Optional[float] = Form(default=None, description="Simulation output timestep interval in seconds"),
     geometry_crs: Optional[str] = Form(default="EPSG:4326", description="Coordinate Reference System of input GeoJSON geometries"),
     acknowledge_unverified_metadata: bool = Form(default=False, description="User acknowledgment that metadata is unverified"),
 ) -> DamProjectDetailResponse:
@@ -768,6 +800,8 @@ async def create_dam_project_endpoint(
     dem_bytes = await dem_file.read()
     dam_axis_bytes = await dam_axis_file.read()
     res_bytes = await reservoir_boundary_file.read() if reservoir_boundary_file else None
+    domain_bytes = await model_domain_file.read() if model_domain_file else None
+    outlet_bytes = await downstream_outlet_file.read() if downstream_outlet_file else None
 
     return save_dam_project(
         dem_bytes=dem_bytes,
@@ -776,6 +810,10 @@ async def create_dam_project_endpoint(
         dam_axis_filename=dam_axis_file.filename or "dam_axis.geojson",
         reservoir_bytes=res_bytes,
         reservoir_filename=reservoir_boundary_file.filename if reservoir_boundary_file else None,
+        model_domain_bytes=domain_bytes,
+        model_domain_filename=model_domain_file.filename if model_domain_file else None,
+        downstream_outlet_bytes=outlet_bytes,
+        downstream_outlet_filename=downstream_outlet_file.filename if downstream_outlet_file else None,
         project_name=project_name,
         vertical_unit=vertical_unit,
         vertical_datum=vertical_datum,
@@ -785,6 +823,11 @@ async def create_dam_project_endpoint(
         breach_center_y=breach_center_y,
         breach_formation_time_hr=breach_formation_time_hr,
         manning_roughness=manning_roughness,
+        dam_crest_elevation=dam_crest_elevation,
+        breach_invert_elevation=breach_invert_elevation,
+        target_mesh_resolution_m=target_mesh_resolution_m,
+        simulation_duration_s=simulation_duration_s,
+        output_interval_s=output_interval_s,
         geometry_crs=geometry_crs or "EPSG:4326",
         acknowledge_unverified_metadata=acknowledge_unverified_metadata,
     )
@@ -875,4 +918,56 @@ def get_dam_project_reservoir_geometry_endpoint(project_id: str) -> Dict[str, An
 )
 def get_dam_project_breach_geometry_endpoint(project_id: str) -> Dict[str, Any]:
     return get_dam_project_breach_geometry(project_id)
+
+
+@app.get(
+    "/api/dam-projects/{project_id}/geometry/model-domain",
+    summary="Get reprojected model domain boundary vector geometry (EPSG:4326)",
+    description="Returns EPSG:4326 GeoJSON FeatureCollection of the user-supplied computational model domain.",
+)
+def get_dam_project_model_domain_geometry_endpoint(project_id: str) -> Dict[str, Any]:
+    return get_dam_project_model_domain_geometry(project_id)
+
+
+@app.get(
+    "/api/dam-projects/{project_id}/geometry/outlet",
+    summary="Get reprojected downstream outlet boundary vector geometry (EPSG:4326)",
+    description="Returns EPSG:4326 GeoJSON FeatureCollection of the user-supplied downstream outlet boundary.",
+)
+def get_dam_project_outlet_geometry_endpoint(project_id: str) -> Dict[str, Any]:
+    return get_dam_project_outlet_geometry(project_id)
+
+
+@app.post(
+    "/api/dam-projects/{project_id}/anuga/preflight",
+    response_model=DamProjectAnugaPreflightResponse,
+    summary="Assess simulation-readiness for ANUGA model generation",
+    description="Validates project manifest integrity, geometric boundaries, and physical elevations without executing simulations.",
+)
+def post_anuga_preflight_endpoint(project_id: str) -> DamProjectAnugaPreflightResponse:
+    return assess_anuga_preflight(project_id)
+
+
+@app.post(
+    "/api/dam-projects/{project_id}/anuga/build-package",
+    response_model=DamProjectAnugaPackageResponse,
+    summary="Build reproducible ANUGA simulation package ZIP",
+    description="Generates standalone ANUGA hydrodynamic simulation package with manifest, python run script, and validated inputs.",
+)
+def post_build_anuga_package_endpoint(project_id: str) -> DamProjectAnugaPackageResponse:
+    return build_dam_project_anuga_package(project_id)
+
+
+@app.get(
+    "/api/dam-projects/{project_id}/anuga/package",
+    summary="Download reproducible ANUGA simulation package ZIP",
+    description="Downloads the generated immutable ANUGA package ZIP file containing validated inputs, config, and run script.",
+)
+def get_anuga_package_zip_endpoint(project_id: str) -> FileResponse:
+    zip_path = get_dam_project_anuga_package_path(project_id)
+    return FileResponse(
+        path=str(zip_path),
+        filename=f"dam_project_{project_id[:8]}_anuga_package.zip",
+        media_type="application/zip",
+    )
 

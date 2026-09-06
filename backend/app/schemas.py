@@ -616,6 +616,11 @@ class UserProvidedMetadata(BaseModel):
     breach_center: Optional[Tuple[float, float]] = None
     breach_formation_time_hr: Optional[float] = None
     manning_roughness: Optional[float] = None
+    dam_crest_elevation: Optional[float] = None
+    breach_invert_elevation: Optional[float] = None
+    target_mesh_resolution_m: Optional[float] = None
+    simulation_duration_s: Optional[float] = None
+    output_interval_s: Optional[float] = None
     geometry_crs: str = "EPSG:4326"
 
 
@@ -635,6 +640,8 @@ class NormalizedProjectMetadata(BaseModel):
     user_provided_metadata: Optional[UserProvidedMetadata] = None
     dam_axis_metadata: Optional[GeometryValidationMetadata] = None
     reservoir_metadata: Optional[GeometryValidationMetadata] = None
+    model_domain_metadata: Optional[GeometryValidationMetadata] = None
+    downstream_outlet_metadata: Optional[GeometryValidationMetadata] = None
     breach_on_dam_axis: bool = False
     breach_distance_to_axis_m: Optional[float] = None
     distance_calculation_crs: Optional[str] = None
@@ -664,6 +671,8 @@ class DamProjectSummary(BaseModel):
     bounds: RasterBounds
     resolution: RasterResolution
     has_reservoir_boundary: bool
+    has_model_domain: bool = False
+    has_downstream_outlet: bool = False
     metadata_declared: bool
     onboarding_validation_passed: bool
     scientifically_verified: bool = False
@@ -679,14 +688,44 @@ class DamProjectDetailResponse(BaseModel):
     dem_file: str
     dam_axis_file: str
     reservoir_boundary_file: Optional[str] = None
+    model_domain_file: Optional[str] = None
+    downstream_outlet_file: Optional[str] = None
     raster_metadata: RasterDerivedMetadata
     user_provided_metadata: UserProvidedMetadata
     dam_axis_metadata: GeometryValidationMetadata
     reservoir_metadata: Optional[GeometryValidationMetadata] = None
+    model_domain_metadata: Optional[GeometryValidationMetadata] = None
+    downstream_outlet_metadata: Optional[GeometryValidationMetadata] = None
     breach_parameters: Dict[str, Any]
+    simulation_parameters: Optional[Dict[str, Any]] = None
+    anuga_package_built: bool = False
     manifest: Dict[str, Any]
     assumptions_requiring_confirmation: List[str]
     metadata_declared: bool
     onboarding_validation_passed: bool
     scientifically_verified: bool = False
     warnings: List[str] = []
+
+
+class DamProjectAnugaPreflightResponse(BaseModel):
+    project_id: str
+    project_name: str
+    preflight_passed: bool
+    blockers: List[str] = []
+    warnings: List[str] = []
+    derived_checks: Dict[str, Any] = {}
+    proposed_configuration: Dict[str, Any] = {}
+    scientific_status: str = "hypothetical_unverified"
+
+
+class DamProjectAnugaPackageResponse(BaseModel):
+    project_id: str
+    project_name: str
+    package_filename: str
+    package_size_bytes: int
+    package_sha256: str
+    created_at: str
+    files_included: List[str] = []
+    scientific_status: str = "hypothetical_unverified"
+    simulation_executed: bool = False
+    message: str = "Package generated; simulation has not been executed."

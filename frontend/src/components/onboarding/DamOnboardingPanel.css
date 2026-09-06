@@ -36,7 +36,14 @@
   gap: 0.75rem;
 }
 
+.onboarding-grid-3 {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 0.5rem;
+}
+
 .file-input-group {
+
   display: flex;
   flex-direction: column;
   gap: 0.3rem;
@@ -471,4 +478,159 @@
 .btn-return-hidkal:hover {
   background: #38bdf8;
   color: #0f172a;
+}
+
+/* Simulation Readiness & ANUGA Package Styles */
+.simulation-readiness-container {
+  background: rgba(15, 23, 42, 0.9);
+  border: 1px solid rgba(56, 189, 248, 0.4);
+  border-radius: 8px;
+  padding: 0.85rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.readiness-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.readiness-header h5 {
+  font-size: 0.84rem;
+  font-weight: 700;
+  color: #38bdf8;
+  margin: 0;
+}
+
+.readiness-intro {
+  font-size: 0.74rem;
+  color: #94a3b8;
+  margin: 0;
+  line-height: 1.35;
+}
+
+.readiness-actions-row {
+  display: flex;
+  gap: 0.6rem;
+  margin-top: 0.2rem;
+}
+
+.btn-preflight {
+  background: linear-gradient(135deg, #0284c7, #0369a1);
+  color: #fff;
+  border: none;
+  padding: 0.5rem 0.85rem;
+  border-radius: 5px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  transition: all 0.2s ease;
+}
+
+.btn-preflight:hover:not(:disabled) {
+  background: linear-gradient(135deg, #0ea5e9, #0284c7);
+  box-shadow: 0 0 10px rgba(56, 189, 248, 0.35);
+}
+
+.btn-preflight:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.preflight-report-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  background: rgba(30, 41, 59, 0.5);
+  border-radius: 6px;
+  padding: 0.65rem;
+  border: 1px solid rgba(51, 65, 85, 0.5);
+}
+
+.preflight-blockers-box {
+  background: rgba(239, 68, 68, 0.1);
+  border-left: 3px solid #ef4444;
+  padding: 0.4rem 0.6rem;
+  border-radius: 0 4px 4px 0;
+}
+
+.preflight-warnings-box {
+  background: rgba(245, 158, 11, 0.1);
+  border-left: 3px solid #f59e0b;
+  padding: 0.4rem 0.6rem;
+  border-radius: 0 4px 4px 0;
+}
+
+.btn-build-package {
+  background: linear-gradient(135deg, #8b5cf6, #7c3aed);
+  color: #fff;
+  border: none;
+  padding: 0.55rem 0.95rem;
+  border-radius: 5px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  transition: all 0.2s ease;
+}
+
+.btn-build-package:hover:not(:disabled) {
+  background: linear-gradient(135deg, #a78bfa, #8b5cf6);
+  box-shadow: 0 0 12px rgba(139, 92, 246, 0.4);
+}
+
+.btn-build-package:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.package-blocked-hint {
+  font-size: 0.7rem;
+  color: #94a3b8;
+}
+
+.package-success-card {
+  background: rgba(30, 41, 59, 0.7);
+  border: 1px solid rgba(34, 197, 94, 0.4);
+  border-radius: 6px;
+  padding: 0.65rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.package-banner-success {
+  background: rgba(34, 197, 94, 0.15);
+  border: 1px solid rgba(34, 197, 94, 0.4);
+  color: #4ade80;
+  padding: 0.45rem 0.65rem;
+  border-radius: 5px;
+  font-size: 0.78rem;
+  font-weight: 600;
+}
+
+.btn-download-package {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  background: linear-gradient(135deg, #10b981, #059669);
+  color: #fff;
+  text-decoration: none;
+  font-size: 0.78rem;
+  font-weight: 600;
+  padding: 0.45rem 0.85rem;
+  border-radius: 5px;
+  transition: all 0.2s ease;
+}
+
+.btn-download-package:hover {
+  background: linear-gradient(135deg, #34d399, #10b981);
+  box-shadow: 0 0 10px rgba(16, 185, 129, 0.4);
 }

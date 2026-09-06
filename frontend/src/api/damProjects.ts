@@ -2,6 +2,8 @@ import type {
   DamProjectValidationResponse,
   DamProjectSummary,
   DamProjectDetailResponse,
+  DamProjectAnugaPreflightResponse,
+  DamProjectAnugaPackageResponse,
   RasterDerivedMetadata,
 } from '../types/damProjects'
 
@@ -120,4 +122,77 @@ export async function getDamProjectBreachGeometry(projectId: string): Promise<an
     throw new Error(`Failed to fetch breach geometry: HTTP ${res.status}`)
   }
   return res.json()
+}
+
+export async function getDamProjectModelDomainGeometry(projectId: string): Promise<any | null> {
+  const res = await fetch(`${API_BASE}/api/dam-projects/${encodeURIComponent(projectId)}/geometry/model-domain`)
+  if (res.status === 404) {
+    return null
+  }
+  if (!res.ok) {
+    const errBody = await res.json().catch(() => null)
+    if (res.status === 409 && errBody?.detail?.code === 'project_integrity_failed') {
+      throw new Error(`Project integrity failure: ${errBody.detail.message}`)
+    }
+    throw new Error(`Failed to fetch model domain geometry: HTTP ${res.status}`)
+  }
+  return res.json()
+}
+
+export async function getDamProjectOutletGeometry(projectId: string): Promise<any | null> {
+  const res = await fetch(`${API_BASE}/api/dam-projects/${encodeURIComponent(projectId)}/geometry/outlet`)
+  if (res.status === 404) {
+    return null
+  }
+  if (!res.ok) {
+    const errBody = await res.json().catch(() => null)
+    if (res.status === 409 && errBody?.detail?.code === 'project_integrity_failed') {
+      throw new Error(`Project integrity failure: ${errBody.detail.message}`)
+    }
+    throw new Error(`Failed to fetch downstream outlet geometry: HTTP ${res.status}`)
+  }
+  return res.json()
+}
+
+export async function runAnugaPreflight(projectId: string): Promise<DamProjectAnugaPreflightResponse> {
+  const res = await fetch(`${API_BASE}/api/dam-projects/${encodeURIComponent(projectId)}/anuga/preflight`, {
+    method: 'POST',
+  })
+  if (!res.ok) {
+    const errBody = await res.json().catch(() => null)
+    if (res.status === 409 && errBody?.detail?.code === 'project_integrity_failed') {
+      throw new Error(`Project integrity failure: ${errBody.detail.message}`)
+    }
+    if (errBody && errBody.detail) {
+      if (typeof errBody.detail === 'string') throw new Error(errBody.detail)
+      if (errBody.detail.message) throw new Error(errBody.detail.message)
+    }
+    throw new Error(`Preflight assessment failed: HTTP ${res.status}`)
+  }
+  return res.json()
+}
+
+export async function buildAnugaPackage(projectId: string): Promise<DamProjectAnugaPackageResponse> {
+  const res = await fetch(`${API_BASE}/api/dam-projects/${encodeURIComponent(projectId)}/anuga/build-package`, {
+    method: 'POST',
+  })
+  if (!res.ok) {
+    const errBody = await res.json().catch(() => null)
+    if (res.status === 409 && errBody?.detail?.code === 'project_integrity_failed') {
+      throw new Error(`Project integrity failure: ${errBody.detail.message}`)
+    }
+    if (errBody && errBody.detail) {
+      if (typeof errBody.detail === 'string') throw new Error(errBody.detail)
+      if (errBody.detail.message) {
+        const blockers = errBody.detail.blockers ? ` Blockers: ${errBody.detail.blockers.join('; ')}` : ''
+        throw new Error(`${errBody.detail.message}${blockers}`)
+      }
+    }
+    throw new Error(`Package generation failed: HTTP ${res.status}`)
+  }
+  return res.json()
+}
+
+export function getAnugaPackageDownloadUrl(projectId: string): string {
+  return `${API_BASE}/api/dam-projects/${encodeURIComponent(projectId)}/anuga/package`
 }
