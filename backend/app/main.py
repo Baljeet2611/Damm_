@@ -1,7 +1,10 @@
+import os
+import logging
 from typing import Dict, Any, List, Optional
-from fastapi import FastAPI, Query, Response, HTTPException
-from fastapi.responses import FileResponse
+from fastapi import FastAPI, Query, Response, HTTPException, Request
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.middleware.gzip import GZipMiddleware
 
 from app.schemas import (
     DatasetResponse,
@@ -108,19 +111,13 @@ from app.gee_service import (
     create_export_plan,
 )
 
+logger = logging.getLogger("app.main")
+
 app = FastAPI(
     title="Dam Break Decision Support System API",
     description="Automated dam-break hydrodynamic inspection, vector overlays, preliminary exposure screening, illustrative damage estimation, scenario management, and Delft3D integration API",
     version="0.9.0",
 )
-
-import os
-import logging
-from starlette.middleware.gzip import GZipMiddleware
-from fastapi.responses import JSONResponse
-from fastapi import Request
-
-logger = logging.getLogger("app.main")
 
 cors_env = os.environ.get("CORS_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173,http://localhost:3000,http://127.0.0.1:3000")
 allowed_origins = [origin.strip() for origin in cors_env.split(",") if origin.strip()]
@@ -406,7 +403,6 @@ def get_export_layer(
     Never accepts or exposes arbitrary filesystem paths.
     """
     if layer.lower() == "route":
-        from fastapi import HTTPException
         raise HTTPException(
             status_code=422,
             detail="Route export is not supported via GET. Use POST /api/export/route or POST /api/export with RouteScreeningRequest parameters.",
