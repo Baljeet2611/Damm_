@@ -247,7 +247,7 @@ class RasterSampler:
     """Helper to sample depth, velocity, and arrival rasters efficiently in memory."""
     def __init__(self, hazard_source: str = "sample_hidkal", threshold: float = 0.0):
         self.hazard_source = hazard_source or "sample_hidkal"
-        self.threshold = threshold if threshold is not None else (0.10 if self.hazard_source == "anuga_hidkal_pilot" else 0.0)
+        self.threshold = threshold if threshold is not None else (0.10 if self.hazard_source in ("anuga_hidkal_pilot", "anuga_hidkal_refined") else 0.0)
         self.depth_arr = None
         self.velocity_arr = None
         self.arrival_arr = None
@@ -261,12 +261,12 @@ class RasterSampler:
         self._load_rasters()
 
     def _load_rasters(self):
-        if self.hazard_source == "anuga_hidkal_pilot":
+        if self.hazard_source in ("anuga_hidkal_pilot", "anuga_hidkal_refined"):
             self.is_projected = True
             try:
-                _, depth_path = resolve_anuga_layer_file("depth")
-                _, velocity_path = resolve_anuga_layer_file("velocity")
-                _, arrival_path = resolve_anuga_layer_file("arrival")
+                _, depth_path = resolve_anuga_layer_file("depth", hazard_source=self.hazard_source)
+                _, velocity_path = resolve_anuga_layer_file("velocity", hazard_source=self.hazard_source)
+                _, arrival_path = resolve_anuga_layer_file("arrival", hazard_source=self.hazard_source)
             except Exception:
                 depth_path, velocity_path, arrival_path = None, None, None
 
@@ -371,7 +371,7 @@ class RasterSampler:
             a_val = None
             is_initially_wet = False
             if a is not None and not np.isnan(a):
-                if np.isclose(a, 0.0) and self.hazard_source == "anuga_hidkal_pilot":
+                if np.isclose(a, 0.0) and self.hazard_source in ("anuga_hidkal_pilot", "anuga_hidkal_refined"):
                     is_initially_wet = True
                     a_val = 0.0
                 elif not (np.isclose(a, 9999.0) or np.isclose(a, -9999.0) or a >= 9000.0 or a <= 0.0):
@@ -417,11 +417,11 @@ def sample_geometry_exposure(geom_shape, sampler: RasterSampler) -> Tuple[bool, 
 def get_exposure_assets(hazard_source: str = "sample_hidkal", threshold: float = 0.0) -> Dict[str, Any]:
     """
     Calculate and return assets GeoJSON with exposure screening attributes.
-    Supports hazard_source ('sample_hidkal' or 'anuga_hidkal_pilot') and configurable threshold.
+    Supports hazard_source ('sample_hidkal', 'anuga_hidkal_pilot', or 'anuga_hidkal_refined') and configurable threshold.
     """
     global _exposure_assets_cache
     h_src = hazard_source or "sample_hidkal"
-    t_val = float(threshold) if threshold is not None else (0.10 if h_src == "anuga_hidkal_pilot" else 0.0)
+    t_val = float(threshold) if threshold is not None else (0.10 if h_src in ("anuga_hidkal_pilot", "anuga_hidkal_refined") else 0.0)
 
     raw_assets = load_raw_assets()
     _, assets_path = resolve_vector_file("assets")
@@ -433,11 +433,12 @@ def get_exposure_assets(hazard_source: str = "sample_hidkal", threshold: float =
     if _exposure_assets_cache is not None and _exposure_assets_cache[0] == cache_key:
         return _exposure_assets_cache[1]
 
-    disclaimer_text = (
-        "Hypothetical ANUGA pilot screening — not a forecast or validated Hidkal prediction. Assumed vertical units from source interpretation."
-        if h_src == "anuga_hidkal_pilot"
-        else "preliminary exposure screening based on unverified sample rasters"
-    )
+    if h_src == "anuga_hidkal_refined":
+        disclaimer_text = "Hypothetical refined ANUGA pilot screening — not a forecast or validated Hidkal prediction. Assumed vertical units from source interpretation."
+    elif h_src == "anuga_hidkal_pilot":
+        disclaimer_text = "Hypothetical ANUGA pilot screening — not a forecast or validated Hidkal prediction. Assumed vertical units from source interpretation."
+    else:
+        disclaimer_text = "preliminary exposure screening based on unverified sample rasters"
 
     features = []
     for feat in raw_assets["features"]:
@@ -481,11 +482,11 @@ def get_exposure_assets(hazard_source: str = "sample_hidkal", threshold: float =
 def get_exposure_roads(hazard_source: str = "sample_hidkal", threshold: float = 0.0) -> Dict[str, Any]:
     """
     Calculate and return roads GeoJSON with exposure screening attributes.
-    Supports hazard_source ('sample_hidkal' or 'anuga_hidkal_pilot') and configurable threshold.
+    Supports hazard_source ('sample_hidkal', 'anuga_hidkal_pilot', or 'anuga_hidkal_refined') and configurable threshold.
     """
     global _exposure_roads_cache
     h_src = hazard_source or "sample_hidkal"
-    t_val = float(threshold) if threshold is not None else (0.10 if h_src == "anuga_hidkal_pilot" else 0.0)
+    t_val = float(threshold) if threshold is not None else (0.10 if h_src in ("anuga_hidkal_pilot", "anuga_hidkal_refined") else 0.0)
 
     raw_roads = load_raw_roads()
     _, roads_path = resolve_vector_file("roads")
@@ -497,11 +498,12 @@ def get_exposure_roads(hazard_source: str = "sample_hidkal", threshold: float = 
     if _exposure_roads_cache is not None and _exposure_roads_cache[0] == cache_key:
         return _exposure_roads_cache[1]
 
-    disclaimer_text = (
-        "Hypothetical ANUGA pilot screening — not a forecast or validated Hidkal prediction. Assumed vertical units from source interpretation."
-        if h_src == "anuga_hidkal_pilot"
-        else "preliminary exposure screening based on unverified sample rasters"
-    )
+    if h_src == "anuga_hidkal_refined":
+        disclaimer_text = "Hypothetical refined ANUGA pilot screening — not a forecast or validated Hidkal prediction. Assumed vertical units from source interpretation."
+    elif h_src == "anuga_hidkal_pilot":
+        disclaimer_text = "Hypothetical ANUGA pilot screening — not a forecast or validated Hidkal prediction. Assumed vertical units from source interpretation."
+    else:
+        disclaimer_text = "preliminary exposure screening based on unverified sample rasters"
 
     features = []
     for feat in raw_roads["features"]:
@@ -543,77 +545,97 @@ def get_exposure_roads(hazard_source: str = "sample_hidkal", threshold: float = 
 
 def get_exposure_summary(hazard_source: str = "sample_hidkal", threshold: float = 0.0) -> ExposureSummaryResponse:
     """
-    Compute Exposure Summary including total, assessed, exposed, not-exposed,
-    and not-assessed counts, plus category breakdowns and reservoir partitioning.
+    Compute full exposure summary metrics (total, assessed, exposed, not-exposed, not-assessed)
+    plus categorical breakdowns for both assets and road network.
     """
     global _exposure_summary_cache
     h_src = hazard_source or "sample_hidkal"
-    t_val = float(threshold) if threshold is not None else (0.10 if h_src == "anuga_hidkal_pilot" else 0.0)
+    t_val = float(threshold) if threshold is not None else (0.10 if h_src in ("anuga_hidkal_pilot", "anuga_hidkal_refined") else 0.0)
 
-    assets_exp = get_exposure_assets(hazard_source=h_src, threshold=t_val)
-    roads_exp = get_exposure_roads(hazard_source=h_src, threshold=t_val)
+    # Get processed assets and roads
+    assets_fc = get_exposure_assets(hazard_source=h_src, threshold=t_val)
+    roads_fc = get_exposure_roads(hazard_source=h_src, threshold=t_val)
 
     _, assets_path = resolve_vector_file("assets")
     _, roads_path = resolve_vector_file("roads")
-    assets_mtime = assets_path.stat().st_mtime if assets_path else 0.0
-    roads_mtime = roads_path.stat().st_mtime if roads_path else 0.0
+    a_mtime = assets_path.stat().st_mtime if assets_path else 0.0
+    r_mtime = roads_path.stat().st_mtime if roads_path else 0.0
 
     sampler = RasterSampler(hazard_source=h_src, threshold=t_val)
-    cache_key = (h_src, t_val, assets_mtime, roads_mtime, *sampler.mtimes)
+    cache_key = (h_src, t_val, a_mtime, r_mtime, *sampler.mtimes)
 
     if _exposure_summary_cache is not None and _exposure_summary_cache[0] == cache_key:
         return _exposure_summary_cache[1]
 
-    # Standard asset categories
-    standard_asset_categories = [
-        "building",
-        "healthcare",
-        "education",
-        "emergency",
-        "settlement",
-        "transport",
-        "other",
-    ]
-    asset_by_cat: Dict[str, CategoryCount] = {
-        cat: CategoryCount(total=0, assessed=0, exposed=0, not_exposed=0, not_assessed=0)
-        for cat in standard_asset_categories
-    }
-
-    asset_total = 0
+    # Aggregate Assets
+    asset_total = len(assets_fc["features"])
     asset_assessed = 0
     asset_exposed = 0
     asset_not_exposed = 0
     asset_not_assessed = 0
     asset_init_wet = 0
+    asset_by_cat: Dict[str, Any] = {}
 
-    for feat in assets_exp["features"]:
-        props = feat["properties"]
+    for feat in assets_fc["features"]:
+        props = feat.get("properties") or {}
         cat = props.get("category", "other")
         if cat not in asset_by_cat:
-            asset_by_cat[cat] = CategoryCount(total=0, assessed=0, exposed=0, not_exposed=0, not_assessed=0)
+            asset_by_cat[cat] = {"total": 0, "assessed": 0, "exposed": 0, "not_exposed": 0, "not_assessed": 0}
 
-        assessed = bool(props.get("assessed", False))
-        exposed = bool(props.get("exposed", False))
-        is_init = bool(props.get("is_initially_wet", False))
-
-        asset_total += 1
-        asset_by_cat[cat].total += 1
-
-        if is_init:
-            asset_init_wet += 1
+        asset_by_cat[cat]["total"] += 1
+        assessed = props.get("assessed", False)
+        exposed = props.get("exposed", False)
+        init_wet = props.get("is_initially_wet", False)
 
         if assessed:
             asset_assessed += 1
-            asset_by_cat[cat].assessed += 1
+            asset_by_cat[cat]["assessed"] += 1
             if exposed:
                 asset_exposed += 1
-                asset_by_cat[cat].exposed += 1
+                asset_by_cat[cat]["exposed"] += 1
+                if init_wet:
+                    asset_init_wet += 1
             else:
                 asset_not_exposed += 1
-                asset_by_cat[cat].not_exposed += 1
+                asset_by_cat[cat]["not_exposed"] += 1
         else:
             asset_not_assessed += 1
-            asset_by_cat[cat].not_assessed += 1
+            asset_by_cat[cat]["not_assessed"] += 1
+
+    # Aggregate Roads
+    road_total = len(roads_fc["features"])
+    road_assessed = 0
+    road_exposed = 0
+    road_not_exposed = 0
+    road_not_assessed = 0
+    road_init_wet = 0
+    road_by_cat: Dict[str, Any] = {}
+
+    for feat in roads_fc["features"]:
+        props = feat.get("properties") or {}
+        cat = props.get("category", "unclassified")
+        if cat not in road_by_cat:
+            road_by_cat[cat] = {"total": 0, "assessed": 0, "exposed": 0, "not_exposed": 0, "not_assessed": 0}
+
+        road_by_cat[cat]["total"] += 1
+        assessed = props.get("assessed", False)
+        exposed = props.get("exposed", False)
+        init_wet = props.get("is_initially_wet", False)
+
+        if assessed:
+            road_assessed += 1
+            road_by_cat[cat]["assessed"] += 1
+            if exposed:
+                road_exposed += 1
+                road_by_cat[cat]["exposed"] += 1
+                if init_wet:
+                    road_init_wet += 1
+            else:
+                road_not_exposed += 1
+                road_by_cat[cat]["not_exposed"] += 1
+        else:
+            road_not_assessed += 1
+            road_by_cat[cat]["not_assessed"] += 1
 
     assets_summary = ExposureDatasetSummary(
         total=asset_total,
@@ -624,44 +646,6 @@ def get_exposure_summary(hazard_source: str = "sample_hidkal", threshold: float 
         by_category=asset_by_cat,
     )
 
-    # Road breakdown by highway category
-    road_by_cat: Dict[str, CategoryCount] = {}
-    road_total = 0
-    road_assessed = 0
-    road_exposed = 0
-    road_not_exposed = 0
-    road_not_assessed = 0
-    road_init_wet = 0
-
-    for feat in roads_exp["features"]:
-        props = feat["properties"]
-        cat = props.get("category", "unclassified")
-        if cat not in road_by_cat:
-            road_by_cat[cat] = CategoryCount(total=0, assessed=0, exposed=0, not_exposed=0, not_assessed=0)
-
-        assessed = bool(props.get("assessed", False))
-        exposed = bool(props.get("exposed", False))
-        is_init = bool(props.get("is_initially_wet", False))
-
-        road_total += 1
-        road_by_cat[cat].total += 1
-
-        if is_init:
-            road_init_wet += 1
-
-        if assessed:
-            road_assessed += 1
-            road_by_cat[cat].assessed += 1
-            if exposed:
-                road_exposed += 1
-                road_by_cat[cat].exposed += 1
-            else:
-                road_not_exposed += 1
-                road_by_cat[cat].not_exposed += 1
-        else:
-            road_not_assessed += 1
-            road_by_cat[cat].not_assessed += 1
-
     roads_summary = ExposureDatasetSummary(
         total=road_total,
         assessed=road_assessed,
@@ -671,7 +655,12 @@ def get_exposure_summary(hazard_source: str = "sample_hidkal", threshold: float 
         by_category=road_by_cat,
     )
 
-    if h_src == "anuga_hidkal_pilot":
+    is_anuga = h_src in ("anuga_hidkal_pilot", "anuga_hidkal_refined")
+    if h_src == "anuga_hidkal_refined":
+        disclaimer = "Hypothetical refined ANUGA pilot screening — not a forecast or validated Hidkal prediction. Assumed vertical units from source interpretation."
+        unit_status = "assumed metres based on source interpretation"
+        run_id = "anuga_hidkal_refined_hypothetical_v1"
+    elif h_src == "anuga_hidkal_pilot":
         disclaimer = "Hypothetical ANUGA pilot screening — not a forecast or validated Hidkal prediction. Assumed vertical units from source interpretation."
         unit_status = "assumed metres based on source interpretation"
         run_id = "anuga_hidkal_pilot_hypothetical_v1"
@@ -689,10 +678,10 @@ def get_exposure_summary(hazard_source: str = "sample_hidkal", threshold: float 
         methodology_note="Point sampling for points; representative-point/midpoint geometric screening for polygons and lines.",
         assets=assets_summary,
         roads=roads_summary,
-        initially_wet_reservoir_assets=asset_init_wet if h_src == "anuga_hidkal_pilot" else None,
-        initially_wet_reservoir_roads=road_init_wet if h_src == "anuga_hidkal_pilot" else None,
-        newly_inundated_assets=(asset_exposed - asset_init_wet) if h_src == "anuga_hidkal_pilot" else None,
-        newly_inundated_roads=(road_exposed - road_init_wet) if h_src == "anuga_hidkal_pilot" else None,
+        initially_wet_reservoir_assets=asset_init_wet if is_anuga else None,
+        initially_wet_reservoir_roads=road_init_wet if is_anuga else None,
+        newly_inundated_assets=(asset_exposed - asset_init_wet) if is_anuga else None,
+        newly_inundated_roads=(road_exposed - road_init_wet) if is_anuga else None,
     )
 
     _exposure_summary_cache = (cache_key, response)

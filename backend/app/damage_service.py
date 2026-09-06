@@ -151,7 +151,7 @@ def compute_damage_scenario(request: DamageScenarioRequest) -> DamageScenarioRes
     validate_damage_request(request)
 
     h_src = request.hazard_source or "sample_hidkal"
-    t_val = request.screening_threshold if request.screening_threshold is not None else (0.10 if h_src == "anuga_hidkal_pilot" else 0.0)
+    t_val = request.screening_threshold if request.screening_threshold is not None else (0.10 if h_src in ("anuga_hidkal_pilot", "anuga_hidkal_refined") else 0.0)
 
     assets_geojson = get_exposure_assets(hazard_source=h_src, threshold=t_val)
     features = assets_geojson.get("features", [])
@@ -242,11 +242,15 @@ def compute_damage_scenario(request: DamageScenarioRequest) -> DamageScenarioRes
             high_loss=high_cat_loss,
         )
 
-    disclaimer = (
-        "Hypothetical ANUGA pilot illustrative damage scenario — not an official loss estimate or validated prediction."
-        if h_src == "anuga_hidkal_pilot"
-        else DISCLAIMER_TEXT
-    )
+    if h_src == "anuga_hidkal_refined":
+        disclaimer = "Hypothetical refined ANUGA pilot illustrative damage scenario — not an official loss estimate or validated prediction."
+        run_id = "anuga_hidkal_refined_hypothetical_v1"
+    elif h_src == "anuga_hidkal_pilot":
+        disclaimer = "Hypothetical ANUGA pilot illustrative damage scenario — not an official loss estimate or validated prediction."
+        run_id = "anuga_hidkal_pilot_hypothetical_v1"
+    else:
+        disclaimer = DISCLAIMER_TEXT
+        run_id = None
 
     warnings = [
         f"Illustrative estimation based on {h_src} depth raster and user-configured unit values.",
@@ -256,7 +260,7 @@ def compute_damage_scenario(request: DamageScenarioRequest) -> DamageScenarioRes
 
     return DamageScenarioResponse(
         hazard_source=h_src,
-        run_id="anuga_hidkal_pilot_hypothetical_v1" if h_src == "anuga_hidkal_pilot" else None,
+        run_id=run_id,
         screening_threshold=t_val,
         disclaimer=disclaimer,
         methodology=METHODOLOGY_TEXT,

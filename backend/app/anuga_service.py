@@ -1,13 +1,14 @@
 """
-ANUGA Regional Hydrodynamic Pilot Result Service (Phase 16).
-Manages registered ANUGA pilot runs, metadata, manifest provenance validation,
-layer GeoTIFF resolution (EPSG:32643), tile rendering, and coordinate reprojection.
+ANUGA Regional Hydrodynamic Pilot Result Service (Phase 16 & 17).
+Manages registered ANUGA pilot runs (Phase 15 baseline and Phase 17 refined adaptive),
+metadata, manifest provenance validation, layer GeoTIFF resolution (EPSG:32643),
+tile rendering with bilinear/nearest resampling, and coordinate reprojection.
 """
 
 import io
 import os
 import json
-import yaml
+import hashlib
 from pathlib import Path
 from typing import Dict, Any, Optional, Tuple, List
 import numpy as np
@@ -36,34 +37,44 @@ from app.raster_service import get_project_root, EMPTY_TILE_PNG
 # Whitelisted ANUGA Runs & Layer Registries
 REGISTERED_ANUGA_RUNS = {
     "anuga_hidkal_pilot_hypothetical_v1": {
-        "title": "Hypothetical Pilot Dam-Break Hydrodynamic Simulation",
+        "title": "Hypothetical Pilot Dam-Break Hydrodynamic Simulation (Phase 15 Baseline)",
         "site": "Hidkal (Raja Lakhamagowda Dam) study area, Ghataprabha Basin",
         "scenario_status": "hypothetical_unverified",
         "relative_dir": "validation/anuga_hidkal_pilot",
         "projected_crs": "EPSG:32643",
-    }
+        "prefix": "anuga_hidkal_pilot",
+        "hazard_source": "anuga_hidkal_pilot",
+        "mesh_type": "uniform_triangular_200m",
+    },
+    "anuga_hidkal_refined_hypothetical_v1": {
+        "title": "Hypothetical Refined Adaptive Dam-Break Hydrodynamic Simulation (Phase 17)",
+        "site": "Hidkal (Raja Lakhamagowda Dam) study area, Ghataprabha Basin",
+        "scenario_status": "hypothetical_unverified",
+        "relative_dir": "validation/anuga_hidkal_refined",
+        "projected_crs": "EPSG:32643",
+        "prefix": "anuga_hidkal_refined",
+        "hazard_source": "anuga_hidkal_refined",
+        "mesh_type": "adaptive_unstructured_50m_breach",
+    },
 }
 
 ANUGA_LAYERS = {
     "depth": {
-        "label": "Hypothetical ANUGA Pilot Inundation Depth",
-        "file_name": "anuga_hidkal_pilot_depth.tif",
+        "label": "Hypothetical ANUGA Inundation Depth",
         "data_type": "depth",
         "unit_status": "assumed metres based on source interpretation",
         "provenance_status": "hypothetical ANUGA pilot — not a forecast or validated Hidkal prediction",
         "nodata": -9999.0,
     },
     "velocity": {
-        "label": "Hypothetical ANUGA Pilot Flow Velocity",
-        "file_name": "anuga_hidkal_pilot_velocity.tif",
+        "label": "Hypothetical ANUGA Flow Velocity",
         "data_type": "velocity",
         "unit_status": "m/s (assumed from unverified DEM interpretation)",
         "provenance_status": "hypothetical ANUGA pilot — not a forecast or validated Hidkal prediction",
         "nodata": -9999.0,
     },
     "arrival": {
-        "label": "Hypothetical ANUGA Pilot First Arrival Time",
-        "file_name": "anuga_hidkal_pilot_arrival.tif",
+        "label": "Hypothetical ANUGA First Arrival Time",
         "data_type": "arrival_time",
         "unit_status": "seconds (model-derived first detected arrival at 60 s output resolution; 0s=reservoir)",
         "provenance_status": "hypothetical ANUGA pilot — not a forecast or validated Hidkal prediction",
@@ -71,7 +82,7 @@ ANUGA_LAYERS = {
     },
 }
 
-# Colormap and legend definitions for ANUGA pilot layers
+# Colormap and legend definitions for ANUGA layers
 ANUGA_STYLES: Dict[str, Dict[str, Any]] = {
     "depth": {
         "min": 0.1,
@@ -86,13 +97,13 @@ ANUGA_STYLES: Dict[str, Dict[str, Any]] = {
     },
     "velocity": {
         "min": 0.1,
-        "max": 12.0,
+        "max": 16.0,
         "stops": [
             (0.1, (255, 238, 140, 230), "#ffee8c", "0.1 (Low Velocity, m/s)"),
             (2.0, (255, 179, 71, 240), "#ffb347", "2.0 (Moderate Velocity, m/s)"),
             (5.0, (255, 105, 97, 245), "#ff6961", "5.0 (Fast Flow, m/s)"),
             (8.0, (194, 59, 34, 255), "#c23b22", "8.0 (High Hazard Jet, m/s)"),
-            (12.0, (100, 20, 10, 255), "#64140a", "> 10 (Breach Jet Peak Velocity, m/s)"),
+            (16.0, (100, 20, 10, 255), "#64140a", "> 12 (Breach Jet Peak Velocity, m/s)"),
         ],
     },
     "arrival": {
@@ -117,8 +128,12 @@ _utm43n_to_wgs84 = Transformer.from_crs("EPSG:32643", "EPSG:4326", always_xy=Tru
 _anuga_cache: Dict[str, Any] = {}
 
 
-def get_anuga_dir() -> Path:
-    """Path to Phase 15 ANUGA Hidkal Pilot directory."""
+def get_anuga_dir(run_id_or_source: str = "anuga_hidkal_pilot") -> Path:
+    """Path to ANUGA simulation directory for specified run or hazard source."""
+    if run_id_or_source in ("anuga_hidkal_refined", "anuga_hidkal_refined_hypothetical_v1"):
+        return get_project_root() / "validation" / "anuga_hidkal_refined"
+    if run_id_or_source in REGISTERED_ANUGA_RUNS:
+        return get_project_root() / REGISTERED_ANUGA_RUNS[run_id_or_source]["relative_dir"]
     return get_project_root() / "validation" / "anuga_hidkal_pilot"
 
 
@@ -130,17 +145,20 @@ def check_anuga_outputs_available(run_id: str = "anuga_hidkal_pilot_hypothetical
     if run_id not in REGISTERED_ANUGA_RUNS:
         return False, f"Unknown ANUGA run identifier '{run_id}'"
 
-    pilot_dir = get_anuga_dir()
+    meta = REGISTERED_ANUGA_RUNS[run_id]
+    pilot_dir = get_anuga_dir(run_id)
     summary_file = pilot_dir / "pilot_summary.json"
     if not summary_file.is_file():
-        return False, "Phase 15 pilot summary JSON not found. Pilot simulation must be run."
+        return False, f"Pilot summary JSON for '{run_id}' not found. Simulation must be run."
 
     output_dir = pilot_dir / "output"
     missing_layers = []
-    for layer, info in ANUGA_LAYERS.items():
-        tif_path = output_dir / info["file_name"]
+    prefix = meta["prefix"]
+    for layer in ANUGA_LAYERS.keys():
+        fname = f"{prefix}_{layer}.tif"
+        tif_path = output_dir / fname
         if not tif_path.is_file():
-            missing_layers.append(info["file_name"])
+            missing_layers.append(fname)
 
     if missing_layers:
         return False, f"Generated GeoTIFF rasters absent: {', '.join(missing_layers)}"
@@ -149,8 +167,9 @@ def check_anuga_outputs_available(run_id: str = "anuga_hidkal_pilot_hypothetical
 
 
 def get_hazard_sources() -> HazardSourcesResponse:
-    """Return catalog of available hazard sources (Sample vs ANUGA Pilot)."""
-    anuga_avail, anuga_reason = check_anuga_outputs_available()
+    """Return catalog of available hazard sources (Sample, Baseline ANUGA Pilot, and Refined ANUGA Model)."""
+    pilot_avail, pilot_reason = check_anuga_outputs_available("anuga_hidkal_pilot_hypothetical_v1")
+    refined_avail, refined_reason = check_anuga_outputs_available("anuga_hidkal_refined_hypothetical_v1")
 
     sources = [
         HazardSourceInfo(
@@ -166,37 +185,47 @@ def get_hazard_sources() -> HazardSourcesResponse:
         ),
         HazardSourceInfo(
             id="anuga_hidkal_pilot",
-            label="Hypothetical ANUGA Hidkal Regional Pilot (Phase 15)",
+            label="Hypothetical ANUGA Hidkal Pilot (Phase 15 Baseline, 200m mesh)",
             status="hypothetical_unverified",
             disclaimer="Hypothetical ANUGA pilot — not a forecast or validated Hidkal prediction. Assumed vertical units based on source interpretation.",
             vertical_unit_status="assumed metres based on source interpretation",
-            available=anuga_avail,
-            availability_reason=anuga_reason,
+            available=pilot_avail,
+            availability_reason=pilot_reason,
             default_screening_threshold=0.10,
             layers=list(ANUGA_LAYERS.keys()),
             run_id="anuga_hidkal_pilot_hypothetical_v1",
+        ),
+        HazardSourceInfo(
+            id="anuga_hidkal_refined",
+            label="Hypothetical ANUGA Hidkal Refined Model (Phase 17, Adaptive <=50m mesh)",
+            status="hypothetical_unverified",
+            disclaimer="Hypothetical refined ANUGA pilot — not a forecast or validated Hidkal prediction. Assumed vertical units based on source interpretation.",
+            vertical_unit_status="assumed metres based on source interpretation",
+            available=refined_avail,
+            availability_reason=refined_reason,
+            default_screening_threshold=0.10,
+            layers=list(ANUGA_LAYERS.keys()),
+            run_id="anuga_hidkal_refined_hypothetical_v1",
         ),
     ]
 
     return HazardSourcesResponse(
         default_source="sample_hidkal",
         sources=sources,
-        scientific_notice="Hazard sources represent different computational stages. Never treat sample rasters or pilot simulations as verified forecasts."
+        scientific_notice="Hazard sources represent different computational and grid refinement stages. Never treat sample rasters or pilot simulations as verified forecasts."
     )
 
 
-import hashlib
-
 def validate_anuga_manifest(run_id: str = "anuga_hidkal_pilot_hypothetical_v1") -> Tuple[bool, List[str]]:
     """
-    Validate SHA-256 hashes of all provenance files in validation/anuga_hidkal_pilot/manifest.json.
+    Validate SHA-256 hashes of all provenance files in the run's manifest.json.
     Returns (is_valid, list_of_errors).
     """
     if run_id not in REGISTERED_ANUGA_RUNS:
         return False, [f"Unknown ANUGA run identifier '{run_id}'"]
 
-    pilot_dir = get_anuga_dir()
-    manifest_file = pilot_dir / "manifest.json"
+    run_dir = get_anuga_dir(run_id)
+    manifest_file = run_dir / "manifest.json"
     if not manifest_file.is_file():
         return False, ["manifest.json is missing on disk."]
 
@@ -209,7 +238,7 @@ def validate_anuga_manifest(run_id: str = "anuga_hidkal_pilot_hypothetical_v1") 
     files_map = manifest_data.get("files", {})
     errors = []
     for rel_name, expected_hash in files_map.items():
-        file_path = pilot_dir / rel_name
+        file_path = run_dir / rel_name
         if not file_path.is_file():
             errors.append(f"Provenance file '{rel_name}' is missing on disk.")
             continue
@@ -226,12 +255,12 @@ def validate_anuga_manifest(run_id: str = "anuga_hidkal_pilot_hypothetical_v1") 
 
 def list_anuga_runs() -> List[ANUGARunSummary]:
     """List all registered ANUGA pilot runs with honest availability status and dynamically parsed provenance metrics."""
-    pilot_dir = get_anuga_dir()
-    summary_file = pilot_dir / "pilot_summary.json"
-    avail, reason = check_anuga_outputs_available()
-
     runs = []
     for run_id, meta in REGISTERED_ANUGA_RUNS.items():
+        run_dir = get_anuga_dir(run_id)
+        summary_file = run_dir / "pilot_summary.json"
+        avail, reason = check_anuga_outputs_available(run_id)
+
         summary_data = {}
         if summary_file.is_file():
             try:
@@ -247,7 +276,8 @@ def list_anuga_runs() -> List[ANUGARunSummary]:
         mesh_stats = summary_data.get("mesh_statistics", {})
 
         grid_dims = spatial.get("grid_dimensions", [222, 301])
-        raster_cells_total = int(grid_dims[0] * grid_dims[1]) if len(grid_dims) == 2 else 66822
+        raster_cells_total = int(spatial.get("total_raster_cells", grid_dims[0] * grid_dims[1]))
+        raster_cells_valid = int(spatial.get("valid_arrival_cells", 4482))
         initial_vol_m3 = float(vol_diag.get("initial_volume_assumed_m3", 317161860.23))
         initial_vol_mcm = round(initial_vol_m3 / 1e6, 6)
 
@@ -266,9 +296,9 @@ def list_anuga_runs() -> List[ANUGARunSummary]:
                 arrival_time_resolution_sec=60.0,
                 initial_volume_assumed_mcm=initial_vol_mcm,
                 mesh_triangles=int(mesh_stats.get("total_triangles", 66000)),
-                mesh_vertices=33261,
+                mesh_vertices=int(mesh_stats.get("total_vertices", 33261)),
                 raster_cells_total=raster_cells_total,
-                raster_cells_valid=4482,
+                raster_cells_valid=raster_cells_valid,
                 screening_threshold_label="0.10 assumed metres",
                 velocity_unit_label="assumed m/s",
                 volume_unit_label="assumed MCM",
@@ -283,14 +313,15 @@ def get_anuga_run_detail(run_id: str) -> ANUGARunDetailResponse:
     if run_id not in REGISTERED_ANUGA_RUNS:
         raise HTTPException(status_code=404, detail=f"ANUGA run '{run_id}' not found.")
 
-    pilot_dir = get_anuga_dir()
-    summary_file = pilot_dir / "pilot_summary.json"
-    manifest_file = pilot_dir / "manifest.json"
+    meta = REGISTERED_ANUGA_RUNS[run_id]
+    run_dir = get_anuga_dir(run_id)
+    summary_file = run_dir / "pilot_summary.json"
+    manifest_file = run_dir / "manifest.json"
 
     if not summary_file.is_file():
         raise HTTPException(
             status_code=404,
-            detail="Pilot summary JSON not found. Please ensure Phase 15 simulation has executed."
+            detail=f"Pilot summary JSON for '{run_id}' not found. Please ensure simulation has executed."
         )
 
     with open(summary_file, "r") as f:
@@ -315,34 +346,37 @@ def get_anuga_run_detail(run_id: str) -> ANUGARunDetailResponse:
 
     avail, reason = check_anuga_outputs_available(run_id)
 
+    prefix = meta["prefix"]
     layer_info = {}
     for l_key, l_val in ANUGA_LAYERS.items():
-        layer_path = pilot_dir / "output" / l_val["file_name"]
+        fname = f"{prefix}_{l_key}.tif"
+        layer_path = run_dir / "output" / fname
         layer_info[l_key] = {
-            "label": l_val["label"],
+            "label": f"{l_val['label']} ({meta['prefix']})",
             "data_type": l_val["data_type"],
             "unit_status": l_val["unit_status"],
-            "file_name": l_val["file_name"],
+            "file_name": fname,
             "exists": layer_path.is_file(),
             "size_bytes": layer_path.stat().st_size if layer_path.is_file() else 0,
         }
 
-    meta = REGISTERED_ANUGA_RUNS[run_id]
     vol_diag = summary.get("volume_conservation", {})
     initial_vol_m3 = float(vol_diag.get("initial_volume_assumed_m3", 317161860.23))
     initial_vol_mcm = round(initial_vol_m3 / 1e6, 6)
     mesh_stats = summary.get("mesh_statistics", {})
     spatial = summary.get("spatial_parameters", {})
     grid_dims = spatial.get("grid_dimensions", [222, 301])
+    raster_cells_total = int(spatial.get("total_raster_cells", grid_dims[0] * grid_dims[1]))
+    raster_cells_valid = int(spatial.get("valid_arrival_cells", 4482))
 
     provenance_metrics = {
         "initial_volume_assumed_m3": initial_vol_m3,
         "initial_volume_assumed_mcm": initial_vol_mcm,
         "mesh_triangles": int(mesh_stats.get("total_triangles", 66000)),
-        "mesh_vertices": 33261,
+        "mesh_vertices": int(mesh_stats.get("total_vertices", 33261)),
         "raster_grid_dimensions": grid_dims,
-        "raster_cells_total": int(grid_dims[0] * grid_dims[1]),
-        "raster_cells_valid_arrival": 4482,
+        "raster_cells_total": raster_cells_total,
+        "raster_cells_valid_arrival": raster_cells_valid,
         "screening_depth_threshold_assumed_m": 0.10,
         "velocity_units": "assumed m/s",
         "volume_units": "assumed m³ / assumed MCM",
@@ -366,42 +400,62 @@ def get_anuga_run_detail(run_id: str) -> ANUGARunDetailResponse:
         area_partitioning_km2=summary.get("area_partitioning_km2", {}),
         volume_conservation=summary.get("volume_conservation", {}),
         inundation_results=summary.get("inundation_results", {}),
+        mesh_sensitivity=summary.get("mesh_sensitivity"),
+        scientific_validity_note=summary.get("scientific_validity_note"),
         provenance_metrics=provenance_metrics,
         layers=layer_info,
         manifest=manifest_data,
     )
 
 
-def resolve_anuga_layer_file(layer_name: str) -> Tuple[Dict[str, Any], Path]:
+def resolve_anuga_layer_file(layer_name: str, hazard_source: Optional[str] = None) -> Tuple[Dict[str, Any], Path]:
     """
     Resolve layer information and GeoTIFF path strictly against registered ANUGA layers.
+    Handles source distinction between 'anuga_hidkal_pilot' and 'anuga_hidkal_refined'.
     Prevents path traversal and arbitrary filesystem input.
     """
-    layer_key = layer_name.lower().strip()
-    if layer_key not in ANUGA_LAYERS:
+    raw_key = layer_name.lower().strip()
+
+    # Determine hazard source & base layer
+    if raw_key.startswith("anuga_hidkal_refined_"):
+        source = "anuga_hidkal_refined"
+        base_layer = raw_key.replace("anuga_hidkal_refined_", "")
+    elif raw_key.startswith("anuga_hidkal_pilot_"):
+        source = "anuga_hidkal_pilot"
+        base_layer = raw_key.replace("anuga_hidkal_pilot_", "")
+    else:
+        if hazard_source and ("refined" in hazard_source.lower()):
+            source = "anuga_hidkal_refined"
+        else:
+            source = "anuga_hidkal_pilot"
+        base_layer = raw_key
+
+    if base_layer not in ANUGA_LAYERS:
         raise HTTPException(
             status_code=404,
             detail=f"Invalid ANUGA layer '{layer_name}'. Whitelisted layers: {list(ANUGA_LAYERS.keys())}"
         )
 
-    info = ANUGA_LAYERS[layer_key]
-    pilot_dir = get_anuga_dir()
-    tif_path = pilot_dir / "output" / info["file_name"]
+    info = ANUGA_LAYERS[base_layer].copy()
+    run_dir = get_anuga_dir(source)
+    fname = f"{source}_{base_layer}.tif"
+    info["file_name"] = fname
+    tif_path = run_dir / "output" / fname
 
     if not tif_path.is_file():
         raise HTTPException(
             status_code=404,
-            detail=f"ANUGA pilot raster '{info['file_name']}' is not available on disk."
+            detail=f"ANUGA raster '{fname}' is not available on disk."
         )
 
     return info, tif_path
 
 
-def get_anuga_raster_metadata(layer_name: str) -> RasterMetadataResponse:
+def get_anuga_raster_metadata(layer_name: str, hazard_source: Optional[str] = None) -> RasterMetadataResponse:
     """Retrieve metadata for an ANUGA pilot GeoTIFF raster."""
-    info, tif_path = resolve_anuga_layer_file(layer_name)
+    info, tif_path = resolve_anuga_layer_file(layer_name, hazard_source=hazard_source)
     mtime = tif_path.stat().st_mtime
-    cache_key = f"meta_{layer_name}"
+    cache_key = f"meta_{tif_path.name}"
 
     if cache_key in _anuga_cache and _anuga_cache[cache_key][0] == mtime:
         return _anuga_cache[cache_key][1]
@@ -423,14 +477,14 @@ def get_anuga_raster_metadata(layer_name: str) -> RasterMetadataResponse:
         valid_mask = ~np.isnan(arr)
         if nodata is not None:
             valid_mask &= ~np.isclose(arr, nodata)
-            if layer_name == "arrival":
+            if "arrival" in layer_name:
                 valid_mask &= ~np.isclose(arr, -9999.0) & ~np.isclose(arr, 9999.0) & (arr < 9000.0)
 
         valid_min = float(np.min(arr[valid_mask])) if np.any(valid_mask) else None
         valid_max = float(np.max(arr[valid_mask])) if np.any(valid_mask) else None
 
         resp = RasterMetadataResponse(
-            id=f"anuga_{layer_name}",
+            id=f"{info['file_name'].replace('.tif', '')}",
             width=int(src.width),
             height=int(src.height),
             dtype=str(src.dtypes[0]),
@@ -446,12 +500,17 @@ def get_anuga_raster_metadata(layer_name: str) -> RasterMetadataResponse:
     return resp
 
 
-def get_anuga_raster_point_value(layer_name: str, lon: float, lat: float) -> RasterPointValueResponse:
+def get_anuga_raster_point_value(
+    layer_name: str,
+    lon: float,
+    lat: float,
+    hazard_source: Optional[str] = None
+) -> RasterPointValueResponse:
     """
     Point query at given WGS84 coordinates (lon, lat).
     Transforms (lon, lat) to UTM 43N (EPSG:32643) and samples the ANUGA raster.
     """
-    info, tif_path = resolve_anuga_layer_file(layer_name)
+    info, tif_path = resolve_anuga_layer_file(layer_name, hazard_source=hazard_source)
 
     # Validate lon/lat ranges
     if not (-180.0 <= lon <= 180.0 and -90.0 <= lat <= 90.0):
@@ -479,15 +538,15 @@ def get_anuga_raster_point_value(layer_name: str, lon: float, lat: float) -> Ras
         if np.isnan(val) or (nodata is not None and np.isclose(val, nodata)):
             is_nodata = True
             val = None
-        elif layer_name == "arrival" and (np.isclose(val, 9999.0) or np.isclose(val, -9999.0) or val >= 9000.0):
+        elif "arrival" in layer_name and (np.isclose(val, 9999.0) or np.isclose(val, -9999.0) or val >= 9000.0):
             is_nodata = True
             val = None
-        elif layer_name in ("depth", "velocity") and val < 0.001:
+        elif ("depth" in layer_name or "velocity" in layer_name) and val < 0.001:
             # Dry terrain
             val = 0.0
 
         return RasterPointValueResponse(
-            id=f"anuga_{layer_name}",
+            id=f"{info['file_name'].replace('.tif', '')}",
             row=row,
             column=col,
             value=round(val, 4) if val is not None else None,
@@ -495,16 +554,27 @@ def get_anuga_raster_point_value(layer_name: str, lon: float, lat: float) -> Ras
         )
 
 
-def get_anuga_raster_tile(layer_name: str, z: int, x: int, y: int) -> bytes:
+def get_anuga_raster_tile(
+    layer_name: str,
+    z: int,
+    x: int,
+    y: int,
+    hazard_source: Optional[str] = None
+) -> bytes:
     """
-    Render Web Mercator XYZ PNG tile from ANUGA GeoTIFF with colormap and transparent dry cells.
+    Render Web Mercator XYZ PNG tile from ANUGA GeoTIFF with bilinear/nearest colormap
+    and crisp transparent dry cells without boundary blurring.
     """
-    info, tif_path = resolve_anuga_layer_file(layer_name)
-    style = ANUGA_STYLES.get(layer_name, ANUGA_STYLES["depth"])
+    info, tif_path = resolve_anuga_layer_file(layer_name, hazard_source=hazard_source)
+    base_layer = "arrival" if "arrival" in layer_name else ("velocity" if "velocity" in layer_name else "depth")
+    style = ANUGA_STYLES.get(base_layer, ANUGA_STYLES["depth"])
+
+    # High-quality rendering: bilinear for continuous depth/velocity, nearest for arrival/categorical
+    resampling = "nearest" if (base_layer == "arrival") else "bilinear"
 
     try:
         with Reader(str(tif_path)) as reader:
-            img = reader.tile(x, y, z)
+            img = reader.tile(x, y, z, resampling_method=resampling)
             data = img.data[0].astype(float)
             mask = img.mask
 
@@ -513,9 +583,9 @@ def get_anuga_raster_tile(layer_name: str, z: int, x: int, y: int) -> bytes:
             if nodata is not None:
                 data_mask &= ~np.isclose(data, nodata)
 
-            if layer_name == "arrival":
+            if base_layer == "arrival":
                 data_mask &= ~np.isclose(data, 9999.0) & ~np.isclose(data, -9999.0) & (data < 9000.0)
-            elif layer_name in ("depth", "velocity"):
+            elif base_layer in ("depth", "velocity"):
                 data_mask &= (data >= 0.05)
 
             if not np.any(data_mask):
@@ -567,15 +637,16 @@ def get_anuga_raster_tile(layer_name: str, z: int, x: int, y: int) -> bytes:
 
     except (TileOutsideBounds, PointOutsideBounds):
         return EMPTY_TILE_PNG
-    except Exception as e:
+    except Exception:
         # Fall back to empty transparent tile without failing
         return EMPTY_TILE_PNG
 
 
-def get_anuga_raster_legend(layer_name: str) -> RasterLegendResponse:
-    """Return colormap stops and legend metadata for an ANUGA pilot layer."""
-    info, _ = resolve_anuga_layer_file(layer_name)
-    style = ANUGA_STYLES.get(layer_name, ANUGA_STYLES["depth"])
+def get_anuga_raster_legend(layer_name: str, hazard_source: Optional[str] = None) -> RasterLegendResponse:
+    """Return colormap stops and legend metadata for an ANUGA layer."""
+    info, _ = resolve_anuga_layer_file(layer_name, hazard_source=hazard_source)
+    base_layer = "arrival" if "arrival" in layer_name else ("velocity" if "velocity" in layer_name else "depth")
+    style = ANUGA_STYLES.get(base_layer, ANUGA_STYLES["depth"])
 
     color_ramp = []
     items = []
@@ -585,7 +656,7 @@ def get_anuga_raster_legend(layer_name: str) -> RasterLegendResponse:
         items.append(LegendItem(value=val, color=hex_code, label=desc))
 
     return RasterLegendResponse(
-        id=f"anuga_{layer_name}",
+        id=f"{info['file_name'].replace('.tif', '')}",
         label=info["label"],
         unit_status=info["unit_status"],
         provenance_status=info["provenance_status"],

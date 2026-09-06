@@ -271,22 +271,46 @@ Automated dam-break framework comparing SPH and Delft3D, with inundation, damage
 
 ---
 
-## Phase 15: ANUGA Regional Pilot Simulation (Hidkal / Ghataprabha Basin) [COMPLETED]
-- [x] Topographic Preprocessing & Coordinate Reprojection:
-  - [x] Verified raw DEM SHA-256 hash (`ed4c97474857ef24845f0954baa36b8de2555ccc2a0d468cfa99fdd39fab5baf`).
-  - [x] Reprojected DEM from EPSG:4326 to **EPSG:32643** (UTM Zone 43N) at $50\text{ m}$ resolution without modifying raw files.
-  - [x] Filled boundary NaNs via nearest-neighbor distance transform to guarantee 100% finite elevation grid ($600.00\text{ m}$ to $682.31\text{ m}$).
-- [x] Regional Pilot Model Specification (`validation/anuga_hidkal_pilot/`):
-  - [x] `scenario_config.yml`: Explicit assumption metadata, unverified elevation unit/datum warnings, $200\text{ m}$ breach opening, $660.0\text{ m}$ assumed reservoir stage, $n = 0.035$, $0.10\text{ m}$ arrival threshold.
-  - [x] Unstructured triangular mesh: $120 \times 88$ grid cells ($21,120$ triangles, $663.0\text{ km}^2$ domain) adhering to laptop-safe computational guards.
-  - [x] Boundary conditions: Solid reflective on north/south/west watersheds; open transmissive discharge boundary on eastern downstream river valley.
-- [x] Numerical Simulation Execution & Diagnostics:
-  - [x] Initialized and executed ANUGA C-accelerated SWE solver for $T = 1800\text{ s}$ ($30\text{ min}$, $31$ yield steps) in $7.27\text{ s}$ wall time.
-  - [x] Mass balance conservation: Initial stored volume $356.48\text{ MCM} \to$ Final volume $356.48\text{ MCM}$ ($9.20 \times 10^{-15}$ relative difference).
-  - [x] Finite numerics: 100% finite stage, elevation, and momentum across all timesteps.
-- [x] Output Post-Processing & GeoTIFF Export:
-  - [x] Derived peak inundation depth ($24.83\text{ m}$), peak flow velocity ($12.84\text{ m/s}$), inundated area ($197.62\text{ km}^2$), and arrival time range ($0.0\text{ s} - 1800.0\text{ s}$).
-  - [x] Exported GeoTIFFs (`anuga_hidkal_pilot_depth.tif`, `velocity.tif`, `arrival.tif`) in EPSG:32643 under ignored output directory.
-  - [x] Structured numerical summary (`pilot_summary.json`) and SHA-256 cryptographic manifest (`manifest.json`).
-- [x] Automated Unit Tests (`backend/tests/test_anuga_hidkal_pilot.py`):
-  - [x] Added 4 tests validating manifest checksums, honesty status tags (`hypothetical_unverified`), numerical bounds, and GeoTIFF metadata. All 87 backend pytest tests passing.
+## Phase 16: Safe Hydrodynamic Integration & Provenance Integrity [COMPLETED]
+- [x] Result Registry & Provenance Verification:
+  - [x] Registered `anuga_hidkal_pilot_hypothetical_v1` with whitelisted layer resolution (`depth`, `velocity`, `arrival`).
+  - [x] Validated SHA-256 provenance manifest returning HTTP 409 `provenance_integrity_failed` on checksum mismatches without leaking file paths.
+- [x] Vector & Scenario Cross-Service Propagation:
+  - [x] Integrated `hazard_source=anuga_hidkal_pilot` across exposure screening, illustrative damage estimation, Dijkstra route screening, and GeoJSON/KML/Shapefile export.
+  - [x] Maintained $0.10\text{ m}$ threshold consistency and strict assumption disclaimers.
+- [x] Frontend Multi-Source UI Integration:
+  - [x] Built hazard source switcher in dashboard HUD, dynamic provenance statistics card, and state reset on source toggle.
+
+---
+
+## Phase 17: Refined ANUGA Map Quality & Final Scientific Audit [COMPLETED]
+- [x] Preserved Phase 15 baseline pilot outputs unmodified under `validation/anuga_hidkal_pilot/`.
+- [x] Built and genuinely executed adaptive ANUGA simulation (`validation/anuga_hidkal_refined/`):
+  - [x] Breach/channel zone: $\le 50\text{ m}$ ($1,250\text{ m}^2$).
+  - [x] Downstream flood corridor: $\le 100\text{ m}$ ($5,000\text{ m}^2$).
+  - [x] Outer domain: $\le 200\text{ m}$ ($20,000\text{ m}^2$).
+  - [x] Measured breach discretization: 11 crossing edges (10 discrete intervals; edge lengths min 28.91 m, median 43.36 m, p95 60.99 m, max 93.75 m) across 200 m breach opening.
+  - [x] Impermeable dam barrier preserved along non-breach axis (0.0 m³/s leakage verified via transect flux integration).
+  - [x] Genuine execution in ~10.5 min for 131,351 triangles and 65,941 vertices.
+- [x] Multi-Resolution Rigor & Scientific Clarity:
+  - [x] Clearly distinguished numerical mesh resolution (≤ 50 m adaptive), exported visualization grid resolution (50 m GeoTIFF; outer domain supported by 100–200 m elements with interpolation), and display rendering (bilinear for continuous depth/velocity, nearest-neighbour for arrival).
+  - [x] Exported GeoTIFFs with EPSG:32643 CRS, NoData masking, and "assumed" units.
+  - [x] Generated SHA-256 manifest and `pilot_summary.json`.
+- [x] Quantitative Volume-Matched Mesh Sensitivity Audit:
+  - [x] Stored Volume Match: Baseline = 317.161860 MCM, Refined = 317.161857 MCM (within 0.0000009% via documented -0.356572 m numerical stage adjustment to 659.643428 m).
+  - [x] Inundated Area ($h \ge 0.10\text{ m}$): Baseline = 44.47 km², Refined = 54.81 km² (Δ = +10.34 km² via `rasterio.warp.reproject` with transform cell area 0.009922 km²).
+  - [x] Extent IoU: 0.7842.
+  - [x] Volume-matched mesh sensitivity explicitly stated; numerical convergence not demonstrated.
+  - [x] Aligned Depth Error: MAE = 0.9146 assumed m, RMSE = 1.2766 assumed m, Mean Bias = +0.0820 assumed m.
+  - [x] Aligned Velocity Error: MAE = 0.6291 assumed m/s, RMSE = 0.8249 assumed m/s, Mean Bias = +0.1385 assumed m/s.
+  - [x] Peak Extrema: Depth = 25.633 assumed m (Refined) vs 25.898 assumed m (Baseline); Velocity = 15.772 assumed m/s (Refined) vs 11.638 assumed m/s (Baseline).
+  - [x] Peak Breach Discharge: Baseline ≈ 9,794.37 assumed m³/s vs Refined ≈ 21,953.43 assumed m³/s (approximate, not directly comparable due to 1-cell [one 200 m structured cross-mesh cell represented by four triangles and five vertices] vs 10-interval discretization).
+  - [x] Embankment Non-Breach Leakage: Instantaneous rate = 0.0 assumed m³/s; Cumulative leakage = 0.0 assumed m³ (trapezoidal time-integration over 1,800 s).
+  - [x] Exposure Screening Differences ($h \ge 0.10\text{ m}$): Assets exposed = 8 (Baseline) vs 62 (Refined), Δ = +54; Screening-positive road segments (depth ≥ 0.10 assumed metres) = 108 (Baseline) vs 128 (Refined), Δ = +20. (At threshold 0.0m, baseline exposes 29 assets due to 21 sub-threshold shallow assets).
+- [x] API & Frontend Integration:
+  - [x] Registered `anuga_hidkal_refined` in hazard source catalog, metadata, XYZ tiles (bilinear/nearest), point queries, exposure, damage, route, and export services.
+  - [x] 3-option UI hazard selector with dynamic provenance HUD card.
+- [x] Automated Tests & Verification:
+  - [x] 106/106 pytest test suite passing (all 101 prior tests preserved + 5 refined model tests).
+  - [x] Frontend production build passing (`npm run build`).
+  - [x] Mandatory statement included: "Hypothetical refined ANUGA pilot — not a forecast or validated Hidkal prediction."

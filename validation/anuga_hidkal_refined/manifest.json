@@ -1,0 +1,16 @@
+{
+  "manifest_version": "1.0.0",
+  "scenario_id": "anuga_hidkal_refined_hypothetical_v1",
+  "timestamp_utc": "2026-09-06T12:00:16Z",
+  "provenance_status": "hypothetical_refined_pilot_reproducible",
+  "files": {
+    "scenario_config.yml": "83d40bc8f777ea9e30525c59f8041a977f6eb97c67d062aab94ef15e3df270e8",
+    "run_anuga_refined.py": "6eee859eabc647cea1ddc3aa607a0ddd7586033c9cae38aa51f542f0d044c61d",
+    "postprocess_refined.py": "c8ab5f2957f81773404b7f613f730c2a8fa9c070f260cdfa80b77ada15052033",
+    "breach_diagnostics.json": "5e5a6ad1d21c5e524a37c266a249acd72a48e925b503cdb065b002a865590820",
+    "pilot_summary.json": "0be53aea46bba07aefe93022a8d72cd76928e1ea8bfcd1926db84e6edd6f36a5",
+    "output/anuga_hidkal_refined_depth.tif": "6714e423db5f7af171202a802784a37b836535a01a709cf6b963f527135fb230",
+    "output/anuga_hidkal_refined_velocity.tif": "08c809be1edb367cda1b0f87a74d9a3a7e7e68278a22eef3db0f89b497760860",
+    "output/anuga_hidkal_refined_arrival.tif": "b586b3ea3649e38913010305338a61adf56a3e39ce519607d27b4cb10ee9cac6"
+  }
+}

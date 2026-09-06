@@ -68,7 +68,7 @@ def get_layer_feature_collection(
         )
 
     h_src = hazard_source or "sample_hidkal"
-    t_val = float(threshold) if threshold is not None else (0.10 if h_src == "anuga_hidkal_pilot" else 0.0)
+    t_val = float(threshold) if threshold is not None else (0.10 if h_src in ("anuga_hidkal_pilot", "anuga_hidkal_refined") else 0.0)
 
     if layer == "assets":
         raw = get_exposure_assets(hazard_source=h_src, threshold=t_val)

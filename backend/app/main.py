@@ -179,9 +179,12 @@ def get_anuga_run(run_id: str) -> ANUGARunDetailResponse:
 
 
 @app.get("/api/anuga/rasters/{id}/metadata", response_model=RasterMetadataResponse)
-def get_anuga_metadata(id: str) -> RasterMetadataResponse:
-    """Return metadata for an ANUGA pilot GeoTIFF raster layer (depth, velocity, arrival)."""
-    return get_anuga_raster_metadata(layer_name=id)
+def get_anuga_metadata(
+    id: str,
+    hazard_source: Optional[str] = Query(default=None, description="Hazard source: anuga_hidkal_pilot or anuga_hidkal_refined"),
+) -> RasterMetadataResponse:
+    """Return metadata for an ANUGA GeoTIFF raster layer (depth, velocity, arrival)."""
+    return get_anuga_raster_metadata(layer_name=id, hazard_source=hazard_source)
 
 
 @app.get("/api/anuga/rasters/{id}/value", response_model=RasterPointValueResponse)
@@ -189,12 +192,13 @@ def get_anuga_point_value(
     id: str,
     lon: float = Query(..., description="Query longitude coordinate in WGS84 (EPSG:4326)"),
     lat: float = Query(..., description="Query latitude coordinate in WGS84 (EPSG:4326)"),
+    hazard_source: Optional[str] = Query(default=None, description="Hazard source: anuga_hidkal_pilot or anuga_hidkal_refined"),
 ) -> RasterPointValueResponse:
     """
     Point query for an ANUGA layer at WGS84 coordinates (lon, lat).
     Transforms coordinates into EPSG:32643 and samples the raster with arrival semantics.
     """
-    return get_anuga_raster_point_value(layer_name=id, lon=lon, lat=lat)
+    return get_anuga_raster_point_value(layer_name=id, lon=lon, lat=lat, hazard_source=hazard_source)
 
 
 @app.get("/api/anuga/rasters/{id}/tiles/{z}/{x}/{y}.png")
@@ -203,12 +207,13 @@ def get_anuga_tile(
     z: int,
     x: int,
     y: int,
+    hazard_source: Optional[str] = Query(default=None, description="Hazard source: anuga_hidkal_pilot or anuga_hidkal_refined"),
 ) -> Response:
     """
-    Web Mercator XYZ tile endpoint for ANUGA pilot raster visualization.
-    Returns 256x256 PNG with customized color ramp and layer transparency.
+    Web Mercator XYZ tile endpoint for ANUGA raster visualization.
+    Returns 256x256 PNG with customized color ramp, bilinear/nearest rendering, and layer transparency.
     """
-    tile_bytes = get_anuga_raster_tile(layer_name=id, z=z, x=x, y=y)
+    tile_bytes = get_anuga_raster_tile(layer_name=id, z=z, x=x, y=y, hazard_source=hazard_source)
     return Response(
         content=tile_bytes,
         media_type="image/png",
@@ -217,9 +222,12 @@ def get_anuga_tile(
 
 
 @app.get("/api/anuga/rasters/{id}/legend", response_model=RasterLegendResponse)
-def get_anuga_legend(id: str) -> RasterLegendResponse:
+def get_anuga_legend(
+    id: str,
+    hazard_source: Optional[str] = Query(default=None, description="Hazard source: anuga_hidkal_pilot or anuga_hidkal_refined"),
+) -> RasterLegendResponse:
     """Return colormap stops, discrete legend classifications, and value range for an ANUGA layer."""
-    return get_anuga_raster_legend(layer_name=id)
+    return get_anuga_raster_legend(layer_name=id, hazard_source=hazard_source)
 
 
 # Sample Raster Inspection Endpoints
@@ -310,7 +318,7 @@ def get_roads() -> Dict[str, Any]:
 
 @app.get("/api/exposure/assets")
 def get_exposure_assets_endpoint(
-    hazard_source: Optional[str] = Query(default="sample_hidkal", description="Hazard source: sample_hidkal or anuga_hidkal_pilot"),
+    hazard_source: Optional[str] = Query(default="sample_hidkal", description="Hazard source: sample_hidkal, anuga_hidkal_pilot, or anuga_hidkal_refined"),
     threshold: Optional[float] = Query(default=0.0, description="Minimum depth threshold for exposure screening"),
 ) -> Dict[str, Any]:
     """
@@ -323,7 +331,7 @@ def get_exposure_assets_endpoint(
 
 @app.get("/api/exposure/roads")
 def get_exposure_roads_endpoint(
-    hazard_source: Optional[str] = Query(default="sample_hidkal", description="Hazard source: sample_hidkal or anuga_hidkal_pilot"),
+    hazard_source: Optional[str] = Query(default="sample_hidkal", description="Hazard source: sample_hidkal, anuga_hidkal_pilot, or anuga_hidkal_refined"),
     threshold: Optional[float] = Query(default=0.0, description="Minimum depth threshold for exposure screening"),
 ) -> Dict[str, Any]:
     """
@@ -336,7 +344,7 @@ def get_exposure_roads_endpoint(
 
 @app.get("/api/exposure/summary", response_model=ExposureSummaryResponse)
 def get_exposure_summary_endpoint(
-    hazard_source: Optional[str] = Query(default="sample_hidkal", description="Hazard source: sample_hidkal or anuga_hidkal_pilot"),
+    hazard_source: Optional[str] = Query(default="sample_hidkal", description="Hazard source: sample_hidkal, anuga_hidkal_pilot, or anuga_hidkal_refined"),
     threshold: Optional[float] = Query(default=0.0, description="Minimum depth threshold for exposure screening"),
 ) -> ExposureSummaryResponse:
     """

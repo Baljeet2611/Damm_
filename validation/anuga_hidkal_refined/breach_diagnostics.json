@@ -1,0 +1,33 @@
+{
+  "status": "hypothetical_unverified",
+  "breach_geometry_assumption": "200 m instantaneous rectangular breach opening in hypothetical embankment",
+  "dam_axis_x_utm_m": 462600.0,
+  "dam_crest_elevation_assumed_m": 675.0,
+  "breach_opening_y_min_m": 1791900.0,
+  "breach_opening_y_max_m": 1792100.0,
+  "effective_breach_width_m": 200.0,
+  "mesh_resolution_at_breach": {
+    "refinement_criterion_m": "<= 50.0 m (max triangle area 1250 m\u00b2)",
+    "measured_breach_zone_edge_lengths_m": {
+      "min": 28.91,
+      "median": 43.36,
+      "p95": 60.99,
+      "max": 93.75
+    },
+    "breach_opening_mesh_crossings_count": 11,
+    "breach_opening_mesh_intervals_count": 10
+  },
+  "peak_discharge_assumed_m3s": 21953.43,
+  "peak_discharge_time_sec": 300.0,
+  "discharge_reconciliation_note": "Baseline peak discharge (~9,794.37 assumed m\u00b3/s) and refined peak discharge (~21,953.43 assumed m\u00b3/s) are approximate and not directly comparable because baseline is discretized across a single 200m coarse cell (coarse spatial averaging) while refined is discretized across 11 crossing edges (10 intervals). Peak discharges reflect volume-matched mesh sensitivity; numerical convergence is not demonstrated.",
+  "instantaneous_non_breach_leakage_rate_assumed_m3s": 0.0,
+  "cumulative_non_breach_leakage_assumed_m3": 0.0,
+  "leakage_measurement_method": "Instantaneous leakage rate measured as outward normal momentum flux across raised embankment crest line at x = 462600.0 m outside breach; cumulative leakage obtained by trapezoidal time-integration over 1800 s duration (0.0 assumed m\u00b3 due to 675.0 m impermeable crest).",
+  "leakage_status": "zero (impermeable raised embankment crest at 675.0 m)",
+  "units": {
+    "elevation": "assumed metres based on source interpretation",
+    "discharge": "assumed m\u00b3/s based on unverified DEM interpretation",
+    "instantaneous_leakage_rate": "assumed m\u00b3/s",
+    "cumulative_leakage": "assumed m\u00b3"
+  }
+}

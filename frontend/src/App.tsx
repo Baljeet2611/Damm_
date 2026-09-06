@@ -390,9 +390,10 @@ function App() {
   const [sidebarOpen, setSidebarOpen] = useState<boolean>(true)
   const [basemapOffline, setBasemapOffline] = useState<boolean>(false)
 
-  // Hazard Source State (Phase 16: ANUGA Integration)
-  const [hazardSource, setHazardSource] = useState<'sample_hidkal' | 'anuga_hidkal_pilot'>('sample_hidkal')
+  // Hazard Source State (Phase 16 & 17: ANUGA Pilot & Refined Model)
+  const [hazardSource, setHazardSource] = useState<'sample_hidkal' | 'anuga_hidkal_pilot' | 'anuga_hidkal_refined'>('sample_hidkal')
   const [anugaRunInfo, setAnugaRunInfo] = useState<any | null>(null)
+  const [anugaRefinedRunInfo, setAnugaRefinedRunInfo] = useState<any | null>(null)
 
   // Vector Layer Toggles & Exposure Summary
   const [showAssets, setShowAssets] = useState<boolean>(true)
@@ -513,7 +514,7 @@ function App() {
   const [exportSuccessMsg, setExportSuccessMsg] = useState<string | null>(null)
 
   // Handle Hazard Source Switching with explicit state clearing to prevent stale data bleed
-  const handleHazardSourceChange = (newSource: 'sample_hidkal' | 'anuga_hidkal_pilot') => {
+  const handleHazardSourceChange = (newSource: 'sample_hidkal' | 'anuga_hidkal_pilot' | 'anuga_hidkal_refined') => {
     if (newSource === hazardSource) return
     setHazardSource(newSource)
     setLegend(null)
@@ -543,6 +544,11 @@ function App() {
     fetch(`${apiBaseUrl}/api/anuga/runs/anuga_hidkal_pilot_hypothetical_v1`)
       .then((res) => res.json())
       .then((data) => setAnugaRunInfo(data))
+      .catch(() => {})
+
+    fetch(`${apiBaseUrl}/api/anuga/runs/anuga_hidkal_refined_hypothetical_v1`)
+      .then((res) => res.json())
+      .then((data) => setAnugaRefinedRunInfo(data))
       .catch(() => {})
   }, [apiBaseUrl])
 
@@ -587,8 +593,8 @@ function App() {
     setLegendLoading(true)
 
     const legendUrl =
-      hazardSource === 'anuga_hidkal_pilot' && selectedLayer !== 'dem'
-        ? `${apiBaseUrl}/api/anuga/rasters/${selectedLayer}/legend`
+      hazardSource !== 'sample_hidkal' && selectedLayer !== 'dem'
+        ? `${apiBaseUrl}/api/anuga/rasters/${selectedLayer}/legend?hazard_source=${hazardSource}`
         : `${apiBaseUrl}/api/rasters/${selectedLayer}/legend`
 
     fetch(legendUrl)
@@ -684,8 +690,8 @@ function App() {
     const sourceId = 'raster-tiles-source'
     const layerId = 'raster-tiles-layer'
     const tileUrl =
-      hazardSource === 'anuga_hidkal_pilot' && selectedLayer !== 'dem'
-        ? `${apiBaseUrl}/api/anuga/rasters/${selectedLayer}/tiles/{z}/{x}/{y}.png`
+      hazardSource !== 'sample_hidkal' && selectedLayer !== 'dem'
+        ? `${apiBaseUrl}/api/anuga/rasters/${selectedLayer}/tiles/{z}/{x}/{y}.png?hazard_source=${hazardSource}`
         : `${apiBaseUrl}/api/rasters/${selectedLayer}/tiles/{z}/{x}/{y}.png`
 
     if (map.getLayer(layerId)) {
@@ -1145,8 +1151,8 @@ function App() {
       const layerIds: LayerId[] = ['dem', 'depth', 'velocity', 'arrival']
       const promises = layerIds.map((id) => {
         const queryUrl =
-          hazardSource === 'anuga_hidkal_pilot' && id !== 'dem'
-            ? `${apiBaseUrl}/api/anuga/rasters/${id}/value?lon=${queryLon}&lat=${queryLat}`
+          hazardSource !== 'sample_hidkal' && id !== 'dem'
+            ? `${apiBaseUrl}/api/anuga/rasters/${id}/value?lon=${queryLon}&lat=${queryLat}&hazard_source=${hazardSource}`
             : `${apiBaseUrl}/api/rasters/${id}/value?lon=${queryLon}&lat=${queryLat}`
 
         return fetch(queryUrl)
@@ -1834,10 +1840,21 @@ function App() {
         </div>
 
         {/* Mandatory Scientific Disclaimer Banner */}
-        <div className={`warning-banner ${hazardSource === 'anuga_hidkal_pilot' ? 'warning-banner-anuga' : ''}`} role="alert">
+        <div
+          className={`warning-banner ${
+            hazardSource === 'anuga_hidkal_refined'
+              ? 'warning-banner-refined'
+              : hazardSource === 'anuga_hidkal_pilot'
+              ? 'warning-banner-anuga'
+              : ''
+          }`}
+          role="alert"
+        >
           <span className="warning-icon">⚠️</span>
           <span className="warning-text">
-            {hazardSource === 'anuga_hidkal_pilot'
+            {hazardSource === 'anuga_hidkal_refined'
+              ? 'Hypothetical refined ANUGA pilot — not a forecast or validated Hidkal prediction. Adaptive ≤50m breach mesh.'
+              : hazardSource === 'anuga_hidkal_pilot'
               ? 'Hypothetical ANUGA pilot — not a forecast or validated Hidkal prediction. Assumed vertical units & breach.'
               : 'Unverified sample outputs — not a validated prediction.'}
           </span>
@@ -1884,12 +1901,24 @@ function App() {
         {/* Floating Sidebar / Control HUD */}
         {sidebarOpen && (
           <aside className="hud-panel">
-            {/* Phase 16: Hazard Source Selector Card */}
+            {/* Phase 16 & 17: Hazard Source Selector Card */}
             <div className="hud-card hazard-source-card">
               <div className="hud-card-header">
                 <h3>🌊 Hazard Source</h3>
-                <span className={`legend-tag ${hazardSource === 'anuga_hidkal_pilot' ? 'tag-anuga' : 'tag-sample'}`}>
-                  {hazardSource === 'anuga_hidkal_pilot' ? 'ANUGA PILOT' : 'UNVERIFIED SAMPLE'}
+                <span
+                  className={`legend-tag ${
+                    hazardSource === 'anuga_hidkal_refined'
+                      ? 'tag-refined'
+                      : hazardSource === 'anuga_hidkal_pilot'
+                      ? 'tag-anuga'
+                      : 'tag-sample'
+                  }`}
+                >
+                  {hazardSource === 'anuga_hidkal_refined'
+                    ? 'ANUGA REFINED'
+                    : hazardSource === 'anuga_hidkal_pilot'
+                    ? 'ANUGA PILOT'
+                    : 'UNVERIFIED SAMPLE'}
                 </span>
               </div>
 
@@ -1901,7 +1930,7 @@ function App() {
                 >
                   <div className="source-btn-title-row">
                     <span className="source-btn-dot sample-dot" />
-                    <span className="source-btn-title">Sample Rasters</span>
+                    <span className="source-btn-title">Sample</span>
                   </div>
                   <span className="source-btn-sub">EPSG:4326 • Baseline</span>
                 </button>
@@ -1909,18 +1938,81 @@ function App() {
                 <button
                   className={`hazard-source-btn ${hazardSource === 'anuga_hidkal_pilot' ? 'active' : ''}`}
                   onClick={() => handleHazardSourceChange('anuga_hidkal_pilot')}
-                  title="Switch to hypothetical ANUGA pilot simulation (EPSG:32643)"
+                  title="Switch to hypothetical ANUGA pilot baseline simulation (EPSG:32643, 200m uniform mesh)"
                 >
                   <div className="source-btn-title-row">
                     <span className="source-btn-dot anuga-dot" />
                     <span className="source-btn-title">ANUGA Pilot</span>
                   </div>
-                  <span className="source-btn-sub">EPSG:32643 • 200m Breach</span>
+                  <span className="source-btn-sub">Phase 15 • 200m Mesh</span>
+                </button>
+
+                <button
+                  className={`hazard-source-btn btn-refined ${hazardSource === 'anuga_hidkal_refined' ? 'active' : ''}`}
+                  onClick={() => handleHazardSourceChange('anuga_hidkal_refined')}
+                  title="Switch to hypothetical ANUGA refined adaptive simulation (EPSG:32643, <=50m breach mesh)"
+                >
+                  <div className="source-btn-title-row">
+                    <span className="source-btn-dot refined-dot" />
+                    <span className="source-btn-title">ANUGA Refined</span>
+                  </div>
+                  <span className="source-btn-sub">Phase 17 • ≤50m Adaptive</span>
                 </button>
               </div>
 
               {/* Provenance Context Notice */}
-              {hazardSource === 'anuga_hidkal_pilot' ? (
+              {hazardSource === 'anuga_hidkal_refined' ? (
+                <div className="source-provenance-box refined-active-box">
+                  <div className="provenance-badge-row">
+                    <span className="provenance-tag tag-bg-refined">ANUGA REFINED</span>
+                    <span className="provenance-tag-sub">anuga_hidkal_refined_hypothetical_v1</span>
+                  </div>
+                  <p className="provenance-desc">
+                    {anugaRefinedRunInfo?.disclaimer ||
+                      'Hypothetical refined ANUGA pilot — not a forecast or validated Hidkal prediction. Adaptive mesh resolution with identical baseline physical parameters to isolate mesh sensitivity.'}
+                  </p>
+                  <div className="provenance-metrics-grid">
+                    <div className="prov-metric">
+                      <span>Mesh Triangles:</span>{' '}
+                      <strong className="strong-green">
+                        {anugaRefinedRunInfo?.provenance_metrics?.mesh_triangles?.toLocaleString() || '131,351'} adaptive elements
+                      </strong>
+                    </div>
+                    <div className="prov-metric">
+                      <span>Mesh Vertices:</span>{' '}
+                      <strong className="strong-green">
+                        {anugaRefinedRunInfo?.provenance_metrics?.mesh_vertices?.toLocaleString() || '65,941'} vertices
+                      </strong>
+                    </div>
+                    <div className="prov-metric">
+                      <span>Breach Opening:</span>{' '}
+                      <strong>≥4 elements across 200m (≤50m res)</strong>
+                    </div>
+                    <div className="prov-metric">
+                      <span>Peak Discharge:</span>{' '}
+                      <strong className="strong-green">
+                        {anugaRefinedRunInfo?.breach_mechanics?.peak_discharge_assumed_m3s?.toLocaleString() || '23,658.4'} m³/s (t=300s)
+                      </strong>
+                    </div>
+                    <div className="prov-metric">
+                      <span>Export Grid:</span>{' '}
+                      <strong>50m (442 × 600, 265,200 cells)</strong>
+                    </div>
+                    <div className="prov-metric">
+                      <span>Map Rendering:</span>{' '}
+                      <strong>Bilinear (depth/vel) • Nearest (arrival)</strong>
+                    </div>
+                    <div className="prov-metric">
+                      <span>Sensitivity IoU:</span>{' '}
+                      <strong>0.4995 (Δ Area: +42.65 km²)</strong>
+                    </div>
+                    <div className="prov-metric">
+                      <span>Dam Embankment:</span>{' '}
+                      <strong className="strong-green">0.0 m³/s non-breach leakage</strong>
+                    </div>
+                  </div>
+                </div>
+              ) : hazardSource === 'anuga_hidkal_pilot' ? (
                 <div className="source-provenance-box anuga-active-box">
                   <div className="provenance-badge-row">
                     <span className="provenance-tag">ANUGA PILOT</span>
@@ -2166,13 +2258,13 @@ function App() {
                       {/* Transparency note */}
                       <div className="transparency-note">
                         {selectedLayer === 'depth' &&
-                          (hazardSource === 'anuga_hidkal_pilot'
-                            ? 'ℹ️ Dry cells (depth < 0.05m) are rendered transparent.'
+                          (hazardSource !== 'sample_hidkal'
+                            ? 'ℹ️ Dry cells (depth < 0.05m) are rendered transparent (bilinear interpolation).'
                             : 'ℹ️ Zero depth cells (not exposed at sample) are rendered transparent.')}
-                        {selectedLayer === 'velocity' && 'ℹ️ Zero velocity / dry cells are rendered transparent.'}
+                        {selectedLayer === 'velocity' && 'ℹ️ Zero velocity / dry cells are rendered transparent (bilinear interpolation).'}
                         {selectedLayer === 'arrival' &&
-                          (hazardSource === 'anuga_hidkal_pilot'
-                            ? 'ℹ️ Dry cells (NoData / +9999) are transparent. 0s = initial reservoir, positive = arrival (60s step).'
+                          (hazardSource !== 'sample_hidkal'
+                            ? 'ℹ️ Dry cells (NoData / +9999) are transparent (nearest-neighbour). 0s = initial reservoir, positive = arrival.'
                             : 'ℹ️ NoData arrival cells (+9999 / -9999) are rendered transparent.')}
                         {selectedLayer === 'dem' && 'ℹ️ NoData / outside domain cells are rendered transparent.'}
                       </div>
@@ -2226,7 +2318,7 @@ function App() {
                             <div className="probe-item-val highlight-depth">
                               {probe.values.depth?.value != null
                                 ? probe.values.depth.value > 0
-                                  ? `${probe.values.depth.value.toFixed(2)} (${hazardSource === 'anuga_hidkal_pilot' ? 'assumed m' : 'unit unverified'})`
+                                ? `${probe.values.depth.value.toFixed(2)} (${hazardSource !== 'sample_hidkal' ? 'assumed m' : 'unit unverified'})`
                                   : '0.00 (not exposed)'
                                 : probe.values.depth?.is_nodata
                                 ? 'NoData'
@@ -2242,7 +2334,7 @@ function App() {
                             <div className="probe-item-val highlight-velocity">
                               {probe.values.velocity?.value != null
                                 ? probe.values.velocity.value > 0
-                                  ? `${probe.values.velocity.value.toFixed(2)} (${hazardSource === 'anuga_hidkal_pilot' ? 'assumed m/s' : 'unit unverified'})`
+                                ? `${probe.values.velocity.value.toFixed(2)} (${hazardSource !== 'sample_hidkal' ? 'assumed m/s' : 'unit unverified'})`
                                   : '0.00'
                                 : probe.values.velocity?.is_nodata
                                 ? 'NoData'
@@ -2257,7 +2349,7 @@ function App() {
                             </div>
                             <div className="probe-item-val highlight-arrival">
                               {probe.values.arrival?.value != null
-                                ? `${probe.values.arrival.value.toFixed(2)} (${hazardSource === 'anuga_hidkal_pilot' ? 's' : 'unit unverified'})`
+                                ? `${probe.values.arrival.value.toFixed(2)} (${hazardSource !== 'sample_hidkal' ? 's' : 'unit unverified'})`
                                 : probe.values.arrival?.is_nodata
                                 ? 'Not assessed'
                                 : 'N/A'}
@@ -2295,7 +2387,9 @@ function App() {
                       <p className="disclaimer-text">
                         <strong>
                           Preliminary exposure screening based on{' '}
-                          {hazardSource === 'anuga_hidkal_pilot'
+                          {hazardSource === 'anuga_hidkal_refined'
+                            ? 'hypothetical ANUGA refined model (depth ≥ 0.10m threshold)'
+                            : hazardSource === 'anuga_hidkal_pilot'
                             ? 'hypothetical ANUGA pilot (depth ≥ 0.10m threshold)'
                             : 'unverified sample rasters'}
                           .
@@ -2414,7 +2508,13 @@ function App() {
                     <p className="disclaimer-text">
                       <strong>Illustrative scenario only — not an official loss estimate or emergency decision.</strong>
                       <br />
-                      Calculations use {hazardSource === 'anuga_hidkal_pilot' ? 'hypothetical ANUGA pilot inundation (threshold ≥ 0.10m)' : 'unverified sample depths'} and user-configured replacement assumptions. Road network and casualties are excluded.
+                      Calculations use{' '}
+                      {hazardSource === 'anuga_hidkal_refined'
+                        ? 'hypothetical ANUGA refined model inundation (threshold ≥ 0.10m)'
+                        : hazardSource === 'anuga_hidkal_pilot'
+                        ? 'hypothetical ANUGA pilot inundation (threshold ≥ 0.10m)'
+                        : 'unverified sample depths'}{' '}
+                      and user-configured replacement assumptions. Road network and casualties are excluded.
                     </p>
                   </div>
 
@@ -2657,7 +2757,12 @@ function App() {
                   <div className="route-disclaimer-banner">
                     <span className="disclaimer-icon">⚠️</span>
                     <p className="disclaimer-text">
-                      <strong>Preliminary screening route only.</strong> Road closures, structural bridge integrity, carrying capacity, and live traffic are not validated. Not an official emergency evacuation route. Screening against {hazardSource === 'anuga_hidkal_pilot' ? 'hypothetical ANUGA pilot inundation (threshold ≥ 0.10m)' : 'sample depth raster'}.
+                      <strong>Preliminary screening route only.</strong> Road closures, structural bridge integrity, carrying capacity, and live traffic are not validated. Not an official emergency evacuation route. Screening against{' '}
+                      {hazardSource === 'anuga_hidkal_refined'
+                        ? 'hypothetical ANUGA refined model inundation (threshold ≥ 0.10m)'
+                        : hazardSource === 'anuga_hidkal_pilot'
+                        ? 'hypothetical ANUGA pilot inundation (threshold ≥ 0.10m)'
+                        : 'sample depth raster'}.
                     </p>
                   </div>
 

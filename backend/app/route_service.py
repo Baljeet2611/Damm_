@@ -136,7 +136,7 @@ def calculate_screening_route(req: RouteScreeningRequest) -> RouteScreeningRespo
 
     # 3. Query road exposure screening results using stable (u, v, key) matching
     h_src = req.hazard_source or "sample_hidkal"
-    t_val = req.screening_threshold if req.screening_threshold is not None else (0.10 if h_src == "anuga_hidkal_pilot" else 0.0)
+    t_val = req.screening_threshold if req.screening_threshold is not None else (0.10 if h_src in ("anuga_hidkal_pilot", "anuga_hidkal_refined") else 0.0)
     exposure_roads = get_exposure_roads(hazard_source=h_src, threshold=t_val)
     exposed_edge_keys = set()
     for feat in exposure_roads.get("features", []):
@@ -188,9 +188,10 @@ def calculate_screening_route(req: RouteScreeningRequest) -> RouteScreeningRespo
             path_nodes = nx.shortest_path(G_routing, source=start_node, target=end_node, weight="weight")
             total_length = float(nx.shortest_path_length(G_routing, source=start_node, target=end_node, weight="weight"))
         except (nx.NetworkXNoPath, nx.NodeNotFound):
+            run_id = "anuga_hidkal_refined_hypothetical_v1" if h_src == "anuga_hidkal_refined" else ("anuga_hidkal_pilot_hypothetical_v1" if h_src == "anuga_hidkal_pilot" else None)
             return RouteScreeningResponse(
                 hazard_source=h_src,
-                run_id="anuga_hidkal_pilot_hypothetical_v1" if h_src == "anuga_hidkal_pilot" else None,
+                run_id=run_id,
                 screening_threshold=t_val,
                 route_found=False,
                 geojson=None,
@@ -278,9 +279,10 @@ def calculate_screening_route(req: RouteScreeningRequest) -> RouteScreeningRespo
         },
     }
 
+    run_id = "anuga_hidkal_refined_hypothetical_v1" if h_src == "anuga_hidkal_refined" else ("anuga_hidkal_pilot_hypothetical_v1" if h_src == "anuga_hidkal_pilot" else None)
     return RouteScreeningResponse(
         hazard_source=h_src,
-        run_id="anuga_hidkal_pilot_hypothetical_v1" if h_src == "anuga_hidkal_pilot" else None,
+        run_id=run_id,
         screening_threshold=t_val,
         route_found=True,
         geojson=geojson_feature,

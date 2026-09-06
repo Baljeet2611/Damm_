@@ -68,17 +68,23 @@ uvicorn app.main:app --reload --port 8000
   - Execution Time: **6.65 s** for $T=40\text{ s}$ dynamic integration.
   - Reproducible runner (`run_benchmark.py`), summary (`benchmark_summary.json`), and cryptographic checksum manifest (`manifest.json`).
 
-### ANUGA Regional Hydrodynamic Pilot (Phase 15)
-- Genuine 2D finite-volume Shallow Water Equation regional simulation over Ghataprabha basin topography (`validation/anuga_hidkal_pilot/`).
-- Reprojected Hidkal DEM to **EPSG:32643** (UTM Zone 43N) spanning $30.0\text{ km} \times 22.1\text{ km}$ ($663.0\text{ km}^2$, $21,120$ triangular elements).
-- Hypothetical unverified pilot scenario ($200\text{ m}$ breach, assumed pool stage $660.0\text{ m}$, composite roughness $n = 0.035$, $T=1800\text{ s}$ duration).
-- Complete diagnostic verification:
-  - Peak Inundation Depth: **24.83 m**, Peak Flow Velocity: **12.84 m/s**, Inundated Area: **197.62 km²**.
-  - Volume Conservation: Exact ($9.20 \times 10^{-15}$ relative mass difference from $356.48\text{ MCM}$).
-  - Full reproducible toolchain (`preprocess_dem.py`, `run_anuga_pilot.py`, `postprocess_outputs.py`), summary (`pilot_summary.json`), GeoTIFF exports, and cryptographic manifest (`manifest.json`).
-- Distinct scientific validation: Separates schema validity from verified physics; unverified inputs remain flagged as `input_review_required`.
-- Immutable snapshots: Computes deterministic SHA-256 digests over configuration parameters and referenced input datasets.
-- Revision history and non-destructive archiving.
+### ANUGA Regional Hydrodynamic Pilot & Refined Model (Phase 15, 16 & 17)
+- **Scientific Status**: *Hypothetical refined ANUGA pilot — not a forecast or validated Hidkal prediction.* Vertical datum and DEM elevation units remain assumed based on source interpretation.
+- **Resolution Levels Rigorously Distinguished**:
+  1. *Numerical Mesh Resolution*: Unstructured adaptive mesh ($\le 50\text{ m}$ breach/channel zone, $\le 100\text{ m}$ corridor, $\le 200\text{ m}$ outer domain, $131,351$ triangles, $65,941$ vertices; 11 crossing edges / 10 discrete intervals across 200 m breach opening; measured edge lengths: min $28.91\text{ m}$, median $43.36\text{ m}$, $p_{95}$ $60.99\text{ m}$, max $93.75\text{ m}$).
+  2. *Exported Visualization Grid*: $50\text{ m}$ regular GeoTIFF rasters ($442 \times 600$, $265,200$ cells) in EPSG:32643 UTM Zone 43N. Outer domain areas are supported by $100\text{--}200\text{ m}$ mesh elements and contain nearest/linear interpolation.
+  3. *Interpolated Display Rendering*: Smooth bilinear resampling for continuous depth and velocity with crisp transparent dry/NoData masks; nearest-neighbour for arrival time. High visual quality does **not** increase underlying physical accuracy.
+- **Baseline (Phase 15) vs Refined (Phase 17) Volume-Matched Mesh Sensitivity**:
+  - Initial Stored Volume Match: Baseline = **317.161860 MCM** ($317,161,860.23\text{ m}^3$) vs Refined = **317.161857 MCM** ($317,161,857.32\text{ m}^3$), agreeing within **0.0000009%** via documented $-0.356572\text{ m}$ numerical stage adjustment ($659.643428\text{ m}$).
+  - Inundated Extent IoU ($h \ge 0.10\text{ m}$): **0.7842** (Refined Area: **54.81 km²** vs Baseline: **44.47 km²**; $\Delta = +10.34\text{ km}^2$ via `rasterio.warp.reproject` with transform-derived $0.009922\text{ km}^2$ cell area).
+  - Depth Errors on Common Inundated Area: MAE = **0.9146 assumed m**, RMSE = **1.2766 assumed m**, Mean Bias = **+0.0820 assumed m**.
+  - Velocity Errors on Common Inundated Area: MAE = **0.6291 assumed m/s**, RMSE = **0.8249 assumed m/s**, Mean Bias = **+0.1385 assumed m/s**.
+  - Peak Extrema: Depth = **25.633 assumed m** (Refined) vs **25.898 assumed m** (Baseline); Velocity = **15.772 assumed m/s** (Refined) vs **11.638 assumed m/s** (Baseline).
+  - Peak Breach Discharge: Baseline $\approx 9,794.37\text{ assumed m}^3/\text{s}$ vs Refined $\approx 21,953.43\text{ assumed m}^3/\text{s}$ at $t = 300\text{ s}$ (approximate, not directly comparable due to 1-cell [one $200\text{ m}$ structured cross-mesh cell represented by four triangles and five vertices] vs 10-interval spatial discretization; numerical convergence is not demonstrated).
+  - Non-Breach Embankment Leakage: Instantaneous rate = **0.0 assumed m³/s**; Cumulative leakage = **0.0 assumed m³** (time-integrated rate over $1,800\text{ s}$ via trapezoidal rule across the $675.0\text{ m}$ impermeable crest).
+  - Exposure Screening Differences ($h \ge 0.10\text{ m}$): Assets exposed = **8** (Baseline) vs **62** (Refined), $\Delta = +54$; Screening-positive road segments (depth $\ge 0.10$ assumed metres) = **108** (Baseline) vs **128** (Refined), $\Delta = +20$. (At unthresholded $h > 0.00\text{ m}$, baseline exposes 29 assets due to 21 sub-threshold shallow assets with $0.02\text{--}0.09\text{ m}$ depth).
+  - Full reproducible toolchain (`validation/anuga_hidkal_refined/run_anuga_refined.py`, `postprocess_refined.py`), summary (`pilot_summary.json`), GeoTIFF exports, and cryptographic manifest (`manifest.json`).
+- **Hazard Source Switcher**: Frontend UI and all backend APIs seamlessly switch between `sample_hidkal`, `anuga_hidkal_pilot`, and `anuga_hidkal_refined` with complete state purging and provenance inspection.
 
 ### Delft3D FM Integration & Gated Execution Boundary (Phase 11)
 - Capability discovery: Detects local HydroMT-Delft3D FM and D-Flow FM solver binary availability.

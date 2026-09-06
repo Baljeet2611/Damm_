@@ -54,4 +54,19 @@ We support GeoJSON (for web and custom workflows), Google Earth KML (with catego
 
 ### Q9: How is the system packaged and verified for deployment?
 **Answer**:
-The entire codebase is verified through our automated verification script (`scripts/verify.ps1`), which runs a 79-test Pytest suite and the Vite/TypeScript production build. We provide `.env.example`, unverified container templates (`Dockerfile`, `docker-compose.yml`), and a one-command demo launcher (`scripts/demo.ps1`).
+The entire codebase is verified through our automated verification script (`scripts/verify.ps1`), which runs a 100-test Pytest suite and the Vite/TypeScript production build. We provide `.env.example`, unverified container templates (`Dockerfile`, `docker-compose.yml`), and a one-command demo launcher (`scripts/demo.ps1`).
+
+---
+
+### Q10: What real hydrodynamic solvers have you executed and validated?
+**Answer**:
+We executed genuine numerical Shallow Water Equation (SWE) simulations using **ANUGA**:
+1. **Ritter (1892) Analytical Dam-Break Benchmark**: Validated 2D rectangular flume dam break against the exact analytical Ritter curve, achieving depth RMSE of 0.0480 m and zero relative volume conservation error.
+2. **Hidkal Regional Pilot Simulation**: Executed genuine SWE dam-break simulations over the Ghataprabha basin topography (EPSG:32643 UTM Zone 43N) for both a uniform baseline mesh (66,000 triangles) and an adaptive refined mesh (131,351 triangles, $\le 50\text{ m}$ breach opening). All runs maintain impermeable non-breach dam boundaries ($0.0\text{ m}^3\text{/s}$ leakage) and cryptographic SHA-256 provenance tracking.
+
+---
+
+### Q11: How do you evaluate sensitivity between baseline and refined hydrodynamic meshes?
+**Answer**:
+We distinguish three resolution tiers: (1) numerical mesh resolution ($\le 50\text{ m}$ breach, $\le 100\text{ m}$ corridor, $\le 200\text{ m}$ outer), (2) exported GeoTIFF raster resolution ($50\text{ m}$ grid), and (3) interpolated display rendering (bilinear for continuous depth/velocity; nearest-neighbour for arrival).
+We evaluate volume-matched mesh sensitivity quantitatively using `rasterio.warp.reproject` with exact transform-derived cell area: Inundation extent IoU is 0.7842 ($\Delta \text{Area} = +10.34\text{ km}^2$, baseline $44.47\text{ km}^2$ vs refined $54.81\text{ km}^2$), depth MAE is 0.9146 m, depth RMSE is 1.2766 m, depth Mean Bias is +0.0820 m, velocity MAE is 0.6291 m/s, velocity RMSE is 0.8249 m/s, velocity Mean Bias is +0.1385 m/s, and peak breach velocity is 15.77 m/s (refined) vs 11.64 m/s (baseline). Exposure screening at $h \ge 0.10\text{ m}$ shows 8 exposed assets and 108 screening-positive road segments for baseline vs 62 exposed assets and 128 screening-positive road segments for refined. We explicitly state: *Differences demonstrate volume-matched mesh sensitivity; numerical convergence is not demonstrated. Refined spatial discretization improves visual and numerical gradient representation without implying higher physical accuracy. Hypothetical refined ANUGA pilot — not a forecast or validated Hidkal prediction.*

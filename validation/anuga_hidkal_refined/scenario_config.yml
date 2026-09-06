@@ -1,0 +1,73 @@
+# ==============================================================================
+# ANUGA Regional Hydrodynamic Refined Pilot Scenario Configuration (Phase 17)
+# Status: HYPOTHETICAL UNVERIFIED RESEARCH SCENARIO
+# Site: Hidkal (Raja Lakhamagowda Dam) study area, Ghataprabha Basin
+# ==============================================================================
+
+scenario_metadata:
+  scenario_id: "anuga_hidkal_refined_hypothetical_v1"
+  scenario_status: "hypothetical_unverified"
+  title: "Hypothetical Refined Adaptive Dam-Break Hydrodynamic Simulation"
+  site: "Hidkal (Raja Lakhamagowda Dam) study area, Ghataprabha Basin"
+  disclaimer: >
+    Hypothetical refined ANUGA pilot — not a forecast or validated Hidkal prediction.
+    DEM vertical datum and elevation units remain assumed based on source interpretation.
+    Physical assumptions (stage, crest, roughness, breach geometry) remain identical to
+    Phase 15 baseline to isolate numerical mesh sensitivity.
+
+source_inputs:
+  dem:
+    raw_path: "data/raw/data_hidkal/hidkal_dem.tif"
+    raw_crs: "EPSG:4326"
+    raw_sha256: "ed4c97474857ef24845f0954baa36b8de2555ccc2a0d468cfa99fdd39fab5baf"
+    elevation_unit_assumption: "assumed_metres_based_on_source_interpretation"
+    datum_assumption: "unverified_mean_sea_level_or_ellipsoidal"
+  projected_crs: "EPSG:32643"  # WGS 84 / UTM Zone 43N
+  reprojected_dem_path: "validation/anuga_hidkal_pilot/output/hidkal_dem_utm43n.tif"
+  resampling_method: "bilinear"
+  projected_grid_spacing_m: 50.0
+
+domain_parameters:
+  x_min_utm_m: 457200.0
+  x_max_utm_m: 487200.0
+  y_min_utm_m: 1782250.0
+  y_max_utm_m: 1804350.0
+  length_m: 30000.0
+  width_m: 22100.0
+  mesh_type: "adaptive_unstructured_triangular"
+  breach_channel_max_area_m2: 1250.0   # <= 50m resolution
+  corridor_max_area_m2: 5000.0         # <= 100m resolution
+  outer_domain_max_area_m2: 20000.0    # <= 200m resolution
+  max_allowed_triangles: 250000
+
+hypothetical_breach_and_reservoir:
+  dam_axis_x_utm_m: 462600.0
+  dam_crest_elevation_assumed_m: 675.0
+  dam_embankment_thickness_m: 200.0
+  assumed_reservoir_polygon:
+    x_min_m: 457200.0
+    x_max_m: 462600.0
+    y_min_m: 1788000.0
+    y_max_m: 1796000.0
+  assumed_reservoir_stage_m: 660.0
+  numerical_stage_adjustment_m: 659.643428  # Minor -0.356572m stage adjustment to match baseline stored volume (317.161860 MCM) on adaptive mesh within 0.00001%
+  assumed_breach_center_y_m: 1792000.0
+  assumed_breach_width_m: 200.0
+  assumed_breach_y_min_m: 1791900.0
+  assumed_breach_y_max_m: 1792100.0
+  assumed_breach_invert_elevation_source: "natural_bed_elevation"
+  assumed_breach_formation_time_sec: 0.0  # Instantaneous release assumption
+
+hydraulics_and_numerics:
+  gravity_mps2: 9.81
+  manning_roughness: 0.035  # Composite river valley roughness assumption
+  simulation_duration_sec: 1800.0  # 30 minutes
+  output_yield_step_sec: 60.0      # 1 minute output intervals
+  arrival_depth_threshold_m: 0.10  # 10 cm inundation threshold for arrival time
+  flow_algorithm: "DE0"            # ANUGA default 2D finite-volume SWE solver
+
+boundary_conditions:
+  left: "Reflective (solid watershed / reservoir boundary)"
+  top: "Reflective (lateral divide)"
+  bottom: "Reflective (lateral divide)"
+  right: "Transmissive (downstream Ghataprabha valley discharge exit)"

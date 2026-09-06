@@ -121,7 +121,7 @@ class DamageConfigResponse(BaseModel):
 
 
 class DamageScenarioRequest(BaseModel):
-    hazard_source: Optional[str] = Field(default="sample_hidkal", description="Hazard source: sample_hidkal or anuga_hidkal_pilot")
+    hazard_source: Optional[str] = Field(default="sample_hidkal", description="Hazard source: sample_hidkal, anuga_hidkal_pilot, or anuga_hidkal_refined")
     screening_threshold: Optional[float] = Field(default=0.0, ge=0.0, description="Minimum depth threshold for exposure screening")
     assumed_depth_unit: Optional[str] = "assumed meters (unverified)"
     currency_label: Optional[str] = "INR (₹)"
@@ -174,7 +174,7 @@ class DamageScenarioResponse(BaseModel):
 # Phase 8: Route Screening Schemas
 
 class RouteScreeningRequest(BaseModel):
-    hazard_source: Optional[str] = Field(default="sample_hidkal", description="Hazard source: sample_hidkal or anuga_hidkal_pilot")
+    hazard_source: Optional[str] = Field(default="sample_hidkal", description="Hazard source: sample_hidkal, anuga_hidkal_pilot, or anuga_hidkal_refined")
     screening_threshold: Optional[float] = Field(default=0.0, ge=0.0, description="Minimum depth threshold for road avoidance")
     start_lon: float = Field(..., ge=-180.0, le=180.0, description="Start longitude in decimal degrees")
     start_lat: float = Field(..., ge=-90.0, le=90.0, description="Start latitude in decimal degrees")
@@ -215,7 +215,7 @@ class RouteScreeningResponse(BaseModel):
 
 class ExportRouteRequest(BaseModel):
     format: str = Field(default="geojson", description="Export format: geojson, kml, or shp")
-    hazard_source: Optional[str] = Field(default="sample_hidkal", description="Hazard source: sample_hidkal or anuga_hidkal_pilot")
+    hazard_source: Optional[str] = Field(default="sample_hidkal", description="Hazard source: sample_hidkal, anuga_hidkal_pilot, or anuga_hidkal_refined")
     screening_threshold: Optional[float] = Field(default=0.0, ge=0.0, description="Screening threshold")
     route_request: RouteScreeningRequest = Field(..., description="Route screening parameters to compute route for export")
 
@@ -223,7 +223,7 @@ class ExportRouteRequest(BaseModel):
 class ExportRequest(BaseModel):
     layer: str = Field(..., description="Target layer: assets, roads, or route")
     format: str = Field(default="geojson", description="Export format: geojson, kml, or shp")
-    hazard_source: Optional[str] = Field(default="sample_hidkal", description="Hazard source: sample_hidkal or anuga_hidkal_pilot")
+    hazard_source: Optional[str] = Field(default="sample_hidkal", description="Hazard source: sample_hidkal, anuga_hidkal_pilot, or anuga_hidkal_refined")
     screening_threshold: Optional[float] = Field(default=0.0, ge=0.0, description="Screening threshold")
     exposure_filter: Optional[str] = Field(default="all", description="Exposure filter: all, screening_positive, not_exposed, not_assessed")
     route_request: Optional[RouteScreeningRequest] = Field(default=None, description="Route screening parameters if layer is route")
@@ -581,6 +581,8 @@ class ANUGARunDetailResponse(BaseModel):
     area_partitioning_km2: Dict[str, Any]
     volume_conservation: Dict[str, Any]
     inundation_results: Dict[str, Any]
+    mesh_sensitivity: Optional[Dict[str, Any]] = None
+    scientific_validity_note: Optional[str] = None
     provenance_metrics: Optional[Dict[str, Any]] = None
     layers: Dict[str, Dict[str, Any]]
     manifest: Dict[str, Any]

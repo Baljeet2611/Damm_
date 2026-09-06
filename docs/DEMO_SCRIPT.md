@@ -15,16 +15,19 @@ This script provides a precise, truthful, click-by-click walkthrough for present
 
 ---
 
-## Step 1: Hydrodynamic Inspection & Probing (0:30 - 1:30)
-1. Navigate to the **🗺️ Layers** tab in the HUD panel.
-2. Toggle between raster layers:
-   * **Inundation Depth** (continuous Viridis color ramp with dynamic legend).
-   * **Flow Velocity** (Plasma color ramp highlighting high-velocity breach channels).
-   * **Wave Arrival Time** (Turbo color ramp with automatic `+9999` NoData masking).
-   * **Digital Elevation Model** (Terrain backdrop).
+## Step 1: Hazard Source Switching & Hydrodynamic Simulation Probing (0:30 - 1:30)
+1. Point to the **🌊 Hazard Source** selector at the top of the HUD:
+   * Toggle between **Sample Rasters** (baseline unverified EPSG:4326), **ANUGA Pilot** (Phase 15 uniform $200\text{ m}$ mesh, $66,000$ triangles), and **ANUGA Refined** (Phase 17 adaptive $\le 50\text{ m}$ breach mesh, $131,351$ triangles).
+   * Note how toggling cleanly purges stale raster tiles, exposure stats, damage numbers, and route paths.
+   * Point out the **Provenance HUD Box** displaying exact run parameters: $131,351$ adaptive elements, $11$ crossing edges / $10$ discrete intervals across $200\text{ m}$ breach opening, $\approx 21,953.4\text{ m}^3\text{/s}$ peak breach discharge, $0.0\text{ m}^3\text{/s}$ non-breach leakage rate, and volume-matched sensitivity metrics ($\text{IoU} = 0.7842$, $\Delta \text{Area} = +10.34\text{ km}^2$, Depth MAE = $0.91\text{ m}$).
+2. Toggle between raster layers under the **🗺️ Layers** tab:
+   * **Inundation Depth** (continuous Viridis / Cyan-Blue colormap with bilinear rendering).
+   * **Flow Velocity** (high-velocity breach jet reaching $15.77\text{ m/s}$ in refined model).
+   * **Wave Arrival Time** (Turbo colormap with nearest-neighbour discrete display).
+   * **Digital Elevation Model** (Terrain backdrop in EPSG:32643).
 3. Click anywhere on the map within the downstream inundation zone:
-   * The live **Probe Card** displays exact values: elevation, water depth, flow speed, and arrival time.
-   * Demonstrate probe NoData handling on dry ground cells.
+   * The live **Probe Card** transforms coordinates from WGS84 to EPSG:32643 and samples all 4 rasters simultaneously.
+   * Demonstrate transparent rendering and clean NoData handling outside inundation boundaries.
 
 ---
 
