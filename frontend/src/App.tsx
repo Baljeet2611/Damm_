@@ -2,6 +2,9 @@ import { useEffect, useRef, useState, useCallback } from 'react'
 import maplibregl, { Map as MapLibreMap, Marker, Popup } from 'maplibre-gl'
 import 'maplibre-gl/dist/maplibre-gl.css'
 import './App.css'
+import { DamOnboardingPanel } from './components/onboarding/DamOnboardingPanel'
+import { getDamProjectDemTileUrl } from './api/damProjects'
+import type { DamProjectSummary, DamProjectDetailResponse } from './types/damProjects'
 
 type LayerId = 'dem' | 'depth' | 'velocity' | 'arrival'
 
@@ -400,7 +403,7 @@ function App() {
   const [showRoads, setShowRoads] = useState<boolean>(true)
   const [exposureSummary, setExposureSummary] = useState<ExposureSummary | null>(null)
   const [summaryLoading, setSummaryLoading] = useState<boolean>(false)
-  const [activeTab, setActiveTab] = useState<'layers' | 'exposure' | 'damage' | 'route' | 'export' | 'scenarios'>('layers')
+  const [activeTab, setActiveTab] = useState<'layers' | 'exposure' | 'damage' | 'route' | 'export' | 'scenarios' | 'onboarding'>('layers')
 
   // Phase 10 & 11: Scenario Management & Simulation State
   const [capabilities, setCapabilities] = useState<SimulationCapabilities | null>(null)
@@ -528,6 +531,45 @@ function App() {
     setRouteResult(null)
     setProbe(null)
     setExposureSummary(null)
+  }
+
+  const handleDisplayProjectDem = (project: DamProjectSummary | DamProjectDetailResponse) => {
+    const map = mapRef.current
+    if (!map) return
+
+    const sourceId = 'custom-dem-tiles-source'
+    const layerId = 'custom-dem-tiles-layer'
+    const tileUrl = getDamProjectDemTileUrl(project.project_id)
+
+    if (map.getLayer(layerId)) {
+      map.removeLayer(layerId)
+    }
+    if (map.getSource(sourceId)) {
+      map.removeSource(sourceId)
+    }
+
+    const b = 'bounds' in project ? project.bounds : project.raster_metadata?.bounds
+    if (b && b.left < b.right && b.bottom < b.top) {
+      if (b.left >= -180 && b.right <= 180 && b.bottom >= -90 && b.top <= 90) {
+        map.fitBounds([[b.left, b.bottom], [b.right, b.top]], { padding: 40 })
+      }
+    }
+
+    map.addSource(sourceId, {
+      type: 'raster',
+      tiles: [tileUrl],
+      tileSize: 256,
+    })
+
+    map.addLayer({
+      id: layerId,
+      type: 'raster',
+      source: sourceId,
+      paint: {
+        'raster-opacity': 0.85,
+        'raster-fade-duration': 150,
+      },
+    })
   }
 
   const apiBaseUrl = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'
@@ -2135,6 +2177,12 @@ function App() {
                 onClick={() => setActiveTab('scenarios')}
               >
                 🌊 Scenarios
+              </button>
+              <button
+                className={`hud-tab-btn ${activeTab === 'onboarding' ? 'active' : ''}`}
+                onClick={() => setActiveTab('onboarding')}
+              >
+                🏗️ New Dam
               </button>
             </div>
 
@@ -4261,6 +4309,11 @@ set GEE_PROJECT_ID=my-dam-hazard-project
                   )}
                 </div>
               </div>
+            )}
+
+            {/* TAB 7: Generalized Dam Project Onboarding & Persistence (SIH PS 26161) */}
+            {activeTab === 'onboarding' && (
+              <DamOnboardingPanel onDisplayProjectDem={handleDisplayProjectDem} />
             )}
           </aside>
         )}

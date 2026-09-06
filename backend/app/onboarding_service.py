@@ -9,16 +9,25 @@ Validates user-submitted custom dam and river datasets without running simulatio
 5. Enforces resource limits (max bytes, max pixels, max features) with HTTP 413.
 6. Clearly separates raster-derived metadata (with unknown vertical datum/units) from user-provided metadata.
 7. Distinguishes computational readiness from scientific verification.
+8. Provides atomic project registration, metadata inspection, point probing, and tile rendering.
 """
 
+import io
 import os
 import json
+import uuid
+import shutil
+import hashlib
 import tempfile
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, Any, List, Optional, Tuple
 
 import numpy as np
 import rasterio
+from rasterio.windows import Window
+from PIL import Image
+from rio_tiler.io import Reader
 from shapely.geometry import shape, Point, box, LineString, MultiLineString, Polygon, MultiPolygon
 from shapely.ops import transform as shapely_transform
 from pyproj import CRS, Transformer
@@ -27,12 +36,18 @@ from fastapi import HTTPException
 from app.schemas import (
     RasterBounds,
     RasterResolution,
+    RasterMetadataResponse,
+    RasterPointValueResponse,
     RasterDerivedMetadata,
     UserProvidedMetadata,
     GeometryValidationMetadata,
     NormalizedProjectMetadata,
     DamProjectValidationResponse,
+    DamProjectSummary,
+    DamProjectDetailResponse,
 )
+from app.raster_service import EMPTY_TILE_PNG, apply_colormap_and_transparency
+from app.scenario_storage import get_runtime_dir, compute_file_sha256
 
 # Configurable resource limits
 MAX_UPLOAD_SIZE_BYTES = 50 * 1024 * 1024       # 50 MB per file
@@ -42,6 +57,25 @@ MAX_GEOJSON_FEATURES = 5_000                   # 5,000 features
 # Allowed file extensions
 ALLOWED_DEM_EXTENSIONS = {".tif", ".tiff"}
 ALLOWED_GEOJSON_EXTENSIONS = {".geojson", ".json"}
+
+
+def get_dam_projects_dir() -> Path:
+    """Get persistent storage directory for registered dam projects."""
+    p = get_runtime_dir() / "dam_projects"
+    p.mkdir(parents=True, exist_ok=True)
+    return p
+
+
+def validate_project_uuid(project_id: str) -> str:
+    """Validate that the provided project_id is a valid UUID v4; prevents path traversal."""
+    try:
+        parsed = uuid.UUID(str(project_id).strip(), version=4)
+        return str(parsed)
+    except (ValueError, TypeError, AttributeError):
+        raise HTTPException(
+            status_code=422,
+            detail=f"Invalid dam project ID format '{project_id}'. Must be a valid UUID v4 identifier.",
+        )
 
 
 def validate_filename_security(filename: str, allowed_extensions: set) -> Tuple[bool, Optional[str]]:
@@ -289,7 +323,6 @@ def validate_dam_project_dataset(
                         errors.append(f"Dam axis feature {idx} geometry is topologically invalid.")
                     g_type = sh_geom.geom_type
                     geom_types.add(g_type)
-                    # Strict geometry type check
                     if g_type not in ("LineString", "MultiLineString"):
                         errors.append(f"Dam axis must contain only LineString or MultiLineString geometries. Found '{g_type}' in feature {idx}.")
                     all_geoms.append(sh_geom)
@@ -298,10 +331,7 @@ def validate_dam_project_dataset(
                     dam_axis_geom_src = all_geoms[0] if len(all_geoms) == 1 else MultiLineString([g for g in all_geoms if isinstance(g, (LineString, MultiLineString))])
                     raw_centroid = (float(dam_axis_geom_src.centroid.x), float(dam_axis_geom_src.centroid.y))
 
-                    # Parse geometry CRS
                     src_geom_crs = CRS.from_user_input(geometry_crs or "EPSG:4326")
-
-                    # Reproject to DEM CRS for spatial bounding checks
                     intersects_dem = False
                     fully_within_dem = False
 
@@ -324,18 +354,16 @@ def validate_dam_project_dataset(
                             errors.append(f"Failed to reproject dam axis geometry into DEM CRS: {e}")
                             dam_axis_geom_dem_crs = dam_axis_geom_src
 
-                    # Store geographic centroid for metric UTM determination
                     if src_geom_crs.is_geographic:
                         dam_axis_centroid_lon_lat = raw_centroid
                     elif dem_crs_obj and dem_crs_obj.is_geographic:
                         dam_axis_centroid_lon_lat = (float(dam_axis_geom_dem_crs.centroid.x), float(dam_axis_geom_dem_crs.centroid.y)) if dam_axis_geom_dem_crs else raw_centroid
                     else:
-                        # Reproject centroid to WGS84 for UTM zone derivation if needed
                         try:
                             t_to_geo = Transformer.from_crs(src_geom_crs, "EPSG:4326", always_xy=True)
                             dam_axis_centroid_lon_lat = t_to_geo.transform(raw_centroid[0], raw_centroid[1])
                         except Exception:
-                            dam_axis_centroid_lon_lat = (75.0, 15.0)  # Default central India
+                            dam_axis_centroid_lon_lat = (75.0, 15.0)
 
                     axis_meta = GeometryValidationMetadata(
                         layer_name="dam_axis",
@@ -459,7 +487,6 @@ def validate_dam_project_dataset(
             b_pt_raw = Point(breach_center_x, breach_center_y)
             src_geom_crs = CRS.from_user_input(geometry_crs or "EPSG:4326")
 
-            # First verify breach center is inside DEM bounds in DEM CRS
             if dem_box and dem_crs_obj:
                 try:
                     if src_geom_crs != dem_crs_obj:
@@ -474,10 +501,8 @@ def validate_dam_project_dataset(
                 except Exception as e:
                     errors.append(f"Failed to project breach center into DEM CRS: {e}")
 
-            # Now calculate metric distance in metres
             if dam_axis_geom_dem_crs is not None:
                 try:
-                    # Case A: DEM CRS is already a projected metric CRS (e.g. UTM)
                     if dem_crs_obj and not dem_crs_obj.is_geographic:
                         metric_crs_str = str(dem_crs_obj)
                         axis_metric = dam_axis_geom_dem_crs
@@ -487,7 +512,6 @@ def validate_dam_project_dataset(
                         else:
                             b_pt_metric = b_pt_raw
                     else:
-                        # Case B: Geographic CRS — Reproject both into local UTM zone for accurate metric measurement
                         ref_lon = dam_axis_centroid_lon_lat[0] if dam_axis_centroid_lon_lat else breach_center_x
                         ref_lat = dam_axis_centroid_lon_lat[1] if dam_axis_centroid_lon_lat else breach_center_y
                         metric_crs_str = get_utm_epsg_for_lon_lat(ref_lon, ref_lat)
@@ -533,7 +557,6 @@ def validate_dam_project_dataset(
     # 8. Readiness Flags
     is_valid = len(errors) == 0
 
-    # Onboarding validation passed requires complete valid geometry and fully contained coverage
     onboarding_validation_passed = (
         is_valid
         and raster_derived_meta is not None
@@ -547,7 +570,7 @@ def validate_dam_project_dataset(
         and breach_width is not None
     )
 
-    # Scientific verification remains false in this MVP because no authoritative evidence/document verification workflow exists
+    # Scientific verification remains false in this MVP because no authoritative evidence verification exists
     scientifically_verified = False
 
     user_meta = UserProvidedMetadata(
@@ -585,3 +608,360 @@ def validate_dam_project_dataset(
         scientifically_verified=scientifically_verified,
     )
 
+
+def save_dam_project(
+    dem_bytes: bytes,
+    dem_filename: str,
+    dam_axis_bytes: bytes,
+    dam_axis_filename: str,
+    reservoir_bytes: Optional[bytes] = None,
+    reservoir_filename: Optional[str] = None,
+    project_name: str = "New Dam Project",
+    vertical_unit: Optional[str] = None,
+    vertical_datum: Optional[str] = None,
+    reservoir_level: Optional[float] = None,
+    breach_width: Optional[float] = None,
+    breach_center_x: Optional[float] = None,
+    breach_center_y: Optional[float] = None,
+    breach_formation_time_hr: Optional[float] = 1.0,
+    manning_roughness: Optional[float] = 0.035,
+    geometry_crs: str = "EPSG:4326",
+    acknowledge_unverified_metadata: bool = False,
+) -> DamProjectDetailResponse:
+    """
+    Atomically persists a validated dam onboarding project to runtime storage:
+    - Reuses validate_dam_project_dataset.
+    - Requires onboarding_validation_passed=True.
+    - Requires acknowledge_unverified_metadata=True.
+    - Generates server-side UUID v4.
+    - Stores dem.tif, dam_axis.geojson, reservoir_boundary.geojson, project.json, and manifest.json.
+    - Status is validated_unverified; scientifically_verified remains False.
+    """
+    if not acknowledge_unverified_metadata:
+        raise HTTPException(
+            status_code=422,
+            detail="User acknowledgment of unverified metadata and simulation disclaimers is required to register project.",
+        )
+
+    val_res = validate_dam_project_dataset(
+        dem_bytes=dem_bytes,
+        dem_filename=dem_filename,
+        dam_axis_bytes=dam_axis_bytes,
+        dam_axis_filename=dam_axis_filename,
+        reservoir_bytes=reservoir_bytes,
+        reservoir_filename=reservoir_filename,
+        project_name=project_name,
+        vertical_unit=vertical_unit,
+        vertical_datum=vertical_datum,
+        reservoir_level=reservoir_level,
+        breach_width=breach_width,
+        breach_center_x=breach_center_x,
+        breach_center_y=breach_center_y,
+        breach_formation_time_hr=breach_formation_time_hr,
+        manning_roughness=manning_roughness,
+        geometry_crs=geometry_crs,
+    )
+
+    if not val_res.valid or not val_res.onboarding_validation_passed or not val_res.normalized_metadata:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "message": "Dam project onboarding validation failed.",
+                "errors": val_res.errors,
+                "warnings": val_res.warnings,
+            },
+        )
+
+    project_id = str(uuid.uuid4())
+    base_dir = get_dam_projects_dir()
+    staging_dir = base_dir / f".tmp_{project_id}"
+    final_dir = base_dir / project_id
+    created_at = datetime.now(timezone.utc).isoformat()
+
+    try:
+        staging_dir.mkdir(parents=True, exist_ok=True)
+
+        # 1. Store standardized safe filenames
+        dem_file_path = staging_dir / "dem.tif"
+        dem_file_path.write_bytes(dem_bytes)
+
+        axis_file_path = staging_dir / "dam_axis.geojson"
+        axis_file_path.write_bytes(dam_axis_bytes)
+
+        res_rel_name: Optional[str] = None
+        if reservoir_bytes:
+            res_file_path = staging_dir / "reservoir_boundary.geojson"
+            res_file_path.write_bytes(reservoir_bytes)
+            res_rel_name = "reservoir_boundary.geojson"
+
+        norm_meta = val_res.normalized_metadata
+        project_dict: Dict[str, Any] = {
+            "project_id": project_id,
+            "project_name": norm_meta.project_name,
+            "status": "validated_unverified",
+            "created_at": created_at,
+            "dem_file": "dem.tif",
+            "dam_axis_file": "dam_axis.geojson",
+            "reservoir_boundary_file": res_rel_name,
+            "raster_metadata": norm_meta.raster_metadata.model_dump() if norm_meta.raster_metadata else {},
+            "user_provided_metadata": norm_meta.user_provided_metadata.model_dump() if norm_meta.user_provided_metadata else {},
+            "dam_axis_metadata": norm_meta.dam_axis_metadata.model_dump() if norm_meta.dam_axis_metadata else {},
+            "reservoir_metadata": norm_meta.reservoir_metadata.model_dump() if norm_meta.reservoir_metadata else None,
+            "breach_parameters": {
+                "reservoir_level": reservoir_level,
+                "breach_width": breach_width,
+                "breach_center": [breach_center_x, breach_center_y] if breach_center_x is not None and breach_center_y is not None else None,
+                "breach_formation_time_hr": breach_formation_time_hr,
+                "manning_roughness": manning_roughness,
+                "breach_on_dam_axis": norm_meta.breach_on_dam_axis,
+                "breach_distance_to_axis_m": norm_meta.breach_distance_to_axis_m,
+                "distance_calculation_crs": norm_meta.distance_calculation_crs,
+            },
+            "assumptions_requiring_confirmation": val_res.assumptions_requiring_confirmation,
+            "metadata_declared": val_res.metadata_declared,
+            "onboarding_validation_passed": True,
+            "scientifically_verified": False,
+            "warnings": val_res.warnings,
+        }
+
+        proj_json_path = staging_dir / "project.json"
+        proj_json_path.write_text(json.dumps(project_dict, indent=2), encoding="utf-8")
+
+        # 2. Build immutable SHA-256 manifest
+        file_hashes: Dict[str, str] = {
+            "dem.tif": compute_file_sha256(dem_file_path) or "",
+            "dam_axis.geojson": compute_file_sha256(axis_file_path) or "",
+            "project.json": compute_file_sha256(proj_json_path) or "",
+        }
+        if res_rel_name:
+            file_hashes[res_rel_name] = compute_file_sha256(staging_dir / res_rel_name) or ""
+
+        manifest_dict: Dict[str, Any] = {
+            "manifest_version": "1.0",
+            "project_id": project_id,
+            "project_name": norm_meta.project_name,
+            "created_at": created_at,
+            "status": "validated_unverified",
+            "scientifically_verified": False,
+            "files": file_hashes,
+        }
+        manifest_path = staging_dir / "manifest.json"
+        manifest_path.write_text(json.dumps(manifest_dict, indent=2), encoding="utf-8")
+
+        project_dict["manifest"] = manifest_dict
+
+        # 3. Atomic rename to final directory
+        staging_dir.rename(final_dir)
+
+    except Exception as e:
+        if staging_dir.exists():
+            shutil.rmtree(staging_dir, ignore_errors=True)
+        if final_dir.exists():
+            shutil.rmtree(final_dir, ignore_errors=True)
+        raise HTTPException(status_code=500, detail=f"Failed to persist dam project: {str(e)}")
+
+    return DamProjectDetailResponse(**project_dict)
+
+
+def list_dam_projects() -> List[DamProjectSummary]:
+    """List all registered custom dam projects from runtime storage."""
+    base_dir = get_dam_projects_dir()
+    results: List[DamProjectSummary] = []
+
+    for entry in base_dir.iterdir():
+        if entry.is_dir() and not entry.name.startswith("."):
+            proj_json = entry / "project.json"
+            manifest_json = entry / "manifest.json"
+            if proj_json.is_file():
+                try:
+                    data = json.loads(proj_json.read_text(encoding="utf-8"))
+                    r_meta = data.get("raster_metadata", {})
+                    bounds_dict = r_meta.get("bounds", {"left": 0, "bottom": 0, "right": 0, "top": 0})
+                    res_dict = r_meta.get("resolution", {"x": 0, "y": 0})
+
+                    manifest_hash = ""
+                    if manifest_json.is_file():
+                        manifest_hash = compute_file_sha256(manifest_json) or ""
+
+                    results.append(
+                        DamProjectSummary(
+                            project_id=data.get("project_id", entry.name),
+                            project_name=data.get("project_name", "Untitled Dam Project"),
+                            status=data.get("status", "validated_unverified"),
+                            created_at=data.get("created_at", ""),
+                            crs=r_meta.get("crs", "UNKNOWN"),
+                            bounds=RasterBounds(**bounds_dict),
+                            resolution=RasterResolution(**res_dict),
+                            has_reservoir_boundary=data.get("reservoir_boundary_file") is not None,
+                            metadata_declared=data.get("metadata_declared", False),
+                            onboarding_validation_passed=data.get("onboarding_validation_passed", True),
+                            scientifically_verified=False,
+                            manifest_sha256=manifest_hash,
+                            notes=[
+                                "Custom user-onboarded dam dataset",
+                                "Validated geometry and parameter bounds; unverified physical datum",
+                            ],
+                        )
+                    )
+                except Exception:
+                    continue
+
+    results.sort(key=lambda p: p.created_at, reverse=True)
+    return results
+
+
+def get_dam_project(project_id: str) -> DamProjectDetailResponse:
+    """Retrieve full detail for a registered dam project by UUID v4."""
+    valid_id = validate_project_uuid(project_id)
+    proj_dir = get_dam_projects_dir() / valid_id
+    proj_json = proj_dir / "project.json"
+
+    if not proj_json.is_file():
+        raise HTTPException(status_code=404, detail=f"Dam project '{valid_id}' not found.")
+
+    try:
+        data = json.loads(proj_json.read_text(encoding="utf-8"))
+        if "manifest" not in data:
+            manifest_json = proj_dir / "manifest.json"
+            if manifest_json.is_file():
+                data["manifest"] = json.loads(manifest_json.read_text(encoding="utf-8"))
+            else:
+                data["manifest"] = {
+                    "manifest_version": "1.0",
+                    "project_id": valid_id,
+                    "project_name": data.get("project_name", ""),
+                    "created_at": data.get("created_at", ""),
+                    "status": data.get("status", "validated_unverified"),
+                    "scientifically_verified": False,
+                    "files": {},
+                }
+        return DamProjectDetailResponse(**data)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to load dam project data: {str(e)}")
+
+
+def get_dam_project_dem_metadata(project_id: str) -> RasterMetadataResponse:
+    """Retrieve raster metadata for an onboarded dam project DEM."""
+    valid_id = validate_project_uuid(project_id)
+    dem_path = get_dam_projects_dir() / valid_id / "dem.tif"
+
+    if not dem_path.is_file():
+        raise HTTPException(status_code=404, detail=f"DEM raster file for project '{valid_id}' not found.")
+
+    with rasterio.open(dem_path) as src:
+        b = src.bounds
+        res_x = abs(src.res[0])
+        res_y = abs(src.res[1])
+
+        # Min/max from project.json cache if available
+        proj_json = get_dam_projects_dir() / valid_id / "project.json"
+        min_v = None
+        max_v = None
+        if proj_json.is_file():
+            try:
+                p_data = json.loads(proj_json.read_text(encoding="utf-8"))
+                min_v = p_data.get("raster_metadata", {}).get("min_elevation")
+                max_v = p_data.get("raster_metadata", {}).get("max_elevation")
+            except Exception:
+                pass
+
+        return RasterMetadataResponse(
+            id=f"custom_dem_{valid_id}",
+            width=src.width,
+            height=src.height,
+            dtype=src.dtypes[0],
+            crs=str(src.crs) if src.crs else None,
+            bounds=RasterBounds(left=b.left, bottom=b.bottom, right=b.right, top=b.top),
+            resolution=RasterResolution(x=res_x, y=res_y),
+            nodata=src.nodata,
+            valid_min=min_v,
+            valid_max=max_v,
+        )
+
+
+def get_dam_project_dem_point_value(project_id: str, lon: float, lat: float) -> RasterPointValueResponse:
+    """Query single point elevation value on an onboarded dam project DEM."""
+    valid_id = validate_project_uuid(project_id)
+    dem_path = get_dam_projects_dir() / valid_id / "dem.tif"
+
+    if not dem_path.is_file():
+        raise HTTPException(status_code=404, detail=f"DEM raster for project '{valid_id}' not found.")
+
+    with rasterio.open(dem_path) as src:
+        query_x, query_y = lon, lat
+
+        # Reproject WGS84 coordinate if DEM is in a projected CRS
+        if src.crs and not src.crs.is_geographic:
+            try:
+                t = Transformer.from_crs("EPSG:4326", src.crs, always_xy=True)
+                query_x, query_y = t.transform(lon, lat)
+            except Exception:
+                pass
+
+        min_x = min(src.bounds.left, src.bounds.right)
+        max_x = max(src.bounds.left, src.bounds.right)
+        min_y = min(src.bounds.bottom, src.bounds.top)
+        max_y = max(src.bounds.bottom, src.bounds.top)
+
+        if not (min_x <= query_x <= max_x and min_y <= query_y <= max_y):
+            raise HTTPException(
+                status_code=422,
+                detail=f"Coordinates ({lon}, {lat}) map outside project DEM bounding extent.",
+            )
+
+        row, col = src.index(query_x, query_y)
+        if row < 0 or row >= src.height or col < 0 or col >= src.width:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Coordinates ({lon}, {lat}) map outside raster grid dimensions [{src.width}x{src.height}].",
+            )
+
+        pixel_window = Window(col, row, 1, 1)
+        pixel_arr = src.read(1, window=pixel_window)
+        raw_val = float(pixel_arr[0, 0])
+
+        is_nodata = False
+        if np.isnan(raw_val) or (src.nodata is not None and np.isclose(raw_val, src.nodata)) or raw_val <= -9000.0:
+            is_nodata = True
+            raw_val = None
+
+        return RasterPointValueResponse(
+            id=f"custom_dem_{valid_id}",
+            row=int(row),
+            column=int(col),
+            value=raw_val,
+            is_nodata=is_nodata,
+        )
+
+
+def get_dam_project_dem_tile(project_id: str, z: int, x: int, y: int) -> bytes:
+    """Render 256x256 Web Mercator PNG tile for an onboarded dam project DEM."""
+    valid_id = validate_project_uuid(project_id)
+    dem_path = get_dam_projects_dir() / valid_id / "dem.tif"
+
+    if not dem_path.is_file():
+        raise HTTPException(status_code=404, detail=f"DEM file for project '{valid_id}' not found.")
+
+    if z < 0 or z > 24:
+        return EMPTY_TILE_PNG
+    max_coord = 1 << z
+    if x < 0 or x >= max_coord or y < 0 or y >= max_coord:
+        return EMPTY_TILE_PNG
+
+    try:
+        with Reader(str(dem_path)) as reader:
+            nodata = getattr(reader.dataset, "nodata", None)
+            img_data = reader.tile(tile_x=x, tile_y=y, tile_z=z)
+            if img_data.data.shape[0] == 0:
+                return EMPTY_TILE_PNG
+
+            band_2d = img_data.data[0].astype(np.float32)
+            rgba = apply_colormap_and_transparency(band_2d, dataset_id="dem", meta_nodata=nodata)
+
+            out_img = Image.fromarray(rgba, mode="RGBA")
+            buf = io.BytesIO()
+            out_img.save(buf, format="PNG", optimize=True)
+            return buf.getvalue()
+
+    except Exception:
+        return EMPTY_TILE_PNG

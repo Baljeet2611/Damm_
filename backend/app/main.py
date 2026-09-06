@@ -43,6 +43,8 @@ from app.schemas import (
     ANUGARunSummary,
     ANUGARunDetailResponse,
     DamProjectValidationResponse,
+    DamProjectSummary,
+    DamProjectDetailResponse,
 )
 
 from app.raster_service import (
@@ -111,7 +113,15 @@ from app.gee_service import (
     get_dataset_info,
     create_export_plan,
 )
-from app.onboarding_service import validate_dam_project_dataset
+from app.onboarding_service import (
+    validate_dam_project_dataset,
+    save_dam_project,
+    list_dam_projects,
+    get_dam_project,
+    get_dam_project_dem_metadata,
+    get_dam_project_dem_point_value,
+    get_dam_project_dem_tile,
+)
 
 logger = logging.getLogger("app.main")
 
@@ -726,4 +736,113 @@ async def post_validate_dam_project(
     )
 
 
+@app.post(
+    "/api/dam-projects",
+    response_model=DamProjectDetailResponse,
+    summary="Register and persist custom dam project dataset",
+    description="Validates and atomically persists an onboarding dam dataset under runtime storage.",
+)
+async def create_dam_project_endpoint(
+    dem_file: UploadFile = File(..., description="DEM GeoTIFF raster (*.tif, *.tiff)"),
+    dam_axis_file: UploadFile = File(..., description="Dam axis vector GeoJSON (*.geojson, *.json)"),
+    reservoir_boundary_file: Optional[UploadFile] = File(default=None, description="Optional reservoir boundary GeoJSON"),
+    project_name: str = Form(default="New Dam Project", description="Human-readable project title"),
+    vertical_unit: Optional[str] = Form(default=None, description="User-verified vertical unit (e.g. meters, feet)"),
+    vertical_datum: Optional[str] = Form(default=None, description="User-verified vertical datum (e.g. MSL, EGM96)"),
+    reservoir_level: Optional[float] = Form(default=None, description="Assumed reservoir level / FRL in elevation units"),
+    breach_width: Optional[float] = Form(default=None, description="Hypothetical breach width in meters"),
+    breach_center_x: Optional[float] = Form(default=None, description="Breach center longitude or X coordinate in geometry_crs"),
+    breach_center_y: Optional[float] = Form(default=None, description="Breach center latitude or Y coordinate in geometry_crs"),
+    breach_formation_time_hr: Optional[float] = Form(default=1.0, description="Breach formation time in hours"),
+    manning_roughness: Optional[float] = Form(default=0.035, description="Channel Manning's roughness coefficient"),
+    geometry_crs: Optional[str] = Form(default="EPSG:4326", description="Coordinate Reference System of input GeoJSON geometries"),
+    acknowledge_unverified_metadata: bool = Form(default=False, description="User acknowledgment that metadata is unverified"),
+) -> DamProjectDetailResponse:
+    """
+    Persistently register a custom dam dataset after strict validation.
+    Generates server-side UUID v4, stores dem.tif, dam_axis.geojson, project.json, and manifest.json.
+    """
+    dem_bytes = await dem_file.read()
+    dam_axis_bytes = await dam_axis_file.read()
+    res_bytes = await reservoir_boundary_file.read() if reservoir_boundary_file else None
+
+    return save_dam_project(
+        dem_bytes=dem_bytes,
+        dem_filename=dem_file.filename or "dem.tif",
+        dam_axis_bytes=dam_axis_bytes,
+        dam_axis_filename=dam_axis_file.filename or "dam_axis.geojson",
+        reservoir_bytes=res_bytes,
+        reservoir_filename=reservoir_boundary_file.filename if reservoir_boundary_file else None,
+        project_name=project_name,
+        vertical_unit=vertical_unit,
+        vertical_datum=vertical_datum,
+        reservoir_level=reservoir_level,
+        breach_width=breach_width,
+        breach_center_x=breach_center_x,
+        breach_center_y=breach_center_y,
+        breach_formation_time_hr=breach_formation_time_hr,
+        manning_roughness=manning_roughness,
+        geometry_crs=geometry_crs or "EPSG:4326",
+        acknowledge_unverified_metadata=acknowledge_unverified_metadata,
+    )
+
+
+@app.get(
+    "/api/dam-projects",
+    response_model=List[DamProjectSummary],
+    summary="List registered custom dam projects",
+    description="Returns metadata summaries of all persisted dam projects registered under runtime storage.",
+)
+def list_dam_projects_endpoint() -> List[DamProjectSummary]:
+    return list_dam_projects()
+
+
+@app.get(
+    "/api/dam-projects/{project_id}",
+    response_model=DamProjectDetailResponse,
+    summary="Get registered dam project details",
+    description="Returns complete metadata, file paths, validation results, and manifest for a registered project.",
+)
+def get_dam_project_endpoint(project_id: str) -> DamProjectDetailResponse:
+    return get_dam_project(project_id)
+
+
+@app.get(
+    "/api/dam-projects/{project_id}/dem/metadata",
+    response_model=RasterMetadataResponse,
+    summary="Get custom project DEM raster metadata",
+)
+def get_dam_project_dem_metadata_endpoint(project_id: str) -> RasterMetadataResponse:
+    return get_dam_project_dem_metadata(project_id)
+
+
+@app.get(
+    "/api/dam-projects/{project_id}/dem/value",
+    response_model=RasterPointValueResponse,
+    summary="Query point elevation value on custom project DEM",
+)
+def get_dam_project_dem_point_value_endpoint(
+    project_id: str,
+    lon: float = Query(..., description="Query longitude in WGS84 degrees"),
+    lat: float = Query(..., description="Query latitude in WGS84 degrees"),
+) -> RasterPointValueResponse:
+    return get_dam_project_dem_point_value(project_id, lon=lon, lat=lat)
+
+
+@app.get(
+    "/api/dam-projects/{project_id}/dem/tiles/{z}/{x}/{y}.png",
+    summary="Render custom project DEM Web Mercator map tile",
+)
+def get_dam_project_dem_tile_endpoint(
+    project_id: str,
+    z: int,
+    x: int,
+    y: int,
+) -> Response:
+    tile_bytes = get_dam_project_dem_tile(project_id, z=z, x=x, y=y)
+    return Response(
+        content=tile_bytes,
+        media_type="image/png",
+        headers={"Cache-Control": "public, max-age=3600"},
+    )
 

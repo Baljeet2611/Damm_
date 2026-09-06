@@ -353,6 +353,9 @@ def _apply_colormap(dataset_id: str, data_2d: np.ndarray, meta_nodata: Optional[
     return rgba
 
 
+apply_colormap_and_transparency = _apply_colormap
+
+
 def get_raster_tile(dataset_id: str, z: int, x: int, y: int) -> bytes:
     """
     Render standard Web Mercator tile (z, x, y) as PNG bytes using rio-tiler.

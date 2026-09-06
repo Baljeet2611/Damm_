@@ -650,3 +650,40 @@ class DamProjectValidationResponse(BaseModel):
     metadata_declared: bool
     onboarding_validation_passed: bool
     scientifically_verified: bool = False
+
+
+class DamProjectSummary(BaseModel):
+    project_id: str
+    project_name: str
+    status: str = "validated_unverified"
+    created_at: str
+    crs: str
+    bounds: RasterBounds
+    resolution: RasterResolution
+    has_reservoir_boundary: bool
+    metadata_declared: bool
+    onboarding_validation_passed: bool
+    scientifically_verified: bool = False
+    manifest_sha256: str
+    notes: List[str] = []
+
+
+class DamProjectDetailResponse(BaseModel):
+    project_id: str
+    project_name: str
+    status: str = "validated_unverified"
+    created_at: str
+    dem_file: str
+    dam_axis_file: str
+    reservoir_boundary_file: Optional[str] = None
+    raster_metadata: RasterDerivedMetadata
+    user_provided_metadata: UserProvidedMetadata
+    dam_axis_metadata: GeometryValidationMetadata
+    reservoir_metadata: Optional[GeometryValidationMetadata] = None
+    breach_parameters: Dict[str, Any]
+    manifest: Dict[str, Any]
+    assumptions_requiring_confirmation: List[str]
+    metadata_declared: bool
+    onboarding_validation_passed: bool
+    scientifically_verified: bool = False
+    warnings: List[str] = []
