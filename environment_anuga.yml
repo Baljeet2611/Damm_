@@ -1,0 +1,11 @@
+name: sih-anuga
+channels:
+  - conda-forge
+dependencies:
+  - python=3.10
+  - anuga=4.0.0
+  - numpy
+  - scipy
+  - matplotlib
+  - netcdf4
+  - pytest

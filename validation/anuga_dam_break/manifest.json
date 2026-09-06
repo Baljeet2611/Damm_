@@ -1,0 +1,10 @@
+{
+  "manifest_version": "1.0",
+  "benchmark_id": "anuga_2d_dam_break_ritter_t40s",
+  "generated_at": "2026-09-06T09:04:18Z",
+  "files": {
+    "run_benchmark.py": "f4e46a5c61c91a6c416675d6783659d1c96fc2b41e5c6b16f2b07fa50d2d516b",
+    "centerline_t40s.csv": "b1c49f4227b5cd89dc1dd7f9a6155291a1bcb68c6f5f85356cb8c9b4d9f94dc5",
+    "benchmark_summary.json": "c8d1a5bcde512c19972e1667be902c0155be46c298c3da4be28f61f55afc385d"
+  }
+}

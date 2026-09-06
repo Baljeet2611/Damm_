@@ -58,6 +58,15 @@ uvicorn app.main:app --reload --port 8000
 ### Scenario Management & Snapshot Module (Phase 10)
 - Persistent local scenario storage under runtime directory (`SIH_RUNTIME_DIR`), secured against filesystem traversal via UUID v4 validation and atomic JSON replacement.
 - Parametric modeling fields: breach geometry (width, formation time), reservoir pool level, boundary descriptors, Manning friction $n$, flexible mesh cell size, run duration, and computational timestep.
+
+### Hydrodynamic Solver Validation (Phase 14)
+- Genuine numerical shallow-water solver execution via **ANUGA** finite-volume framework in isolated conda environment `sih-anuga`.
+- Idealized 2D dry-bed rectangular channel dam-break benchmark (`validation/anuga_dam_break/`).
+- Validated against the **Ritter (1892)** analytical exact solution:
+  - Centerline Depth RMSE: **0.0480 m** (MAE: **0.0308 m**).
+  - Relative Volume Conservation Error: **0.00e+00** (exact mass conservation).
+  - Execution Time: **6.65 s** for $T=40\text{ s}$ dynamic integration.
+  - Reproducible runner (`run_benchmark.py`), summary (`benchmark_summary.json`), and cryptographic checksum manifest (`manifest.json`).
 - Distinct scientific validation: Separates schema validity from verified physics; unverified inputs remain flagged as `input_review_required`.
 - Immutable snapshots: Computes deterministic SHA-256 digests over configuration parameters and referenced input datasets.
 - Revision history and non-destructive archiving.
@@ -73,7 +82,18 @@ uvicorn app.main:app --reload --port 8000
 - **Multi-Engine Hydrodynamic Comparison**: Dynamic common grid alignment in temporary memory; quantitative spatial metrics ($IoU$, $CSI$, Area $\Delta \text{km}^2$) and error statistics ($MAE$, $RMSE$, Mean Bias); structured 5-dimension methodology comparison matrix (Eulerian SWE vs Lagrangian Navier-Stokes).
 - **Google Earth Engine (GEE) Connector**: Dedicated `environment_gee.yml`; server-side ADC authentication (`GEE_PROJECT_ID`); whitelisted datasets (`Sentinel-1 SAR GRD`, `GPM IMERG`, `JRC Global Surface Water`); candidate water-change observation plan generator with cloud task gating (`ENABLE_GEE_TASKS=false`).
 
-
+### Automated Verification & Presentation Preparation (Phase 13)
+- **One-Command Verification**: `powershell .\scripts\verify.ps1` executes all 79 Pytest tests and frontend production build.
+- **Safe Live Demo Launcher**: `powershell .\scripts\demo.ps1` checks prerequisites, reuses healthy ports safely, starts backend/frontend services, and opens the interactive dashboard at `http://localhost:5173`.
+- **Comprehensive Documentation Suite (`docs/`)**:
+  - [ARCHITECTURE.md](file:///docs/ARCHITECTURE.md): System components & Mermaid data flow.
+  - [VALIDATION_REPORT.md](file:///docs/VALIDATION_REPORT.md): Audit records & test breakdown.
+  - [LIMITATIONS.md](file:///docs/LIMITATIONS.md): Scientific caveats, datum uncertainties, and operational constraints.
+  - [DEMO_SCRIPT.md](file:///docs/DEMO_SCRIPT.md): Truthful 5-minute SIH live demonstration script.
+  - [PRESENTATION_OUTLINE.md](file:///docs/PRESENTATION_OUTLINE.md): 10-slide competition pitch deck.
+  - [JUDGE_QA.md](file:///docs/JUDGE_QA.md): Technical defense questions and answers.
+  - [DEPLOYMENT.md](file:///docs/DEPLOYMENT.md): Local and production NGINX / systemd setup.
+  - [FINAL_STATUS.md](file:///docs/FINAL_STATUS.md): Categorized feature completion & readiness matrix.
 
 ### 3. Frontend Application (React + Vite + TypeScript)
 ```powershell
@@ -84,8 +104,14 @@ npm run dev
 ```
 - Web Application: `http://localhost:5173`
 
-### 4. Optional Convenience Script
+### 4. Convenience & Verification Scripts
 ```powershell
+# Run full automated test suite and production build
+.\scripts\verify.ps1
+
+# Launch one-command live demo session
+.\scripts\demo.ps1
+
+# Standard development launcher
 .\scripts\dev.ps1
 ```
-

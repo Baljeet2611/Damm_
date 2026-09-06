@@ -63,6 +63,9 @@ outputs/
 exports/
 simulations/
 runs/
+validation/anuga_dam_break/output/
+validation_output/
+*.sww
 *.tif
 *.tiff
 *.geotiff
