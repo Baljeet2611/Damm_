@@ -8,6 +8,9 @@ import type {
   DamProjectAnugaRunRequest,
   DamProjectAnugaRunResponse,
   RasterDerivedMetadata,
+  DamProjectAnugaPostprocessRequest,
+  DamProjectAnugaResultsResponse,
+  DamProjectAnugaPointValueResponse,
 } from '../types/damProjects'
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'
@@ -253,4 +256,99 @@ export async function fetchDamProjectAnugaRunLogs(projectId: string, runId: stri
     throw new Error(`Failed to fetch simulation logs: HTTP ${res.status}`)
   }
   return res.text()
+}
+
+export async function postprocessDamProjectAnugaRun(
+  projectId: string,
+  runId: string,
+  req: DamProjectAnugaPostprocessRequest = {},
+): Promise<DamProjectAnugaResultsResponse> {
+  const res = await fetch(
+    `${API_BASE}/api/dam-projects/${encodeURIComponent(projectId)}/anuga/runs/${encodeURIComponent(runId)}/postprocess`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(req),
+    },
+  )
+  if (!res.ok) {
+    const errBody = await res.json().catch(() => null)
+    if (errBody && errBody.detail) {
+      if (typeof errBody.detail === 'string') throw new Error(errBody.detail)
+      if (errBody.detail.message) throw new Error(errBody.detail.message)
+    }
+    throw new Error(`Postprocessing failed: HTTP ${res.status}`)
+  }
+  return res.json()
+}
+
+export async function fetchDamProjectAnugaResults(
+  projectId: string,
+  runId: string,
+): Promise<DamProjectAnugaResultsResponse> {
+  const res = await fetch(
+    `${API_BASE}/api/dam-projects/${encodeURIComponent(projectId)}/anuga/runs/${encodeURIComponent(runId)}/results`,
+  )
+  if (!res.ok) {
+    const errBody = await res.json().catch(() => null)
+    if (errBody && errBody.detail) {
+      if (typeof errBody.detail === 'string') throw new Error(errBody.detail)
+      if (errBody.detail.message) throw new Error(errBody.detail.message)
+    }
+    throw new Error(`Failed to fetch simulation results: HTTP ${res.status}`)
+  }
+  return res.json()
+}
+
+export async function fetchDamProjectAnugaLayerMetadata(
+  projectId: string,
+  runId: string,
+  layer: string,
+): Promise<any> {
+  const res = await fetch(
+    `${API_BASE}/api/dam-projects/${encodeURIComponent(projectId)}/anuga/runs/${encodeURIComponent(runId)}/results/${encodeURIComponent(layer)}/metadata`,
+  )
+  if (!res.ok) {
+    throw new Error(`Failed to fetch layer metadata: HTTP ${res.status}`)
+  }
+  return res.json()
+}
+
+export async function fetchDamProjectAnugaLayerLegend(
+  projectId: string,
+  runId: string,
+  layer: string,
+): Promise<any> {
+  const res = await fetch(
+    `${API_BASE}/api/dam-projects/${encodeURIComponent(projectId)}/anuga/runs/${encodeURIComponent(runId)}/results/${encodeURIComponent(layer)}/legend`,
+  )
+  if (!res.ok) {
+    throw new Error(`Failed to fetch layer legend: HTTP ${res.status}`)
+  }
+  return res.json()
+}
+
+export async function fetchDamProjectAnugaLayerPointValue(
+  projectId: string,
+  runId: string,
+  layer: string,
+  lon: number,
+  lat: number,
+): Promise<DamProjectAnugaPointValueResponse> {
+  const params = new URLSearchParams({ lon: String(lon), lat: String(lat) })
+  const res = await fetch(
+    `${API_BASE}/api/dam-projects/${encodeURIComponent(projectId)}/anuga/runs/${encodeURIComponent(runId)}/results/${encodeURIComponent(layer)}/point?${params.toString()}`,
+  )
+  if (!res.ok) {
+    throw new Error(`Failed to query point value: HTTP ${res.status}`)
+  }
+  return res.json()
+}
+
+export function getDamProjectAnugaLayerTileUrl(
+  projectId: string,
+  runId: string,
+  layer: string,
+): string {
+  return `${API_BASE}/api/dam-projects/${encodeURIComponent(projectId)}/anuga/runs/${encodeURIComponent(runId)}/results/${encodeURIComponent(layer)}/tiles/{z}/{x}/{y}.png`
 }

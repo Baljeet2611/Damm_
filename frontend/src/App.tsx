@@ -525,7 +525,7 @@ function App() {
 
   // Custom Onboarded Dam Project Map Visualization Hook
   const [activeCustomDamProject, setActiveCustomDamProject] = useState<DamProjectSummary | DamProjectDetailResponse | null>(null)
-  const { displayDamProjectOnMap, clearDamProjectMap } = useDamProjectMap(mapRef)
+  const { displayDamProjectOnMap, clearDamProjectMap, displayDamProjectAnugaHazardRaster } = useDamProjectMap(mapRef)
 
   // Handle Hazard Source Switching with explicit state clearing to prevent stale data bleed
   const handleHazardSourceChange = (newSource: 'sample_hidkal' | 'anuga_hidkal_pilot' | 'anuga_hidkal_refined') => {
@@ -4300,7 +4300,10 @@ set GEE_PROJECT_ID=my-dam-hazard-project
 
             {/* TAB 7: Generalized Dam Project Onboarding & Persistence (SIH PS 26161) */}
             {activeTab === 'onboarding' && (
-              <DamOnboardingPanel onDisplayProjectDem={handleDisplayProjectDem} />
+              <DamOnboardingPanel
+                onDisplayProjectDem={handleDisplayProjectDem}
+                onDisplayHazardLayer={displayDamProjectAnugaHazardRaster}
+              />
             )}
           </aside>
         )}

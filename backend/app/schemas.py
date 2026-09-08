@@ -735,6 +735,8 @@ class DamProjectAnugaCapabilitiesResponse(BaseModel):
     execution_enabled: bool
     anuga_installed: bool
     anuga_version: str
+    version_source: Literal["importlib_metadata", "conda_meta", "fallback_runtime", "unavailable"] = "unavailable"
+    raw_distribution_version: Optional[str] = None
     python_executable_configured: bool
     reason: Optional[str] = None
     disclaimer: str = (
@@ -761,9 +763,78 @@ class DamProjectAnugaRunResponse(BaseModel):
     completed_at: Optional[str] = None
     exit_code: Optional[int] = None
     anuga_version: Optional[str] = None
+    version_source: Optional[Literal["importlib_metadata", "conda_meta", "fallback_runtime", "unavailable"]] = None
+    raw_distribution_version: Optional[str] = None
     runtime_seconds: Optional[float] = None
     log_file: Optional[str] = None
     output_files: Dict[str, str] = {}
     scientific_status: str = "hypothetical_unverified"
     simulation_executed: bool = False
+    has_results: bool = False
     message: str
+
+
+class DamProjectAnugaPostprocessRequest(BaseModel):
+    dry_depth_threshold_m: float = Field(0.005, gt=0.0, le=1.0, description="Minimum depth in meters below which velocity is zeroed")
+    arrival_depth_threshold_m: float = Field(0.05, gt=0.0, le=10.0, description="Water depth threshold in meters for arrival detection")
+    raster_resolution_m: Optional[float] = Field(None, gt=0.0001, le=500.0, description="Optional target grid resolution in meters")
+
+
+class DamProjectAnugaLayerStats(BaseModel):
+    min: Optional[float] = None
+    max: Optional[float] = None
+    mean: Optional[float] = None
+    valid_pixels: int
+    nodata_pixels: int
+    total_pixels: int
+    unit: str
+
+
+class DamProjectAnugaResultsResponse(BaseModel):
+    project_id: str
+    run_id: str
+    processing_id: str
+    created_at: str
+    sww_sha256: str
+    package_sha256: str
+    processing_identity_sha256: str
+    available_layers: List[str]
+    layer_files: Dict[str, str]
+    layer_statistics: Dict[str, DamProjectAnugaLayerStats]
+    formulas: Dict[str, str]
+    thresholds: Dict[str, float]
+    actual_sww_timesteps: List[float]
+    interpolation_method: str
+    mesh_mask_method: str
+    raster_crs: str
+    raster_resolution_m: float
+    grid_dimensions: Tuple[int, int]
+    anuga_version: str
+    version_source: str
+    raw_distribution_version: Optional[str] = None
+    scientific_status: str = "hypothetical_unverified"
+    simulation_executed: bool = True
+    mass_balance_status: str = "not_assessed"
+    disclaimer: str = (
+        "Derived raster visualization product from uncalibrated ANUGA hydrodynamic simulation. "
+        "Not certified flood forecasting or official inundation mapping."
+    )
+    message: str
+
+
+class DamProjectAnugaPointValueResponse(BaseModel):
+    project_id: str
+    run_id: str
+    layer: str
+    lon: float
+    lat: float
+    crs_x: Optional[float] = None
+    crs_y: Optional[float] = None
+    crs: str
+    value: Optional[float] = None
+    unit: str
+    value_type: str = "derived_raster_value"
+    description: str = "Interpolated derived model value from ANUGA simulation raster"
+    is_valid: bool
+    is_nodata: bool
+    disclaimer: str = "Derived raster visualization value — not an exact certified solver prediction."

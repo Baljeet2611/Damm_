@@ -15,9 +15,13 @@ import './DamOnboardingPanel.css'
 
 interface DamOnboardingPanelProps {
   onDisplayProjectDem?: (project: DamProjectSummary | DamProjectDetailResponse) => void
+  onDisplayHazardLayer?: (projectId: string, runId: string, layer: string, processingId?: string) => void
 }
 
-export const DamOnboardingPanel: React.FC<DamOnboardingPanelProps> = ({ onDisplayProjectDem }) => {
+export const DamOnboardingPanel: React.FC<DamOnboardingPanelProps> = ({
+  onDisplayProjectDem,
+  onDisplayHazardLayer,
+}) => {
   // File states
   const [demFile, setDemFile] = useState<File | null>(null)
   const [damAxisFile, setDamAxisFile] = useState<File | null>(null)
@@ -623,6 +627,7 @@ export const DamOnboardingPanel: React.FC<DamOnboardingPanelProps> = ({ onDispla
               <DamProjectAnugaReadiness
                 project={savedProject}
                 onPackageBuilt={loadProjects}
+                onDisplayHazardLayer={onDisplayHazardLayer}
               />
             </div>
           </div>
@@ -708,6 +713,7 @@ export const DamOnboardingPanel: React.FC<DamOnboardingPanelProps> = ({ onDispla
                         <DamProjectAnugaReadiness
                           project={p}
                           onPackageBuilt={loadProjects}
+                          onDisplayHazardLayer={onDisplayHazardLayer}
                         />
                       </div>
                     )}

@@ -1,7 +1,7 @@
 import os
 import logging
 from typing import Dict, Any, List, Optional
-from fastapi import FastAPI, Query, Response, HTTPException, Request, UploadFile, File, Form
+from fastapi import FastAPI, Query, Response, HTTPException, Request, UploadFile, File, Form, Body
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.gzip import GZipMiddleware
@@ -50,6 +50,9 @@ from app.schemas import (
     DamProjectAnugaCapabilitiesResponse,
     DamProjectAnugaRunRequest,
     DamProjectAnugaRunResponse,
+    DamProjectAnugaPostprocessRequest,
+    DamProjectAnugaResultsResponse,
+    DamProjectAnugaPointValueResponse,
 )
 
 from app.raster_service import (
@@ -140,6 +143,15 @@ from app.onboarding_service import (
     get_dam_project_anuga_run,
     get_dam_project_anuga_run_logs,
     recover_interrupted_anuga_runs,
+)
+from app.anuga_postprocessing_service import (
+    postprocess_dam_project_anuga_run,
+    get_dam_project_anuga_results,
+    get_dam_project_anuga_layer_metadata,
+    get_dam_project_anuga_layer_legend,
+    get_dam_project_anuga_layer_point_value,
+    get_dam_project_anuga_layer_tile,
+    get_dam_project_anuga_layer_geotiff_path,
 )
 
 logger = logging.getLogger("app.main")
@@ -1041,3 +1053,118 @@ def get_dam_project_anuga_run_logs_endpoint(project_id: str, run_id: str) -> Pla
     logs = get_dam_project_anuga_run_logs(project_id, run_id)
     return PlainTextResponse(content=logs, media_type="text/plain")
 
+
+@app.post(
+    "/api/dam-projects/{project_id}/anuga/runs/{run_id}/postprocess",
+    response_model=DamProjectAnugaResultsResponse,
+    summary="Postprocess completed ANUGA SWW output into hazard rasters",
+    description="Converts verified completed ANUGA SWW simulation output into maximum depth, maximum velocity, and arrival time GeoTIFF rasters using timestep-first linear triangular mesh interpolation.",
+)
+def postprocess_dam_project_anuga_run_endpoint(
+    project_id: str,
+    run_id: str,
+    request: Optional[DamProjectAnugaPostprocessRequest] = Body(default=None),
+) -> DamProjectAnugaResultsResponse:
+    return postprocess_dam_project_anuga_run(project_id, run_id, request)
+
+
+@app.get(
+    "/api/dam-projects/{project_id}/anuga/runs/{run_id}/results",
+    response_model=DamProjectAnugaResultsResponse,
+    summary="Get postprocessed ANUGA simulation hazard results summary",
+    description="Retrieves the manifest, layer statistics, thresholds, and provenance of postprocessed ANUGA simulation rasters.",
+)
+def get_dam_project_anuga_results_endpoint(
+    project_id: str,
+    run_id: str,
+    processing_id: Optional[str] = Query(None, description="Optional processing ID (defaults to latest)"),
+) -> DamProjectAnugaResultsResponse:
+    return get_dam_project_anuga_results(project_id, run_id, processing_id=processing_id)
+
+
+@app.get(
+    "/api/dam-projects/{project_id}/anuga/runs/{run_id}/results/{layer}/metadata",
+    response_model=RasterMetadataResponse,
+    summary="Get raster metadata for an ANUGA hazard layer",
+    description="Retrieves bounding box, CRS, dimensions, resolution, and value range for maximum_depth, maximum_velocity, or arrival_time.",
+)
+def get_dam_project_anuga_layer_metadata_endpoint(
+    project_id: str,
+    run_id: str,
+    layer: str,
+    processing_id: Optional[str] = Query(None, description="Optional processing ID (defaults to latest)"),
+) -> RasterMetadataResponse:
+    return get_dam_project_anuga_layer_metadata(project_id, run_id, layer, processing_id=processing_id)
+
+
+@app.get(
+    "/api/dam-projects/{project_id}/anuga/runs/{run_id}/results/{layer}/legend",
+    response_model=RasterLegendResponse,
+    summary="Get color ramp legend for an ANUGA hazard layer",
+    description="Returns color ramp stops and legend items for visualizing ANUGA hazard rasters.",
+)
+def get_dam_project_anuga_layer_legend_endpoint(
+    project_id: str,
+    run_id: str,
+    layer: str,
+    processing_id: Optional[str] = Query(None, description="Optional processing ID (defaults to latest)"),
+) -> RasterLegendResponse:
+    return get_dam_project_anuga_layer_legend(project_id, run_id, layer, processing_id=processing_id)
+
+
+@app.get(
+    "/api/dam-projects/{project_id}/anuga/runs/{run_id}/results/{layer}/point",
+    response_model=DamProjectAnugaPointValueResponse,
+    summary="Query derived point value from an ANUGA hazard raster",
+    description="Samples the derived interpolated raster value at a specified WGS84 coordinate (lon, lat).",
+)
+def get_dam_project_anuga_layer_point_value_endpoint(
+    project_id: str,
+    run_id: str,
+    layer: str,
+    lon: float = Query(..., description="Query longitude in WGS84 degrees"),
+    lat: float = Query(..., description="Query latitude in WGS84 degrees"),
+    processing_id: Optional[str] = Query(None, description="Optional processing ID (defaults to latest)"),
+) -> DamProjectAnugaPointValueResponse:
+    return get_dam_project_anuga_layer_point_value(project_id, run_id, layer, lon=lon, lat=lat, processing_id=processing_id)
+
+
+@app.get(
+    "/api/dam-projects/{project_id}/anuga/runs/{run_id}/results/{layer}/tiles/{z}/{x}/{y}.png",
+    summary="Render Web Mercator map tile for an ANUGA hazard layer",
+    description="Renders a 256x256 PNG map tile with colormapping and transparent dry/NoData masking for maximum_depth, maximum_velocity, or arrival_time.",
+)
+def get_dam_project_anuga_layer_tile_endpoint(
+    project_id: str,
+    run_id: str,
+    layer: str,
+    z: int,
+    x: int,
+    y: int,
+    processing_id: Optional[str] = Query(None, description="Optional processing ID (defaults to latest)"),
+) -> Response:
+    tile_bytes = get_dam_project_anuga_layer_tile(project_id, run_id, layer, z=z, x=x, y=y, processing_id=processing_id)
+    return Response(
+        content=tile_bytes,
+        media_type="image/png",
+        headers={"Cache-Control": "public, max-age=3600"},
+    )
+
+
+@app.get(
+    "/api/dam-projects/{project_id}/anuga/runs/{run_id}/results/{layer}/download",
+    summary="Download raw GeoTIFF for an ANUGA hazard raster layer",
+    description="Downloads the raw GeoTIFF file for maximum_depth, maximum_velocity, or arrival_time.",
+)
+def download_dam_project_anuga_layer_geotiff_endpoint(
+    project_id: str,
+    run_id: str,
+    layer: str,
+    processing_id: Optional[str] = Query(None, description="Optional processing ID (defaults to latest)"),
+) -> FileResponse:
+    tif_path = get_dam_project_anuga_layer_geotiff_path(project_id, run_id, layer, processing_id=processing_id)
+    return FileResponse(
+        path=str(tif_path),
+        media_type="image/tiff",
+        filename=f"{layer}.tif",
+    )

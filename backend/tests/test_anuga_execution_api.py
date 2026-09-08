@@ -22,6 +22,7 @@ import time
 import uuid
 import zipfile
 from pathlib import Path
+from typing import Dict, Any, List, Optional, Tuple, Set
 import numpy as np
 from scipy.io import netcdf_file
 import pytest
@@ -29,6 +30,7 @@ from fastapi.testclient import TestClient
 
 from app.main import app
 from app import onboarding_service
+from app import anuga_postprocessing_service
 from tests.test_anuga_onboarding_api import get_standard_valid_payload, create_test_geotiff_bytes
 
 client = TestClient(app)
@@ -40,6 +42,7 @@ def isolate_dam_projects_storage(tmp_path, monkeypatch):
     temp_dir = tmp_path / "dam_projects"
     temp_dir.mkdir(parents=True, exist_ok=True)
     monkeypatch.setattr(onboarding_service, "get_dam_projects_dir", lambda: temp_dir)
+    monkeypatch.setattr(anuga_postprocessing_service, "get_dam_projects_dir", lambda: temp_dir)
     return temp_dir
 
 
@@ -522,8 +525,628 @@ class TestDamProjectAnugaRealCanaryIntegration:
                 "cumulative_boundary_outflow": "not measured",
                 "scientific_limitation": "Full mass conservation cannot be assessed without integrated boundary flux.",
             }
+            storage_change_report = {
+                "initial_volume": round(init_v, 2),
+                "final_volume": round(final_v, 2),
+                "absolute_change": round(abs_change, 2),
+                "relative_change_percentage": f"{rel_change_pct:.2f}%",
+                "outlet_boundary_present": True,
+                "cumulative_boundary_outflow": "not measured",
+                "scientific_limitation": "Full mass conservation cannot be assessed without integrated boundary flux.",
+            }
             print(f"\n[STORAGE-CHANGE PLAUSIBILITY REPORT]\n{json.dumps(storage_change_report, indent=2)}")
+
+            # Test real canary postprocessing
+            post_res = client.post(f"/api/dam-projects/{p_id}/anuga/runs/{r_id}/postprocess", json={
+                "dry_depth_threshold_m": 0.005,
+                "arrival_depth_threshold_m": 0.05,
+            })
+            assert post_res.status_code == 200, f"Postprocess failed: {post_res.text}"
+            res_data = post_res.json()
+            proc_id = res_data["processing_id"]
+
+            assert "maximum_depth" in res_data["available_layers"]
+            assert "maximum_velocity" in res_data["available_layers"]
+            assert "arrival_time" in res_data["available_layers"]
+            assert "maximum_depth" in res_data["layer_statistics"]
+            assert "maximum_velocity" in res_data["layer_statistics"]
+            assert "arrival_time" in res_data["layer_statistics"]
+            assert res_data["mass_balance_status"] == "not_assessed"
+            assert res_data["scientific_status"] == "hypothetical_unverified"
+
+            # Verify exact storage path runs/{run_id}/results/{processing_id}/
+            run_dir = onboarding_service.get_dam_projects_dir() / p_id / "runs" / r_id
+            res_proc_dir = run_dir / "results" / proc_id
+            assert res_proc_dir.is_dir(), f"Expected results directory at {res_proc_dir}"
+            assert (res_proc_dir / "manifest.json").is_file()
+
+            import rasterio
+            from app.onboarding_service import compute_file_sha256
+
+            layer_evidence = {}
+            for l_name in ["maximum_depth", "maximum_velocity", "arrival_time"]:
+                tif_p = res_proc_dir / f"{l_name}.tif"
+                assert tif_p.is_file(), f"Missing GeoTIFF: {tif_p}"
+                tif_sz = tif_p.stat().st_size
+                assert tif_sz > 100, f"GeoTIFF {tif_p} is too small ({tif_sz} bytes)"
+                tif_sha = compute_file_sha256(tif_p)
+
+                with rasterio.open(tif_p) as src:
+                    arr = src.read(1)
+                    nodata_v = src.nodata
+                    valid_mask = (arr != nodata_v) & np.isfinite(arr)
+                    valid_count = int(np.sum(valid_mask))
+                    nodata_count = int(np.sum(~valid_mask))
+                    total_count = int(arr.size)
+                    min_val = float(np.min(arr[valid_mask])) if valid_count > 0 else None
+                    max_val = float(np.max(arr[valid_mask])) if valid_count > 0 else None
+
+                    layer_evidence[l_name] = {
+                        "path": str(tif_p),
+                        "size_bytes": tif_sz,
+                        "sha256": tif_sha,
+                        "width": src.width,
+                        "height": src.height,
+                        "crs": src.crs.to_string() if src.crs else "None",
+                        "transform": list(src.transform)[:6],
+                        "resolution": (src.res[0], src.res[1]),
+                        "min": min_val,
+                        "max": max_val,
+                        "valid_pixels": valid_count,
+                        "nodata_pixels": nodata_count,
+                        "nodata_percentage": round((nodata_count / total_count) * 100.0, 2),
+                    }
+
+            sww_sha256 = compute_file_sha256(sww_path)
+            canary_summary = {
+                "project_id": p_id,
+                "run_id": r_id,
+                "processing_id": proc_id,
+                "exit_code": final_det.get("exit_code"),
+                "runtime_seconds": final_det.get("runtime_seconds"),
+                "anuga_version": final_det.get("anuga_version"),
+                "version_source": final_det.get("version_source"),
+                "raw_distribution_version": final_det.get("raw_distribution_version"),
+                "sww_path": str(sww_path),
+                "sww_sha256": sww_sha256,
+                "sww_timesteps": list(times),
+                "layers": layer_evidence,
+            }
+            print(f"\n[REAL CANARY POSTPROCESSING EVIDENCE]\n{json.dumps(canary_summary, indent=2)}")
 
         finally:
             ds.close()
+
+
+def create_synthetic_sww_file(
+    filepath: Path,
+    xll: float = 500000.0,
+    yll: float = 1799000.0,
+    elevation_type: str = "1d",
+    malformed_dim: Optional[str] = None,
+    stage_override: Optional[np.ndarray] = None,
+    elev_override: Optional[np.ndarray] = None,
+    initially_wet: bool = False,
+):
+    """Create a valid or specifically parameterized NetCDF SWW file for postprocessing unit tests."""
+    # 3x3 grid (9 vertices) forming 8 triangles across [0, 100] x [0, 100]
+    xs = np.array([0.0, 50.0, 100.0, 0.0, 50.0, 100.0, 0.0, 50.0, 100.0], dtype=np.float32)
+    ys = np.array([0.0, 0.0, 0.0, 50.0, 50.0, 50.0, 100.0, 100.0, 100.0], dtype=np.float32)
+    triangles = np.array([
+        [0, 1, 4], [0, 4, 3],
+        [1, 2, 5], [1, 5, 4],
+        [3, 4, 7], [3, 7, 6],
+        [4, 5, 8], [4, 8, 7],
+    ], dtype=np.int32)
+    times = np.array([0.0, 10.0, 20.0, 30.0], dtype=np.float32)
+    n_times = len(times)
+    n_pts = len(xs)
+
+    if elev_override is not None:
+        elevation = elev_override
+    elif elevation_type == "2d_time":
+        # Time-dependent bed elevation [time, points]
+        elevation = np.array([
+            [10.0] * n_pts,
+            [10.2] * n_pts,
+            [10.5] * n_pts,
+            [10.8] * n_pts,
+        ], dtype=np.float32)
+    elif elevation_type == "2d_static":
+        # Shape (1, points)
+        elevation = np.full((1, n_pts), 10.0, dtype=np.float32)
+    else:
+        # Standard 1D [points]
+        elevation = np.full(n_pts, 10.0, dtype=np.float32)
+
+    if stage_override is not None:
+        stage = stage_override
+    elif initially_wet:
+        # t=0 has stage 12.0 (depth 2.0m > 0.05m threshold)
+        stage = np.array([
+            [12.0, 12.0, 10.0, 12.0, 12.0, 10.0, 12.0, 12.0, 10.0],
+            [12.0, 12.0, 10.0, 12.0, 12.0, 10.0, 12.0, 12.0, 10.0],
+            [12.0, 12.0, 12.0, 12.0, 12.0, 12.0, 12.0, 12.0, 12.0],
+            [12.0, 12.0, 12.0, 12.0, 12.0, 12.0, 12.0, 12.0, 12.0],
+        ], dtype=np.float32)
+    else:
+        # t=0: dry (stage = 10.0)
+        # t=10: left column wet (v0, v3, v6 -> stage 12.0)
+        # t=20: middle column wet (v1, v4, v7 -> stage 13.0)
+        # t=30: right column wet (v2, v5, v8 -> stage 14.0)
+        stage = np.array([
+            [10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0],
+            [12.0, 10.0, 10.0, 12.0, 10.0, 10.0, 12.0, 10.0, 10.0],
+            [11.5, 13.0, 10.0, 11.5, 13.0, 10.0, 11.5, 13.0, 10.0],
+            [10.0, 11.0, 14.0, 10.0, 11.0, 14.0, 10.0, 11.0, 14.0],
+        ], dtype=np.float32)
+
+    xmom = np.array([
+        [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+        [2.0, 0.0, 0.0, 2.0, 0.0, 0.0, 2.0, 0.0, 0.0],
+        [1.0, 3.0, 0.0, 1.0, 3.0, 0.0, 1.0, 3.0, 0.0],
+        [0.0, 1.0, 4.0, 0.0, 1.0, 4.0, 0.0, 1.0, 4.0],
+    ], dtype=np.float32)
+    ymom = np.zeros_like(xmom)
+
+    filepath.parent.mkdir(parents=True, exist_ok=True)
+    f = netcdf_file(str(filepath), "w")
+    try:
+        f.xllcorner = xll
+        f.yllcorner = yll
+
+        f.createDimension("number_of_points", len(xs))
+        f.createDimension("number_of_triangles", len(triangles))
+        f.createDimension("three", 3)
+        f.createDimension("number_of_timesteps", len(times))
+
+        vx = f.createVariable("x", "f", ("number_of_points",))
+        vx[:] = xs
+        vy = f.createVariable("y", "f", ("number_of_points",))
+        vy[:] = ys
+
+        vvol = f.createVariable("volumes", "i", ("number_of_triangles", "three"))
+        vvol[:] = triangles
+
+        vt = f.createVariable("time", "f", ("number_of_timesteps",))
+        vt[:] = times
+
+        if malformed_dim == "elevation_bad_dim":
+            f.createDimension("bad_dim", 5)
+            ve = f.createVariable("elevation", "f", ("bad_dim",))
+            ve[:] = np.full(5, 10.0, dtype=np.float32)
+        elif len(elevation.shape) == 2:
+            if elevation.shape[0] == 1:
+                f.createDimension("one", 1)
+                ve = f.createVariable("elevation", "f", ("one", "number_of_points"))
+            else:
+                ve = f.createVariable("elevation", "f", ("number_of_timesteps", "number_of_points"))
+            ve[:] = elevation
+        else:
+            ve = f.createVariable("elevation", "f", ("number_of_points",))
+            ve[:] = elevation
+
+        if malformed_dim == "stage_bad_shape":
+            f.createDimension("bad_pts", 4)
+            vs = f.createVariable("stage", "f", ("number_of_timesteps", "bad_pts"))
+            vs[:] = np.full((len(times), 4), 10.0, dtype=np.float32)
+        else:
+            vs = f.createVariable("stage", "f", ("number_of_timesteps", "number_of_points"))
+            vs[:] = stage
+
+        vxm = f.createVariable("xmomentum", "f", ("number_of_timesteps", "number_of_points"))
+        vxm[:] = xmom
+        vym = f.createVariable("ymomentum", "f", ("number_of_timesteps", "number_of_points"))
+        vym[:] = ymom
+    finally:
+        f.close()
+
+
+def setup_mock_completed_run(p_id: str, sww_generator_kwargs: Optional[Dict[str, Any]] = None) -> Tuple[str, Path, str]:
+    """Helper to initialize a completed run directory with a valid SWW output."""
+    import hashlib
+    run_id = str(uuid.uuid4())
+    runs_dir = onboarding_service.get_dam_projects_dir() / p_id / "runs" / run_id
+    workspace_out = runs_dir / "workspace" / "output"
+    workspace_out.mkdir(parents=True, exist_ok=True)
+
+    sww_path = workspace_out / "domain.sww"
+    kwargs = sww_generator_kwargs or {}
+    create_synthetic_sww_file(sww_path, **kwargs)
+
+    sww_sha = hashlib.sha256(sww_path.read_bytes()).hexdigest()
+    run_rec = {
+        "run_id": run_id,
+        "project_id": p_id,
+        "status": "completed",
+        "exit_code": 0,
+        "simulation_executed": True,
+        "message": "Run completed successfully",
+        "output_files": {
+            "output/domain.sww": sww_sha
+        },
+        "has_results": False,
+        "anuga_version": "4.0.0",
+        "version_source": "conda_meta",
+        "raw_distribution_version": "4.0.0",
+    }
+    (runs_dir / "run.json").write_text(json.dumps(run_rec), encoding="utf-8")
+    return run_id, sww_path, sww_sha
+
+
+class TestDamProjectAnugaPostprocessing:
+    """Unit tests for ANUGA SWW postprocessing, exact storage, and algorithmic guarantees."""
+
+    def test_version_provenance_conda_meta_detection(self, tmp_path, monkeypatch):
+        """Test fallback version detection when importlib reports 0.0.0+unknown."""
+        conda_meta_dir = tmp_path / "conda-meta"
+        conda_meta_dir.mkdir(parents=True)
+        pkg_json = conda_meta_dir / "anuga-4.0.0-py310hd1925b7_0.json"
+        pkg_json.write_text(json.dumps({
+            "name": "anuga",
+            "version": "4.0.0",
+            "build": "py310hd1925b7_0"
+        }), encoding="utf-8")
+
+        dummy_python = tmp_path / "python.exe"
+        dummy_python.touch()
+
+        import subprocess
+        from unittest.mock import MagicMock
+        mock_proc = MagicMock()
+        mock_proc.returncode = 0
+        mock_proc.stdout = "0.0.0+unknown\n"
+        mock_proc.stderr = ""
+        monkeypatch.setattr(subprocess, "run", lambda *args, **kwargs: mock_proc)
+
+        is_installed, anuga_version, version_source, raw_dist = onboarding_service.detect_anuga_version(str(dummy_python))
+        assert is_installed is True
+        assert anuga_version == "4.0.0"
+        assert version_source == "conda_meta"
+        assert raw_dist == "0.0.0+unknown"
+
+    def test_static_elevation_points(self):
+        """Prove postprocessing correctly reads and processes static 1D elevation [points]."""
+        p_id = create_saved_project_with_package()
+        r_id, _, _ = setup_mock_completed_run(p_id, {"elevation_type": "1d"})
+
+        res = client.post(f"/api/dam-projects/{p_id}/anuga/runs/{r_id}/postprocess", json={
+            "dry_depth_threshold_m": 0.005,
+            "arrival_depth_threshold_m": 0.05,
+            "raster_resolution_m": 10.0,
+        })
+        assert res.status_code == 200
+        data = res.json()
+        assert data["layer_statistics"]["maximum_depth"]["max"] > 0.0
+        assert data["layer_statistics"]["maximum_depth"]["valid_pixels"] > 0
+
+    def test_time_dependent_elevation_time_points(self):
+        """Prove postprocessing correctly handles time-dependent bed elevation [time, points]."""
+        p_id = create_saved_project_with_package()
+        r_id, _, _ = setup_mock_completed_run(p_id, {"elevation_type": "2d_time"})
+
+        res = client.post(f"/api/dam-projects/{p_id}/anuga/runs/{r_id}/postprocess", json={
+            "dry_depth_threshold_m": 0.005,
+            "arrival_depth_threshold_m": 0.05,
+            "raster_resolution_m": 10.0,
+        })
+        assert res.status_code == 200
+        data = res.json()
+        assert data["layer_statistics"]["maximum_depth"]["max"] > 0.0
+
+    def test_malformed_netcdf_variable_dimensions_rejected(self):
+        """Prove that malformed NetCDF variable dimensions are rejected with clear error."""
+        p_id = create_saved_project_with_package()
+        r_id, _, _ = setup_mock_completed_run(p_id, {"malformed_dim": "stage_bad_shape"})
+
+        res = client.post(f"/api/dam-projects/{p_id}/anuga/runs/{r_id}/postprocess", json={})
+        assert res.status_code == 400
+        assert "shape" in res.json()["detail"].lower()
+
+    def test_north_up_geotiff_affine_transform(self):
+        """Prove north-up GeoTIFF affine transform with positive dx, negative dy, and correct origin."""
+        import rasterio
+        from app.anuga_postprocessing_service import get_dam_project_anuga_layer_geotiff_path
+
+        p_id = create_saved_project_with_package()
+        r_id, _, _ = setup_mock_completed_run(p_id)
+
+        res = client.post(f"/api/dam-projects/{p_id}/anuga/runs/{r_id}/postprocess", json={
+            "raster_resolution_m": 5.0,
+        })
+        assert res.status_code == 200
+        proc_id = res.json()["processing_id"]
+
+        tif_path = get_dam_project_anuga_layer_geotiff_path(p_id, r_id, "maximum_depth", processing_id=proc_id)
+        assert tif_path.is_file()
+
+        with rasterio.open(tif_path) as src:
+            t = src.transform
+            assert t.a > 0.0, f"Expected positive pixel width (dx), got {t.a}"
+            assert t.e < 0.0, f"Expected negative pixel height (dy, north-up), got {t.e}"
+            assert t.b == 0.0
+            assert t.d == 0.0
+            assert t.c == 500000.0, f"Expected x_origin 500000.0, got {t.c}"
+            assert t.f == 1799100.0, f"Expected y_origin 1799100.0, got {t.f}"
+
+    def test_crs_preservation(self):
+        """Prove GeoTIFF outputs preserve project native projected CRS."""
+        import rasterio
+        from app.anuga_postprocessing_service import get_dam_project_anuga_layer_geotiff_path
+
+        p_id = create_saved_project_with_package()
+        r_id, _, _ = setup_mock_completed_run(p_id)
+
+        res = client.post(f"/api/dam-projects/{p_id}/anuga/runs/{r_id}/postprocess", json={})
+        assert res.status_code == 200
+        proc_id = res.json()["processing_id"]
+
+        for layer in ["maximum_depth", "maximum_velocity", "arrival_time"]:
+            tif_path = get_dam_project_anuga_layer_geotiff_path(p_id, r_id, layer, processing_id=proc_id)
+            with rasterio.open(tif_path) as src:
+                assert src.crs is not None
+                assert "32643" in src.crs.to_string()
+
+    def test_wgs84_point_query_reprojection(self):
+        """Prove WGS84 (lon, lat) query is correctly reprojected to native CRS and sampled."""
+        from pyproj import Transformer
+        p_id = create_saved_project_with_package()
+        r_id, _, _ = setup_mock_completed_run(p_id)
+
+        post_res = client.post(f"/api/dam-projects/{p_id}/anuga/runs/{r_id}/postprocess", json={"raster_resolution_m": 5.0})
+        assert post_res.status_code == 200
+
+        # Known projected coordinate inside computational mesh (v0 is 500000, 1799000; query 500010, 1799010)
+        target_x, target_y = 500010.0, 1799010.0
+        transformer = Transformer.from_crs("EPSG:32643", "EPSG:4326", always_xy=True)
+        wgs_lon, wgs_lat = transformer.transform(target_x, target_y)
+
+        pt_res = client.get(
+            f"/api/dam-projects/{p_id}/anuga/runs/{r_id}/results/maximum_depth/point",
+            params={"lon": wgs_lon, "lat": wgs_lat}
+        )
+        assert pt_res.status_code == 200
+        pt_data = pt_res.json()
+        assert pt_data["is_valid"] is True
+        assert pt_data["is_nodata"] is False
+        assert pt_data["value"] is not None
+        assert abs(pt_data["crs_x"] - target_x) < 2.0
+        assert abs(pt_data["crs_y"] - target_y) < 2.0
+
+    def test_masking_outside_actual_sww_triangle_union(self):
+        """Prove that pixels outside the computational triangle mesh union are strictly NoData (-9999.0)."""
+        import rasterio
+        from app.anuga_postprocessing_service import get_dam_project_anuga_layer_geotiff_path
+
+        p_id = create_saved_project_with_package()
+        r_id, _, _ = setup_mock_completed_run(p_id)
+
+        res = client.post(f"/api/dam-projects/{p_id}/anuga/runs/{r_id}/postprocess", json={"raster_resolution_m": 5.0})
+        assert res.status_code == 200
+        proc_id = res.json()["processing_id"]
+
+        tif_path = get_dam_project_anuga_layer_geotiff_path(p_id, r_id, "maximum_depth", processing_id=proc_id)
+        with rasterio.open(tif_path) as src:
+            arr = src.read(1)
+            nodata_val = src.nodata
+            assert nodata_val == -9999.0
+            nodata_count = int(np.sum(arr == -9999.0))
+            valid_count = int(np.sum(arr != -9999.0))
+            assert valid_count > 0, "No valid pixels produced"
+
+        # Point clearly outside mesh boundary
+        pt_outside = client.get(
+            f"/api/dam-projects/{p_id}/anuga/runs/{r_id}/results/maximum_depth/point",
+            params={"lon": 500500.0, "lat": 1799500.0}
+        )
+        assert pt_outside.status_code == 200
+        assert pt_outside.json()["is_nodata"] is True
+        assert pt_outside.json()["value"] is None
+
+    def test_no_artificial_maximum_from_interpolate_after_maximum(self):
+        """Prove instantaneous timestep-first calculation avoids non-physical peaks from asynchronous node maxima."""
+        # Consider 2 nodes: Node 0 peaks at t=10 (stage=12, depth=2.0; at t=20 stage=10, depth=0.0).
+        # Node 1 peaks at t=20 (stage=10, depth=0.0 at t=10; stage=12, depth=2.0 at t=20).
+        # Linear interpolation of nodal maxima would yield midpoint depth = 2.0 (artificial).
+        # Timestep-first evaluation yields at t=10 midpoint depth = 1.0; at t=20 midpoint depth = 1.0 -> max is 1.0!
+        stage_asynch = np.array([
+            [10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0],
+            [12.0, 10.0, 10.0, 12.0, 10.0, 10.0, 12.0, 10.0, 10.0],  # t=10: v0 wet (2.0m), v1 dry (0m)
+            [10.0, 12.0, 10.0, 10.0, 12.0, 10.0, 10.0, 12.0, 10.0],  # t=20: v0 dry (0m), v1 wet (2.0m)
+            [10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0],
+        ], dtype=np.float32)
+
+        p_id = create_saved_project_with_package()
+        r_id, _, _ = setup_mock_completed_run(p_id, {"stage_override": stage_asynch})
+
+        res = client.post(f"/api/dam-projects/{p_id}/anuga/runs/{r_id}/postprocess", json={"raster_resolution_m": 2.0})
+        assert res.status_code == 200
+
+        # Point inside triangle (0, 1, 4) at (x=500025, y=1799010)
+        pt_res = client.get(
+            f"/api/dam-projects/{p_id}/anuga/runs/{r_id}/results/maximum_depth/point",
+            params={"lon": 500025.0, "lat": 1799010.0}
+        )
+        assert pt_res.status_code == 200
+        val = pt_res.json()["value"]
+        assert val is not None
+        # Must be bounded by timestep-evaluated depth (~1.0m), and strictly less than interpolate-after-maximum (1.6m)
+        assert abs(val - 1.0) < 0.15, f"Expected timestep-evaluated depth ~1.0m, got {val}"
+        assert val < 1.4, f"Artificial peak detected from interpolate-after-maximum: {val}"
+
+    def test_arrival_calculated_by_grid_cell_timestep_crossing(self):
+        """Prove arrival time is assigned on first timestep where grid cell depth crosses threshold."""
+        p_id = create_saved_project_with_package()
+        r_id, _, _ = setup_mock_completed_run(p_id)
+
+        res = client.post(f"/api/dam-projects/{p_id}/anuga/runs/{r_id}/postprocess", json={
+            "arrival_depth_threshold_m": 0.05,
+            "raster_resolution_m": 5.0,
+        })
+        assert res.status_code == 200
+
+        # Near v0 (flooded at t=10.0 s)
+        pt_res = client.get(
+            f"/api/dam-projects/{p_id}/anuga/runs/{r_id}/results/arrival_time/point",
+            params={"lon": 500005.0, "lat": 1799005.0}
+        )
+        assert pt_res.status_code == 200
+        assert abs(pt_res.json()["value"] - 10.0) < 0.1
+
+    def test_initially_wet_zero_seconds(self):
+        """Prove that cells wet at t=0 are assigned arrival_time = 0.0 seconds."""
+        p_id = create_saved_project_with_package()
+        r_id, _, _ = setup_mock_completed_run(p_id, {"initially_wet": True})
+
+        res = client.post(f"/api/dam-projects/{p_id}/anuga/runs/{r_id}/postprocess", json={
+            "arrival_depth_threshold_m": 0.05,
+            "raster_resolution_m": 5.0,
+        })
+        assert res.status_code == 200
+
+        # Point near v0 which is wet at t=0
+        pt_res = client.get(
+            f"/api/dam-projects/{p_id}/anuga/runs/{r_id}/results/arrival_time/point",
+            params={"lon": 500005.0, "lat": 1799005.0}
+        )
+        assert pt_res.status_code == 200
+        assert pt_res.json()["value"] == 0.0, f"Expected 0.0 s arrival for initially wet cell, got {pt_res.json()['value']}"
+
+    def test_never_wet_nodata(self):
+        """Prove that cells that never exceed arrival depth threshold remain NoData (-9999.0)."""
+        # Node v2, v5, v8 remain dry throughout all timesteps
+        stage_partial = np.array([
+            [10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0],
+            [12.0, 10.0, 10.0, 12.0, 10.0, 10.0, 12.0, 10.0, 10.0],
+            [12.0, 10.0, 10.0, 12.0, 10.0, 10.0, 12.0, 10.0, 10.0],
+            [12.0, 10.0, 10.0, 12.0, 10.0, 10.0, 12.0, 10.0, 10.0],
+        ], dtype=np.float32)
+
+        p_id = create_saved_project_with_package()
+        r_id, _, _ = setup_mock_completed_run(p_id, {"stage_override": stage_partial})
+
+        res = client.post(f"/api/dam-projects/{p_id}/anuga/runs/{r_id}/postprocess", json={
+            "arrival_depth_threshold_m": 0.05,
+            "raster_resolution_m": 5.0,
+        })
+        assert res.status_code == 200
+
+        # Sample point near v8 (x=500100, y=1799100) which remained dry
+        pt_res = client.get(
+            f"/api/dam-projects/{p_id}/anuga/runs/{r_id}/results/arrival_time/point",
+            params={"lon": 500095.0, "lat": 1799095.0}
+        )
+        assert pt_res.status_code == 200
+        assert pt_res.json()["is_nodata"] is True
+        assert pt_res.json()["value"] is None
+
+    def test_total_max_output_pixels_enforcement(self):
+        """Prove that excessively high resolution requests are safely scaled to enforce MAX_OUTPUT_PIXELS."""
+        p_id = create_saved_project_with_package()
+        r_id, _, _ = setup_mock_completed_run(p_id)
+
+        # Request microscopic resolution (0.01m on 100m domain would be 10000x10000 = 100 million pixels)
+        res = client.post(f"/api/dam-projects/{p_id}/anuga/runs/{r_id}/postprocess", json={
+            "raster_resolution_m": 0.01,
+        })
+        assert res.status_code == 200
+        data = res.json()
+        h, w = data["grid_dimensions"]
+        assert h <= 2048
+        assert w <= 2048
+        assert (h * w) <= (2048 * 2048)
+
+    def test_concurrent_identical_postprocessing_safety(self):
+        """Prove that concurrent identical postprocessing requests complete safely without corruption."""
+        from concurrent.futures import ThreadPoolExecutor
+        p_id = create_saved_project_with_package()
+        r_id, _, _ = setup_mock_completed_run(p_id)
+
+        def call_postprocess():
+            return client.post(f"/api/dam-projects/{p_id}/anuga/runs/{r_id}/postprocess", json={
+                "dry_depth_threshold_m": 0.005,
+                "arrival_depth_threshold_m": 0.05,
+                "raster_resolution_m": 10.0,
+            })
+
+        with ThreadPoolExecutor(max_workers=4) as executor:
+            futures = [executor.submit(call_postprocess) for _ in range(4)]
+            results = [f.result() for f in futures]
+
+        for r in results:
+            assert r.status_code == 200
+            assert "maximum_depth" in r.json()["available_layers"]
+
+    def test_identical_request_returns_existing_byte_identical_files(self):
+        """Prove that an identical postprocess request returns existing results without recreating files."""
+        p_id = create_saved_project_with_package()
+        r_id, _, _ = setup_mock_completed_run(p_id)
+
+        req_body = {"dry_depth_threshold_m": 0.005, "arrival_depth_threshold_m": 0.05, "raster_resolution_m": 10.0}
+        res1 = client.post(f"/api/dam-projects/{p_id}/anuga/runs/{r_id}/postprocess", json=req_body)
+        assert res1.status_code == 200
+        data1 = res1.json()
+        proc_id1 = data1["processing_id"]
+
+        # Second call
+        res2 = client.post(f"/api/dam-projects/{p_id}/anuga/runs/{r_id}/postprocess", json=req_body)
+        assert res2.status_code == 200
+        data2 = res2.json()
+        assert data2["processing_id"] == proc_id1
+        assert data2["layer_files"] == data1["layer_files"]
+
+    def test_changed_parameters_preserve_previous_results(self):
+        """Prove that changing thresholds/resolution creates a new processing_id without overwriting prior results."""
+        p_id = create_saved_project_with_package()
+        r_id, _, _ = setup_mock_completed_run(p_id)
+
+        # Run 1: dry=0.005, arrival=0.05
+        res1 = client.post(f"/api/dam-projects/{p_id}/anuga/runs/{r_id}/postprocess", json={
+            "dry_depth_threshold_m": 0.005,
+            "arrival_depth_threshold_m": 0.05,
+            "raster_resolution_m": 10.0,
+        })
+        assert res1.status_code == 200
+        proc_id1 = res1.json()["processing_id"]
+
+        # Run 2: dry=0.02, arrival=0.20
+        res2 = client.post(f"/api/dam-projects/{p_id}/anuga/runs/{r_id}/postprocess", json={
+            "dry_depth_threshold_m": 0.02,
+            "arrival_depth_threshold_m": 0.20,
+            "raster_resolution_m": 10.0,
+        })
+        assert res2.status_code == 200
+        proc_id2 = res2.json()["processing_id"]
+
+        # Processing IDs must differ
+        assert proc_id1 != proc_id2
+
+        # Both directories must physically exist under runs/{run_id}/results/
+        res_base = onboarding_service.get_dam_projects_dir() / p_id / "runs" / r_id / "results"
+        assert (res_base / proc_id1 / "manifest.json").is_file(), "Previous results were deleted or overwritten!"
+        assert (res_base / proc_id2 / "manifest.json").is_file()
+
+        # Both can be queried explicitly
+        q1 = client.get(f"/api/dam-projects/{p_id}/anuga/runs/{r_id}/results", params={"processing_id": proc_id1})
+        assert q1.status_code == 200
+        assert q1.json()["processing_id"] == proc_id1
+        assert q1.json()["thresholds"]["arrival_depth_threshold_m"] == 0.05
+
+        q2 = client.get(f"/api/dam-projects/{p_id}/anuga/runs/{r_id}/results", params={"processing_id": proc_id2})
+        assert q2.status_code == 200
+        assert q2.json()["processing_id"] == proc_id2
+        assert q2.json()["thresholds"]["arrival_depth_threshold_m"] == 0.20
+
+    def test_mocked_or_tampered_sww_rejected(self):
+        """Prove that a tampered SWW whose SHA-256 no longer matches run.json is rejected."""
+        p_id = create_saved_project_with_package()
+        r_id, sww_path, _ = setup_mock_completed_run(p_id)
+
+        # Tamper with SWW content on disk
+        with open(sww_path, "ab") as f:
+            f.write(b"\x00\x00\x00CORRUPTED_BYTES")
+
+        res = client.post(f"/api/dam-projects/{p_id}/anuga/runs/{r_id}/postprocess", json={})
+        assert res.status_code == 409
+        assert "integrity" in res.json()["detail"]["code"].lower()
 

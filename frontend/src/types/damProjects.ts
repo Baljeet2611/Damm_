@@ -194,6 +194,8 @@ export interface DamProjectAnugaCapabilitiesResponse {
   execution_enabled: boolean
   anuga_installed: boolean
   anuga_version: string
+  version_source?: 'importlib_metadata' | 'conda_meta' | 'fallback_runtime' | 'unavailable'
+  raw_distribution_version?: string | null
   python_executable_configured: boolean
   reason?: string | null
   disclaimer: string
@@ -215,12 +217,79 @@ export interface DamProjectAnugaRunResponse {
   completed_at?: string | null
   exit_code?: number | null
   anuga_version?: string | null
+  version_source?: 'importlib_metadata' | 'conda_meta' | 'fallback_runtime' | 'unavailable' | null
+  raw_distribution_version?: string | null
   runtime_seconds?: number | null
   log_file?: string | null
   output_files: Record<string, string>
   scientific_status: string
   simulation_executed: boolean
+  has_results?: boolean
   message: string
+}
+
+export interface DamProjectAnugaPostprocessRequest {
+  dry_depth_threshold_m?: number
+  arrival_depth_threshold_m?: number
+  raster_resolution_m?: number | null
+}
+
+export interface DamProjectAnugaLayerStats {
+  min?: number | null
+  max?: number | null
+  mean?: number | null
+  valid_pixels: number
+  nodata_pixels: number
+  total_pixels: number
+  unit: string
+}
+
+export interface DamProjectAnugaResultsResponse {
+  project_id: string
+  run_id: string
+  processing_id?: string
+  created_at: string
+  sww_sha256: string
+  package_sha256: string
+  processing_identity_sha256: string
+  available_layers: string[]
+  layer_files: Record<string, string>
+  layer_statistics: Record<string, DamProjectAnugaLayerStats>
+  formulas: Record<string, string>
+  thresholds: Record<string, number>
+  actual_sww_timesteps: number[]
+  interpolation_method: string
+  mesh_mask_method: string
+  raster_crs: string
+  raster_resolution_m: number
+  grid_dimensions: [number, number]
+  anuga_version: string
+  version_source: string
+  raw_distribution_version?: string | null
+  scientific_status: string
+  simulation_executed: boolean
+  mass_balance_status: string
+  disclaimer: string
+  message: string
+}
+
+export interface DamProjectAnugaPointValueResponse {
+  project_id: string
+  run_id: string
+  processing_id?: string
+  layer: string
+  lon: number
+  lat: number
+  crs_x?: number | null
+  crs_y?: number | null
+  crs: string
+  value?: number | null
+  unit: string
+  value_type: string
+  description: string
+  is_valid: boolean
+  is_nodata: boolean
+  disclaimer: string
 }
 
 export interface OnboardingFormValues {

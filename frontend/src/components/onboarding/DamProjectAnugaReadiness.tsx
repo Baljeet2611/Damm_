@@ -4,6 +4,8 @@ import type {
   DamProjectAnugaPackageResponse,
   DamProjectAnugaCapabilitiesResponse,
   DamProjectAnugaRunResponse,
+  DamProjectAnugaResultsResponse,
+  DamProjectAnugaPointValueResponse,
   DamProjectSummary,
   DamProjectDetailResponse,
 } from '../../types/damProjects'
@@ -15,16 +17,22 @@ import {
   executeDamProjectAnugaRun,
   fetchDamProjectAnugaRuns,
   fetchDamProjectAnugaRunLogs,
+  postprocessDamProjectAnugaRun,
+  fetchDamProjectAnugaResults,
+  fetchDamProjectAnugaLayerLegend,
+  fetchDamProjectAnugaLayerPointValue,
 } from '../../api/damProjects'
 
 interface DamProjectAnugaReadinessProps {
   project: DamProjectSummary | DamProjectDetailResponse
   onPackageBuilt?: () => void
+  onDisplayHazardLayer?: (projectId: string, runId: string, layer: string, processingId?: string) => void
 }
 
 export const DamProjectAnugaReadiness: React.FC<DamProjectAnugaReadinessProps> = ({
   project,
   onPackageBuilt,
+  onDisplayHazardLayer,
 }) => {
   const [runningPreflight, setRunningPreflight] = useState<boolean>(false)
   const [preflightResult, setPreflightResult] = useState<DamProjectAnugaPreflightResponse | null>(null)
@@ -44,6 +52,21 @@ export const DamProjectAnugaReadiness: React.FC<DamProjectAnugaReadinessProps> =
   const [showLogs, setShowLogs] = useState<boolean>(false)
   const pollingTimerRef = useRef<number | null>(null)
 
+  // Postprocessing & Results state (Stage 4)
+  const [dryDepthThreshold, setDryDepthThreshold] = useState<number>(0.005)
+  const [arrivalDepthThreshold, setArrivalDepthThreshold] = useState<number>(0.05)
+  const [postprocessing, setPostprocessing] = useState<boolean>(false)
+  const [postprocessError, setPostprocessError] = useState<string | null>(null)
+  const [results, setResults] = useState<DamProjectAnugaResultsResponse | null>(null)
+  const [selectedLayer, setSelectedLayer] = useState<'maximum_depth' | 'maximum_velocity' | 'arrival_time'>('maximum_depth')
+  const [legend, setLegend] = useState<any | null>(null)
+  const [pointLon, setPointLon] = useState<string>('')
+  const [pointLat, setPointLat] = useState<string>('')
+  const [pointResult, setPointResult] = useState<DamProjectAnugaPointValueResponse | null>(null)
+  const [queryingPoint, setQueryingPoint] = useState<boolean>(false)
+  const [pointError, setPointError] = useState<string | null>(null)
+  const [showManifestDetails, setShowManifestDetails] = useState<boolean>(false)
+
   useEffect(() => {
     fetchDamProjectAnugaCapabilities(project.project_id)
       .then(caps => setCapabilities(caps))
@@ -53,6 +76,11 @@ export const DamProjectAnugaReadiness: React.FC<DamProjectAnugaReadinessProps> =
       .then(runs => {
         if (runs && runs.length > 0) {
           setActiveRun(runs[0])
+          if (runs[0].has_results) {
+            fetchDamProjectAnugaResults(project.project_id, runs[0].run_id)
+              .then(res => setResults(res))
+              .catch(() => {})
+          }
         }
       })
       .catch(() => {})
@@ -77,6 +105,11 @@ export const DamProjectAnugaReadiness: React.FC<DamProjectAnugaReadinessProps> =
                   clearInterval(pollingTimerRef.current)
                   pollingTimerRef.current = null
                 }
+                if (updated[0].has_results) {
+                  fetchDamProjectAnugaResults(project.project_id, updated[0].run_id)
+                    .then(res => setResults(res))
+                    .catch(() => {})
+                }
               }
             }
           } catch {
@@ -91,6 +124,14 @@ export const DamProjectAnugaReadiness: React.FC<DamProjectAnugaReadinessProps> =
       }
     }
   }, [activeRun, project.project_id])
+
+  useEffect(() => {
+    if (activeRun && results) {
+      fetchDamProjectAnugaLayerLegend(project.project_id, activeRun.run_id, selectedLayer)
+        .then(leg => setLegend(leg))
+        .catch(() => setLegend(null))
+    }
+  }, [activeRun, results, selectedLayer, project.project_id])
 
   const handleRunPreflight = async () => {
     setRunningPreflight(true)
@@ -151,6 +192,51 @@ export const DamProjectAnugaReadiness: React.FC<DamProjectAnugaReadinessProps> =
       }
     }
     setShowLogs(!showLogs)
+  }
+
+  const handlePostprocess = async () => {
+    if (!activeRun || activeRun.status !== 'completed') return
+    setPostprocessing(true)
+    setPostprocessError(null)
+    try {
+      const res = await postprocessDamProjectAnugaRun(project.project_id, activeRun.run_id, {
+        dry_depth_threshold_m: dryDepthThreshold,
+        arrival_depth_threshold_m: arrivalDepthThreshold,
+      })
+      setResults(res)
+    } catch (err: any) {
+      setPostprocessError(err.message || 'Postprocessing failed.')
+    } finally {
+      setPostprocessing(false)
+    }
+  }
+
+  const handleQueryPoint = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!activeRun || !results) return
+    const lonNum = parseFloat(pointLon)
+    const latNum = parseFloat(pointLat)
+    if (isNaN(lonNum) || isNaN(latNum)) {
+      setPointError('Please enter valid numeric longitude and latitude coordinates.')
+      return
+    }
+    setQueryingPoint(true)
+    setPointError(null)
+    setPointResult(null)
+    try {
+      const res = await fetchDamProjectAnugaLayerPointValue(
+        project.project_id,
+        activeRun.run_id,
+        selectedLayer,
+        lonNum,
+        latNum,
+      )
+      setPointResult(res)
+    } catch (err: any) {
+      setPointError(err.message || 'Point query failed.')
+    } finally {
+      setQueryingPoint(false)
+    }
   }
 
   const isCorrupted =
@@ -485,6 +571,314 @@ export const DamProjectAnugaReadiness: React.FC<DamProjectAnugaReadinessProps> =
               <pre className="font-mono" style={{ maxHeight: '180px', overflowY: 'auto', background: '#0f172a', padding: '0.5rem', borderRadius: '4px', fontSize: '0.7rem', color: '#94a3b8', marginTop: '0.4rem', whiteSpace: 'pre-wrap' }}>
                 {runLogs || 'Loading logs...'}
               </pre>
+            )}
+
+            {/* Stage 4: Postprocessing & Results */}
+            {activeRun.status === 'completed' && (
+              <div style={{ marginTop: '0.8rem', borderTop: '1px dashed #334155', paddingTop: '0.6rem' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <span style={{ fontSize: '0.8rem', fontWeight: 600, color: '#38bdf8' }}>
+                    ⚡ SWW Hydrodynamic Postprocessing
+                  </span>
+                </div>
+
+                <div style={{ display: 'flex', gap: '0.8rem', alignItems: 'center', marginTop: '0.4rem', flexWrap: 'wrap' }}>
+                  <label style={{ fontSize: '0.72rem', color: '#94a3b8', display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
+                    Dry Depth (m):
+                    <input
+                      type="number"
+                      step="0.001"
+                      min="0.001"
+                      value={dryDepthThreshold}
+                      onChange={e => setDryDepthThreshold(parseFloat(e.target.value) || 0.005)}
+                      className="point-probe-input"
+                      style={{ width: '65px' }}
+                    />
+                  </label>
+
+                  <label style={{ fontSize: '0.72rem', color: '#94a3b8', display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
+                    Arrival Depth (m):
+                    <input
+                      type="number"
+                      step="0.01"
+                      min="0.001"
+                      value={arrivalDepthThreshold}
+                      onChange={e => setArrivalDepthThreshold(parseFloat(e.target.value) || 0.05)}
+                      className="point-probe-input"
+                      style={{ width: '65px' }}
+                    />
+                  </label>
+
+                  <button
+                    type="button"
+                    className="btn-postprocess-trigger"
+                    onClick={handlePostprocess}
+                    disabled={postprocessing}
+                  >
+                    {postprocessing ? (
+                      <>
+                        <span className="spinner" /> Postprocessing Mesh & Timesteps...
+                      </>
+                    ) : (
+                      '⚡ Generate Hazard Rasters (GeoTIFFs)'
+                    )}
+                  </button>
+                </div>
+
+                {postprocessError && (
+                  <div className="damage-error-box font-mono" style={{ marginTop: '0.4rem' }}>
+                    ⛔ {postprocessError}
+                  </div>
+                )}
+
+                {/* Results Section */}
+                {results && (
+                  <div className="results-card">
+                    <div className="results-header">
+                      <h6>🗺️ Hydrodynamic Hazard Maps (GeoTIFFs)</h6>
+                      <span className="legend-tag status-tag-unverified">HYPOTHETICAL UNVERIFIED</span>
+                    </div>
+
+                    <div className="val-disclaimer-box font-mono" style={{ fontSize: '0.68rem', margin: '0.2rem 0' }}>
+                      ⚠️ <strong>SCIENTIFIC DISCLAIMER:</strong> These hazard rasters were generated by postprocessing an uncalibrated 2D shallow water equation model with zero-extrapolation mesh masking. They represent hypothetical scenarios and are not certified predictions.
+                    </div>
+
+                    {/* Layer Switcher */}
+                    <div className="layer-switcher-row" style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap', alignItems: 'center' }}>
+                      <button
+                        type="button"
+                        className={`btn-layer-tab ${selectedLayer === 'maximum_depth' ? 'active' : ''}`}
+                        onClick={() => {
+                          setSelectedLayer('maximum_depth')
+                          if (onDisplayHazardLayer && activeRun) {
+                            onDisplayHazardLayer(project.project_id, activeRun.run_id, 'maximum_depth', results.processing_id)
+                          }
+                        }}
+                      >
+                        🌊 Maximum Depth (m)
+                      </button>
+                      <button
+                        type="button"
+                        className={`btn-layer-tab ${selectedLayer === 'maximum_velocity' ? 'active' : ''}`}
+                        onClick={() => {
+                          setSelectedLayer('maximum_velocity')
+                          if (onDisplayHazardLayer && activeRun) {
+                            onDisplayHazardLayer(project.project_id, activeRun.run_id, 'maximum_velocity', results.processing_id)
+                          }
+                        }}
+                      >
+                        💨 Maximum Velocity (m/s)
+                      </button>
+                      <button
+                        type="button"
+                        className={`btn-layer-tab ${selectedLayer === 'arrival_time' ? 'active' : ''}`}
+                        onClick={() => {
+                          setSelectedLayer('arrival_time')
+                          if (onDisplayHazardLayer && activeRun) {
+                            onDisplayHazardLayer(project.project_id, activeRun.run_id, 'arrival_time', results.processing_id)
+                          }
+                        }}
+                      >
+                        ⏱️ Flood Arrival Time (s)
+                      </button>
+                      {onDisplayHazardLayer && (
+                        <button
+                          type="button"
+                          className="btn-project-action"
+                          onClick={() => {
+                            if (activeRun) {
+                              onDisplayHazardLayer(project.project_id, activeRun.run_id, selectedLayer, results.processing_id)
+                            }
+                          }}
+                          style={{ marginLeft: 'auto', background: '#0284c7', color: '#ffffff', borderColor: '#38bdf8' }}
+                          title="Render active hazard raster tiles onto MapLibre map"
+                        >
+                          🗺️ Render on Map
+                        </button>
+                      )}
+                    </div>
+
+                    {/* Active Layer Statistics */}
+                    {results.layer_statistics[selectedLayer] && (
+                      <div className="layer-stats-grid font-mono" style={{ fontSize: '0.7rem' }}>
+                        <div className="val-meta-item">
+                          <span className="val-meta-label">Min</span>
+                          <span className="val-meta-value">
+                            {results.layer_statistics[selectedLayer].min != null
+                              ? `${results.layer_statistics[selectedLayer].min?.toFixed(3)} ${results.layer_statistics[selectedLayer].unit}`
+                              : 'N/A'}
+                          </span>
+                        </div>
+                        <div className="val-meta-item">
+                          <span className="val-meta-label">Max</span>
+                          <span className="val-meta-value">
+                            {results.layer_statistics[selectedLayer].max != null
+                              ? `${results.layer_statistics[selectedLayer].max?.toFixed(3)} ${results.layer_statistics[selectedLayer].unit}`
+                              : 'N/A'}
+                          </span>
+                        </div>
+                        <div className="val-meta-item">
+                          <span className="val-meta-label">Mean</span>
+                          <span className="val-meta-value">
+                            {results.layer_statistics[selectedLayer].mean != null
+                              ? `${results.layer_statistics[selectedLayer].mean?.toFixed(3)} ${results.layer_statistics[selectedLayer].unit}`
+                              : 'N/A'}
+                          </span>
+                        </div>
+                        <div className="val-meta-item">
+                          <span className="val-meta-label">Valid Cells</span>
+                          <span className="val-meta-value">
+                            {results.layer_statistics[selectedLayer].valid_pixels?.toLocaleString() || '0'}
+                          </span>
+                        </div>
+                        <div className="val-meta-item">
+                          <span className="val-meta-label">NoData Cells</span>
+                          <span className="val-meta-value">
+                            {results.layer_statistics[selectedLayer].nodata_pixels?.toLocaleString() || '0'}
+                          </span>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Legend */}
+                    {legend && (
+                      <div className="layer-legend-container">
+                        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.68rem', fontWeight: 600, color: '#94a3b8' }}>
+                          <span>{legend.label || 'Layer'} Legend</span>
+                          <span>Unit: {results.layer_statistics[selectedLayer]?.unit || 'N/A'}</span>
+                        </div>
+                        <div
+                          className="legend-bar-gradient"
+                          style={{
+                            background:
+                              selectedLayer === 'maximum_depth'
+                                ? 'linear-gradient(to right, rgba(224,242,254,0.3), #38bdf8, #0284c7, #1e3a8a)'
+                                : selectedLayer === 'maximum_velocity'
+                                ? 'linear-gradient(to right, rgba(254,243,199,0.3), #f59e0b, #ef4444, #7f1d1d)'
+                                : 'linear-gradient(to right, #ef4444, #f59e0b, #3b82f6, #6366f1)',
+                          }}
+                        />
+                        <div className="legend-labels-row">
+                          <span>{legend.min_value?.toFixed(2)} {results.layer_statistics[selectedLayer]?.unit}</span>
+                          <span>{legend.max_value?.toFixed(2)} {results.layer_statistics[selectedLayer]?.unit}</span>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Point Probe Query */}
+                    <div className="point-probe-card">
+                      <span style={{ fontSize: '0.74rem', fontWeight: 600, color: '#38bdf8' }}>
+                        🎯 Point Value Probe ({selectedLayer.replace('_', ' ')})
+                      </span>
+                      <form onSubmit={handleQueryPoint} className="point-probe-inputs">
+                        <input
+                          type="text"
+                          placeholder="Longitude (e.g. 74.65)"
+                          value={pointLon}
+                          onChange={e => setPointLon(e.target.value)}
+                          className="point-probe-input"
+                        />
+                        <input
+                          type="text"
+                          placeholder="Latitude (e.g. 16.12)"
+                          value={pointLat}
+                          onChange={e => setPointLat(e.target.value)}
+                          className="point-probe-input"
+                        />
+                        <button type="submit" className="btn-point-query" disabled={queryingPoint}>
+                          {queryingPoint ? 'Querying...' : 'Query Point'}
+                        </button>
+                      </form>
+
+                      {pointError && (
+                        <div className="damage-error-box font-mono" style={{ fontSize: '0.68rem' }}>
+                          ⛔ {pointError}
+                        </div>
+                      )}
+
+                      {pointResult && (
+                        <div className="val-meta-item font-mono" style={{ fontSize: '0.7rem', background: '#0f172a', padding: '0.4rem', borderRadius: '4px' }}>
+                          <div>
+                            <strong>Value:</strong>{' '}
+                            {pointResult.value != null
+                              ? `${pointResult.value.toFixed(4)} ${pointResult.unit}`
+                              : 'NoData (Outside Mesh or Dry)'}
+                          </div>
+                          <div style={{ fontSize: '0.65rem', color: '#94a3b8', marginTop: '0.2rem' }}>
+                            ℹ️ <em>{pointResult.disclaimer}</em>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Direct GeoTIFF Downloads */}
+                    <div style={{ marginTop: '0.4rem' }}>
+                      <span style={{ fontSize: '0.72rem', color: '#94a3b8', display: 'block', marginBottom: '0.3rem' }}>
+                        📥 Download Raw GeoTIFFs:
+                      </span>
+                      <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap' }}>
+                        {Object.entries(results.layer_files).map(([key, filename]) => (
+                          <a
+                            key={key}
+                            href={`${import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'}/api/dam-projects/${encodeURIComponent(project.project_id)}/anuga/runs/${encodeURIComponent(activeRun.run_id)}/results/${key}/download`}
+                            download={filename}
+                            className="btn-preflight"
+                            style={{ padding: '0.25rem 0.55rem', fontSize: '0.7rem', textDecoration: 'none' }}
+                          >
+                            💾 {filename}
+                          </a>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* Scientific Metadata & Manifest Details */}
+                    <div style={{ marginTop: '0.4rem' }}>
+                      <button
+                        type="button"
+                        onClick={() => setShowManifestDetails(!showManifestDetails)}
+                        style={{ background: 'none', border: 'none', color: '#38bdf8', fontSize: '0.72rem', cursor: 'pointer', padding: 0, textDecoration: 'underline' }}
+                      >
+                        {showManifestDetails ? 'Hide Scientific Manifest & Method Details' : '📋 View Scientific Manifest & Method Details'}
+                      </button>
+
+                      {showManifestDetails && (
+                        <div className="val-metadata-grid font-mono" style={{ fontSize: '0.68rem', marginTop: '0.4rem', background: '#0f172a', padding: '0.5rem', borderRadius: '4px' }}>
+                          <div className="val-meta-item">
+                            <span className="val-meta-label">Interpolation Method</span>
+                            <span className="val-meta-value">{results.interpolation_method}</span>
+                          </div>
+                          <div className="val-meta-item">
+                            <span className="val-meta-label">Mesh Boundary Mask</span>
+                            <span className="val-meta-value">{results.mesh_mask_method}</span>
+                          </div>
+                          <div className="val-meta-item">
+                            <span className="val-meta-label">Mass Balance Status</span>
+                            <span className="val-meta-value">{results.mass_balance_status}</span>
+                          </div>
+                          <div className="val-meta-item">
+                            <span className="val-meta-label">Raster CRS & Resolution</span>
+                            <span className="val-meta-value">{results.raster_crs} ({results.raster_resolution_m} m)</span>
+                          </div>
+                          <div className="val-meta-item" style={{ gridColumn: 'span 2' }}>
+                            <span className="val-meta-label">Source SWW SHA-256</span>
+                            <span className="val-meta-value">{results.sww_sha256}</span>
+                          </div>
+                          <div className="val-meta-item" style={{ gridColumn: 'span 2' }}>
+                            <span className="val-meta-label">Solver Version Provenance</span>
+                            <span className="val-meta-value">
+                              {JSON.stringify({
+                                version: results.anuga_version,
+                                source: results.version_source,
+                                raw: results.raw_distribution_version,
+                              })}
+                            </span>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
             )}
           </div>
         )}

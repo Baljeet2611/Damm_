@@ -6,6 +6,7 @@ import {
   getDamProjectDamAxisGeometry,
   getDamProjectReservoirGeometry,
   getDamProjectBreachGeometry,
+  getDamProjectAnugaLayerTileUrl,
 } from '../../api/damProjects'
 
 export function useDamProjectMap(mapRef: React.MutableRefObject<MapLibreMap | null>) {
@@ -26,6 +27,7 @@ export function useDamProjectMap(mapRef: React.MutableRefObject<MapLibreMap | nu
       'custom-dam-axis-layer',
       'custom-reservoir-line-layer',
       'custom-reservoir-fill-layer',
+      'custom-anuga-hazard-layer',
       'custom-dem-tiles-layer',
     ]
     for (const lid of layerIds) {
@@ -38,6 +40,7 @@ export function useDamProjectMap(mapRef: React.MutableRefObject<MapLibreMap | nu
     const sourceIds = [
       'custom-dam-axis-source',
       'custom-reservoir-source',
+      'custom-anuga-hazard-source',
       'custom-dem-tiles-source',
     ]
     for (const sid of sourceIds) {
@@ -203,8 +206,62 @@ export function useDamProjectMap(mapRef: React.MutableRefObject<MapLibreMap | nu
     [mapRef, clearDamProjectMap]
   )
 
+  const removeDamProjectAnugaHazardRaster = useCallback(() => {
+    const map = mapRef.current
+    if (!map) return
+    if (map.getLayer('custom-anuga-hazard-layer')) {
+      map.removeLayer('custom-anuga-hazard-layer')
+    }
+    if (map.getSource('custom-anuga-hazard-source')) {
+      map.removeSource('custom-anuga-hazard-source')
+    }
+  }, [mapRef])
+
+  const displayDamProjectAnugaHazardRaster = useCallback(
+    (projectId: string, runId: string, layer: string, processingId?: string) => {
+      const map = mapRef.current
+      if (!map) return
+
+      removeDamProjectAnugaHazardRaster()
+
+      let tileUrl = getDamProjectAnugaLayerTileUrl(projectId, runId, layer)
+      if (processingId) {
+        tileUrl += `?processing_id=${encodeURIComponent(processingId)}`
+      }
+
+      map.addSource('custom-anuga-hazard-source', {
+        type: 'raster',
+        tiles: [tileUrl],
+        tileSize: 256,
+      })
+
+      // Insert above custom DEM layer if present, or before vector layers
+      const beforeLayer = map.getLayer('custom-dam-axis-layer')
+        ? 'custom-dam-axis-layer'
+        : map.getLayer('roads-line')
+        ? 'roads-line'
+        : undefined
+
+      map.addLayer(
+        {
+          id: 'custom-anuga-hazard-layer',
+          type: 'raster',
+          source: 'custom-anuga-hazard-source',
+          paint: {
+            'raster-opacity': 0.85,
+            'raster-fade-duration': 150,
+          },
+        },
+        beforeLayer
+      )
+    },
+    [mapRef, removeDamProjectAnugaHazardRaster]
+  )
+
   return {
     displayDamProjectOnMap,
     clearDamProjectMap,
+    displayDamProjectAnugaHazardRaster,
+    removeDamProjectAnugaHazardRaster,
   }
 }

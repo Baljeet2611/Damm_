@@ -24,7 +24,6 @@ import re
 import time
 import subprocess
 import threading
-from scipy.io import netcdf_file
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
@@ -45,6 +44,9 @@ from app.schemas import (
     RasterResolution,
     RasterMetadataResponse,
     RasterPointValueResponse,
+    ColorRampStop,
+    LegendItem,
+    RasterLegendResponse,
     RasterDerivedMetadata,
     UserProvidedMetadata,
     GeometryValidationMetadata,
@@ -58,7 +60,7 @@ from app.schemas import (
     DamProjectAnugaRunRequest,
     DamProjectAnugaRunResponse,
 )
-from app.raster_service import EMPTY_TILE_PNG, apply_colormap_and_transparency
+from app.raster_service import EMPTY_TILE_PNG, apply_colormap_and_transparency, DATASET_STYLES
 from app.scenario_storage import get_runtime_dir, compute_file_sha256
 
 # Configurable resource limits
@@ -1325,7 +1327,6 @@ def get_dam_project_dem_tile(project_id: str, z: int, x: int, y: int) -> bytes:
             buf = io.BytesIO()
             out_img.save(buf, format="PNG", optimize=True)
             return buf.getvalue()
-
     except Exception:
         return EMPTY_TILE_PNG
 
@@ -2556,15 +2557,18 @@ def get_anuga_python_executable() -> Optional[str]:
     return None
 
 
-def detect_anuga_version(python_exe: Optional[str] = None) -> Tuple[bool, str]:
-    """Detect ANUGA package installation and version using importlib.metadata.version('anuga').
+def detect_anuga_version(python_exe: Optional[str] = None) -> Tuple[bool, str, str, Optional[str]]:
+    """Detect ANUGA package installation and version provenance.
 
-    Returns (is_installed, version_str). Fallback to 'unknown' only if metadata cannot be read.
+    Returns (is_installed, anuga_version, version_source, raw_distribution_version).
+    - Checks importlib.metadata.version('anuga').
+    - If raw is '0.0.0+unknown' or 'unknown', scans conda-meta/ for package JSON safely.
+    - Never hardcodes 4.0.0.
     """
     if not python_exe:
         python_exe = get_anuga_python_executable()
     if not python_exe or not os.path.isfile(python_exe):
-        return False, "unavailable"
+        return False, "unavailable", "unavailable", None
 
     exe_path = Path(python_exe)
     site_candidates = [
@@ -2588,6 +2592,9 @@ def detect_anuga_version(python_exe: Optional[str] = None) -> Tuple[bool, str]:
         "        print('unknown')\n"
     )
 
+    raw_ver = "unknown"
+    is_installed = False
+
     try:
         proc = subprocess.run(
             [python_exe, "-c", cmd],
@@ -2599,19 +2606,45 @@ def detect_anuga_version(python_exe: Optional[str] = None) -> Tuple[bool, str]:
         )
         if proc.returncode == 0:
             out_lines = [l.strip() for l in proc.stdout.splitlines() if l.strip() and not l.startswith("WARNING")]
-            ver = out_lines[-1] if out_lines else "unknown"
-            return True, ver
+            raw_ver = out_lines[-1] if out_lines else "unknown"
+            is_installed = True
         elif has_dir:
-            return True, "unknown"
-        else:
-            return False, "unavailable"
+            is_installed = True
+            raw_ver = "unknown"
     except Exception:
         if has_dir:
-            return True, "unknown"
-        return False, "unavailable"
+            is_installed = True
+            raw_ver = "unknown"
+
+    if not is_installed:
+        return False, "unavailable", "unavailable", None
+
+    # If raw_ver is a valid semantic version (not unknown or 0.0.0+unknown), return as importlib_metadata
+    if raw_ver not in ("unknown", "0.0.0+unknown", ""):
+        return True, raw_ver, "importlib_metadata", raw_ver
+
+    # Scan conda-meta safely
+    conda_meta_dirs = [
+        exe_path.parent / "conda-meta",
+        exe_path.parent.parent / "conda-meta",
+    ]
+    for meta_dir in conda_meta_dirs:
+        if meta_dir.is_dir():
+            for json_file in meta_dir.glob("*.json"):
+                if "anuga" in json_file.name.lower():
+                    try:
+                        p_data = json.loads(json_file.read_text(encoding="utf-8"))
+                        if p_data.get("name") == "anuga" and p_data.get("version"):
+                            v = str(p_data["version"])
+                            return True, v, "conda_meta", raw_ver
+                    except Exception:
+                        pass
+
+    # Fallback to runtime
+    return True, raw_ver if raw_ver != "unknown" else "0.0.0+unknown", "fallback_runtime", raw_ver
 
 
-_ANUGA_VERSION_CACHE: Dict[str, Tuple[bool, str]] = {}
+_ANUGA_VERSION_CACHE: Dict[str, Tuple[bool, str, str, Optional[str]]] = {}
 
 
 def get_custom_anuga_capabilities() -> DamProjectAnugaCapabilitiesResponse:
@@ -2622,14 +2655,16 @@ def get_custom_anuga_capabilities() -> DamProjectAnugaCapabilitiesResponse:
     python_exe = get_anuga_python_executable()
     anuga_installed = False
     anuga_version = "unavailable"
+    version_source = "unavailable"
+    raw_dist_version = None
 
     if python_exe:
         if python_exe in _ANUGA_VERSION_CACHE:
-            anuga_installed, anuga_version = _ANUGA_VERSION_CACHE[python_exe]
+            anuga_installed, anuga_version, version_source, raw_dist_version = _ANUGA_VERSION_CACHE[python_exe]
         else:
-            anuga_installed, anuga_version = detect_anuga_version(python_exe)
+            anuga_installed, anuga_version, version_source, raw_dist_version = detect_anuga_version(python_exe)
             if anuga_installed:
-                _ANUGA_VERSION_CACHE[python_exe] = (anuga_installed, anuga_version)
+                _ANUGA_VERSION_CACHE[python_exe] = (anuga_installed, anuga_version, version_source, raw_dist_version)
 
     reason = None
     if not is_enabled:
@@ -2643,6 +2678,8 @@ def get_custom_anuga_capabilities() -> DamProjectAnugaCapabilitiesResponse:
         execution_enabled=is_enabled and anuga_installed,
         anuga_installed=anuga_installed,
         anuga_version=anuga_version,
+        version_source=version_source,  # type: ignore
+        raw_distribution_version=raw_dist_version,
         python_executable_configured=bool(python_exe),
         reason=reason,
     )
@@ -2776,30 +2813,22 @@ def recover_interrupted_anuga_runs() -> int:
     return recovered_count
 
 
+def _has_run_results(run_dir: Path, r_data: Dict[str, Any]) -> bool:
+    """Check if valid postprocessed results exist for this run."""
+    if r_data.get("has_results"):
+        return True
+    res_dir = run_dir / "results"
+    if not res_dir.is_dir():
+        return False
+    if (res_dir / "manifest.json").is_file():
+        return True
+    return any(d.is_dir() and (d / "manifest.json").is_file() for d in res_dir.iterdir() if not d.name.startswith("."))
+
+
 def validate_sww_file(sww_path: Path) -> Tuple[bool, Optional[str]]:
-    """Validate produced SWW file as genuine NetCDF with hydrodynamic variables."""
-    if not sww_path.is_file():
-        return False, "SWW file does not exist"
-    if sww_path.stat().st_size < 1024:
-        return False, f"SWW file size ({sww_path.stat().st_size} bytes) is suspiciously small"
-
-    try:
-        ds = netcdf_file(str(sww_path), "r", mmap=False)
-        for req in ["time", "stage", "elevation", "xmomentum", "ymomentum"]:
-            if req not in ds.variables:
-                return False, f"Missing required hydrodynamic variable '{req}' in SWW NetCDF"
-
-        times = ds.variables["time"][:]
-        if len(times) < 2:
-            return False, f"Insufficient timesteps ({len(times)}) in SWW file"
-
-        stages = ds.variables["stage"][:]
-        if not np.all(np.isfinite(stages)):
-            return False, "Stage array contains non-finite or NaN values"
-
-        return True, None
-    except Exception as e:
-        return False, f"Failed to parse SWW NetCDF: {str(e)}"
+    """Delegate SWW validation to specialized anuga_postprocessing_service."""
+    from app.anuga_postprocessing_service import validate_sww_file as _val_sww
+    return _val_sww(sww_path)
 
 
 def _execute_anuga_run_worker(
@@ -3043,11 +3072,14 @@ def create_dam_project_anuga_run(
         "completed_at": None,
         "exit_code": None,
         "anuga_version": caps.anuga_version,
+        "version_source": caps.version_source,
+        "raw_distribution_version": caps.raw_distribution_version,
         "runtime_seconds": None,
         "log_file": "execution.log",
         "output_files": {},
         "scientific_status": "hypothetical_unverified",
         "simulation_executed": False,
+        "has_results": False,
         "message": "ANUGA hydrodynamic simulation queued for execution.",
     }
 
@@ -3093,6 +3125,7 @@ def list_dam_project_anuga_runs(project_id: str) -> List[DamProjectAnugaRunRespo
                 if run_json.is_file():
                     try:
                         r_data = json.loads(run_json.read_text(encoding="utf-8"))
+                        r_data["has_results"] = _has_run_results(entry, r_data)
                         results.append(DamProjectAnugaRunResponse(**r_data))
                     except Exception:
                         pass
@@ -3108,7 +3141,8 @@ def get_dam_project_anuga_run(project_id: str, run_id: str) -> DamProjectAnugaRu
     valid_pid = validate_project_uuid(project_id)
     valid_rid = validate_run_uuid(run_id)
 
-    run_json = get_dam_projects_dir() / valid_pid / "runs" / valid_rid / "run.json"
+    run_dir = get_dam_projects_dir() / valid_pid / "runs" / valid_rid
+    run_json = run_dir / "run.json"
     if not run_json.is_file():
         raise HTTPException(
             status_code=404,
@@ -3117,6 +3151,7 @@ def get_dam_project_anuga_run(project_id: str, run_id: str) -> DamProjectAnugaRu
 
     try:
         r_data = json.loads(run_json.read_text(encoding="utf-8"))
+        r_data["has_results"] = _has_run_results(run_dir, r_data)
         return DamProjectAnugaRunResponse(**r_data)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to read run record: {str(e)}")
