@@ -4,6 +4,9 @@ import type {
   DamProjectDetailResponse,
   DamProjectAnugaPreflightResponse,
   DamProjectAnugaPackageResponse,
+  DamProjectAnugaCapabilitiesResponse,
+  DamProjectAnugaRunRequest,
+  DamProjectAnugaRunResponse,
   RasterDerivedMetadata,
 } from '../types/damProjects'
 
@@ -195,4 +198,59 @@ export async function buildAnugaPackage(projectId: string): Promise<DamProjectAn
 
 export function getAnugaPackageDownloadUrl(projectId: string): string {
   return `${API_BASE}/api/dam-projects/${encodeURIComponent(projectId)}/anuga/package`
+}
+
+export async function fetchDamProjectAnugaCapabilities(projectId: string): Promise<DamProjectAnugaCapabilitiesResponse> {
+  const res = await fetch(`${API_BASE}/api/dam-projects/${encodeURIComponent(projectId)}/anuga/capabilities`)
+  if (!res.ok) {
+    throw new Error(`Failed to fetch ANUGA capabilities: HTTP ${res.status}`)
+  }
+  return res.json()
+}
+
+export async function executeDamProjectAnugaRun(
+  projectId: string,
+  req: DamProjectAnugaRunRequest,
+): Promise<DamProjectAnugaRunResponse> {
+  const res = await fetch(`${API_BASE}/api/dam-projects/${encodeURIComponent(projectId)}/anuga/runs`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(req),
+  })
+  if (!res.ok) {
+    const errBody = await res.json().catch(() => null)
+    if (res.status === 403 && errBody?.detail?.code === 'custom_anuga_execution_disabled') {
+      throw new Error(errBody.detail.message)
+    }
+    if (errBody && errBody.detail) {
+      if (typeof errBody.detail === 'string') throw new Error(errBody.detail)
+      if (errBody.detail.message) throw new Error(errBody.detail.message)
+    }
+    throw new Error(`Simulation execution failed: HTTP ${res.status}`)
+  }
+  return res.json()
+}
+
+export async function fetchDamProjectAnugaRuns(projectId: string): Promise<DamProjectAnugaRunResponse[]> {
+  const res = await fetch(`${API_BASE}/api/dam-projects/${encodeURIComponent(projectId)}/anuga/runs`)
+  if (!res.ok) {
+    throw new Error(`Failed to fetch simulation runs: HTTP ${res.status}`)
+  }
+  return res.json()
+}
+
+export async function fetchDamProjectAnugaRun(projectId: string, runId: string): Promise<DamProjectAnugaRunResponse> {
+  const res = await fetch(`${API_BASE}/api/dam-projects/${encodeURIComponent(projectId)}/anuga/runs/${encodeURIComponent(runId)}`)
+  if (!res.ok) {
+    throw new Error(`Failed to fetch simulation run status: HTTP ${res.status}`)
+  }
+  return res.json()
+}
+
+export async function fetchDamProjectAnugaRunLogs(projectId: string, runId: string): Promise<string> {
+  const res = await fetch(`${API_BASE}/api/dam-projects/${encodeURIComponent(projectId)}/anuga/runs/${encodeURIComponent(runId)}/logs`)
+  if (!res.ok) {
+    throw new Error(`Failed to fetch simulation logs: HTTP ${res.status}`)
+  }
+  return res.text()
 }

@@ -2,7 +2,7 @@ import os
 import logging
 from typing import Dict, Any, List, Optional
 from fastapi import FastAPI, Query, Response, HTTPException, Request, UploadFile, File, Form
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.gzip import GZipMiddleware
 
@@ -47,6 +47,9 @@ from app.schemas import (
     DamProjectDetailResponse,
     DamProjectAnugaPreflightResponse,
     DamProjectAnugaPackageResponse,
+    DamProjectAnugaCapabilitiesResponse,
+    DamProjectAnugaRunRequest,
+    DamProjectAnugaRunResponse,
 )
 
 from app.raster_service import (
@@ -131,6 +134,12 @@ from app.onboarding_service import (
     assess_anuga_preflight,
     build_dam_project_anuga_package,
     get_dam_project_anuga_package_path,
+    get_custom_anuga_capabilities,
+    create_dam_project_anuga_run,
+    list_dam_project_anuga_runs,
+    get_dam_project_anuga_run,
+    get_dam_project_anuga_run_logs,
+    recover_interrupted_anuga_runs,
 )
 
 logger = logging.getLogger("app.main")
@@ -140,6 +149,13 @@ app = FastAPI(
     description="Automated dam-break hydrodynamic inspection, vector overlays, preliminary exposure screening, illustrative damage estimation, scenario management, and Delft3D integration API",
     version="0.9.0",
 )
+
+@app.on_event("startup")
+def on_startup():
+    try:
+        recover_interrupted_anuga_runs()
+    except Exception as exc:
+        logger.warning("Failed to recover interrupted ANUGA runs on startup: %s", exc)
 
 cors_env = os.environ.get("CORS_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173,http://localhost:3000,http://127.0.0.1:3000")
 allowed_origins = [origin.strip() for origin in cors_env.split(",") if origin.strip()]
@@ -970,4 +986,58 @@ def get_anuga_package_zip_endpoint(project_id: str) -> FileResponse:
         filename=f"dam_project_{project_id[:8]}_anuga_package.zip",
         media_type="application/zip",
     )
+
+
+@app.get(
+    "/api/dam-projects/{project_id}/anuga/capabilities",
+    response_model=DamProjectAnugaCapabilitiesResponse,
+    summary="Get custom ANUGA execution capability and environment status",
+    description="Checks whether custom ANUGA hydrodynamic simulation execution is enabled and verifies the server-side Python environment.",
+)
+def get_dam_project_anuga_capabilities_endpoint(project_id: str) -> DamProjectAnugaCapabilitiesResponse:
+    return get_custom_anuga_capabilities()
+
+
+@app.post(
+    "/api/dam-projects/{project_id}/anuga/runs",
+    response_model=DamProjectAnugaRunResponse,
+    summary="Execute custom ANUGA hydrodynamic simulation run",
+    description="Queues a strictly-gated, isolated ANUGA simulation run for an onboarded dam project after validating user acknowledgments and package integrity.",
+)
+def post_dam_project_anuga_run_endpoint(
+    project_id: str,
+    request: DamProjectAnugaRunRequest,
+) -> DamProjectAnugaRunResponse:
+    return create_dam_project_anuga_run(project_id, request)
+
+
+@app.get(
+    "/api/dam-projects/{project_id}/anuga/runs",
+    response_model=List[DamProjectAnugaRunResponse],
+    summary="List execution runs for an onboarded dam project",
+    description="Retrieves all historical ANUGA simulation execution runs for a custom dam project.",
+)
+def get_dam_project_anuga_runs_endpoint(project_id: str) -> List[DamProjectAnugaRunResponse]:
+    return list_dam_project_anuga_runs(project_id)
+
+
+@app.get(
+    "/api/dam-projects/{project_id}/anuga/runs/{run_id}",
+    response_model=DamProjectAnugaRunResponse,
+    summary="Get specific ANUGA execution run status",
+    description="Retrieves the detailed progress, timestamps, output file hashes, and exit status for a specific ANUGA execution run.",
+)
+def get_dam_project_anuga_run_by_id_endpoint(project_id: str, run_id: str) -> DamProjectAnugaRunResponse:
+    return get_dam_project_anuga_run(project_id, run_id)
+
+
+@app.get(
+    "/api/dam-projects/{project_id}/anuga/runs/{run_id}/logs",
+    response_class=PlainTextResponse,
+    summary="Get sanitized execution logs for an ANUGA run",
+    description="Retrieves the sanitized execution log stream from the isolated ANUGA run workspace.",
+)
+def get_dam_project_anuga_run_logs_endpoint(project_id: str, run_id: str) -> PlainTextResponse:
+    logs = get_dam_project_anuga_run_logs(project_id, run_id)
+    return PlainTextResponse(content=logs, media_type="text/plain")
 

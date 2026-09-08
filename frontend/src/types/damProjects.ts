@@ -190,6 +190,39 @@ export interface DamProjectAnugaPackageResponse {
   message: string
 }
 
+export interface DamProjectAnugaCapabilitiesResponse {
+  execution_enabled: boolean
+  anuga_installed: boolean
+  anuga_version: string
+  python_executable_configured: boolean
+  reason?: string | null
+  disclaimer: string
+}
+
+export interface DamProjectAnugaRunRequest {
+  acknowledge_hypothetical_unverified: boolean
+  custom_notes?: string | null
+}
+
+export interface DamProjectAnugaRunResponse {
+  run_id: string
+  project_id: string
+  project_name: string
+  package_sha256: string
+  status: 'queued' | 'running' | 'completed' | 'failed' | 'timed_out' | 'interrupted'
+  created_at: string
+  started_at?: string | null
+  completed_at?: string | null
+  exit_code?: number | null
+  anuga_version?: string | null
+  runtime_seconds?: number | null
+  log_file?: string | null
+  output_files: Record<string, string>
+  scientific_status: string
+  simulation_executed: boolean
+  message: string
+}
+
 export interface OnboardingFormValues {
   projectName: string
   verticalUnit: string

@@ -1,4 +1,4 @@
-from typing import Optional, Dict, Any, List, Tuple
+from typing import Optional, Dict, Any, List, Tuple, Literal
 from pydantic import BaseModel, Field
 
 
@@ -729,3 +729,41 @@ class DamProjectAnugaPackageResponse(BaseModel):
     scientific_status: str = "hypothetical_unverified"
     simulation_executed: bool = False
     message: str = "Package generated; simulation has not been executed."
+
+
+class DamProjectAnugaCapabilitiesResponse(BaseModel):
+    execution_enabled: bool
+    anuga_installed: bool
+    anuga_version: str
+    python_executable_configured: bool
+    reason: Optional[str] = None
+    disclaimer: str = (
+        "Custom ANUGA execution runs uncalibrated hypothetical simulation scenarios. "
+        "It is not an official forecast or certified flood safety prediction."
+    )
+
+
+class DamProjectAnugaRunRequest(BaseModel):
+    acknowledge_hypothetical_unverified: bool = False
+    custom_notes: Optional[str] = None
+
+
+class DamProjectAnugaRunResponse(BaseModel):
+    run_id: str
+    project_id: str
+    project_name: str
+    package_sha256: str
+    status: Literal["queued", "running", "completed", "failed", "timed_out", "interrupted"] = Field(
+        ..., description="queued, running, completed, failed, timed_out, interrupted"
+    )
+    created_at: str
+    started_at: Optional[str] = None
+    completed_at: Optional[str] = None
+    exit_code: Optional[int] = None
+    anuga_version: Optional[str] = None
+    runtime_seconds: Optional[float] = None
+    log_file: Optional[str] = None
+    output_files: Dict[str, str] = {}
+    scientific_status: str = "hypothetical_unverified"
+    simulation_executed: bool = False
+    message: str

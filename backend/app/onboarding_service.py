@@ -20,9 +20,15 @@ import shutil
 import hashlib
 import tempfile
 import zipfile
+import re
+import time
+import subprocess
+import threading
+from scipy.io import netcdf_file
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, Any, List, Optional, Tuple
+from typing import Dict, Any, List, Optional, Tuple, Set
 
 import numpy as np
 import rasterio
@@ -48,6 +54,9 @@ from app.schemas import (
     DamProjectDetailResponse,
     DamProjectAnugaPreflightResponse,
     DamProjectAnugaPackageResponse,
+    DamProjectAnugaCapabilitiesResponse,
+    DamProjectAnugaRunRequest,
+    DamProjectAnugaRunResponse,
 )
 from app.raster_service import EMPTY_TILE_PNG, apply_colormap_and_transparency
 from app.scenario_storage import get_runtime_dir, compute_file_sha256
@@ -1049,8 +1058,17 @@ def verify_project_integrity(project_id: str) -> Dict[str, Any]:
             )
 
         for rel_name, expected_sha in files_dict.items():
-            # Security check on manifest filenames: prevent traversal
-            if ".." in rel_name or "/" in rel_name or "\\" in rel_name:
+            # Security check on manifest filenames: prevent traversal outside project directory
+            if ".." in rel_name or rel_name.startswith("/") or rel_name.startswith("\\"):
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "code": "project_integrity_failed",
+                        "message": f"Manifest contains invalid file reference '{rel_name}'."
+                    },
+                )
+            target_file = (proj_dir / rel_name).resolve()
+            if not str(target_file).startswith(str(proj_dir.resolve())):
                 raise HTTPException(
                     status_code=409,
                     detail={
@@ -2005,8 +2023,6 @@ logger = logging.getLogger("anuga_simulation")
 
 try:
     import anuga
-    from anuga import Domain
-    from anuga.geometry.polygon import read_polygon
 except ImportError:
     logger.error("ANUGA is not installed in the active environment.")
     logger.error("Please install ANUGA (e.g. via conda-forge: `conda install -c conda-forge anuga`) to execute.")
@@ -2014,15 +2030,53 @@ except ImportError:
 
 try:
     import rasterio
-    from shapely.geometry import shape, Point, Polygon, MultiPolygon, LineString
-    from shapely.ops import transform as shapely_transform
-    from pyproj import CRS, Transformer
+    import matplotlib.path as mpath
+    from scipy.interpolate import RegularGridInterpolator
 except ImportError as e:
     logger.error(f"Missing required spatial dependency: {e}")
     sys.exit(1)
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 CONFIG_FILE = SCRIPT_DIR / "config.json"
+
+
+def extract_coords_from_geojson(geojson_obj):
+    """Extract coordinates array from GeoJSON dict."""
+    if isinstance(geojson_obj, dict):
+        if geojson_obj.get("type") == "FeatureCollection":
+            feats = geojson_obj.get("features", [])
+            if feats:
+                return extract_coords_from_geojson(feats[0])
+        elif geojson_obj.get("type") == "Feature":
+            return extract_coords_from_geojson(geojson_obj.get("geometry", {}))
+        elif "coordinates" in geojson_obj:
+            return geojson_obj["coordinates"]
+    return []
+
+
+def point_to_polyline_distance(pts_x, pts_y, polyline_pts):
+    """Compute minimum distance from 2D points to a polyline."""
+    pts_xy = np.column_stack([pts_x, pts_y])
+    p_arr = np.array(polyline_pts, dtype=np.float64)
+    if len(p_arr) < 2:
+        if len(p_arr) == 1:
+            return np.linalg.norm(pts_xy - p_arr[0], axis=1)
+        return np.full(len(pts_x), 1e9)
+
+    min_dists = np.full(len(pts_x), 1e9)
+    for i in range(len(p_arr) - 1):
+        p1 = p_arr[i]
+        p2 = p_arr[i + 1]
+        seg = p2 - p1
+        l2 = np.sum(seg ** 2)
+        if l2 < 1e-9:
+            d = np.linalg.norm(pts_xy - p1, axis=1)
+        else:
+            t = np.clip(np.sum((pts_xy - p1) * seg, axis=1) / l2, 0.0, 1.0)
+            proj = p1 + t[:, None] * seg
+            d = np.linalg.norm(pts_xy - proj, axis=1)
+        min_dists = np.minimum(min_dists, d)
+    return min_dists
 
 
 def run():
@@ -2067,116 +2121,167 @@ def run():
     # 3. Load Domain Geometry
     with open(domain_path, "r", encoding="utf-8") as f:
         dom_data = json.load(f)
-    feats = dom_data.get("features", [dom_data]) if dom_data.get("type") in ("FeatureCollection", "Feature") else [{"geometry": dom_data}]
-    dom_geom = shape(feats[0]["geometry"])
-
-    # Extract bounding polygon coordinates for ANUGA mesh creation
-    if isinstance(dom_geom, Polygon):
-        poly_coords = list(dom_geom.exterior.coords)
-    elif isinstance(dom_geom, MultiPolygon):
-        poly_coords = list(dom_geom.geoms[0].exterior.coords)
+    dom_raw_coords = extract_coords_from_geojson(dom_data)
+    if isinstance(dom_raw_coords[0][0], list):
+        poly_coords = dom_raw_coords[0]
     else:
-        logger.error(f"Unsupported model domain geometry type: {dom_geom.geom_type}")
-        sys.exit(1)
+        poly_coords = dom_raw_coords
 
-    # 4. Create ANUGA Domain
-    max_triangle_area = 0.5 * (target_res_m ** 2)
+    # Remove duplicated closing vertex for ANUGA mesh creation
+    if len(poly_coords) > 2 and poly_coords[0] == poly_coords[-1]:
+        poly_coords = poly_coords[:-1]
+
+    # 4. Load Downstream Outlet Geometry & Classify Boundary Segments
+    with open(outlet_path, "r", encoding="utf-8") as f:
+        out_data = json.load(f)
+    out_coords = extract_coords_from_geojson(out_data)
+    if out_coords and isinstance(out_coords[0], list) and isinstance(out_coords[0][0], list):
+        out_pts = out_coords[0]
+    else:
+        out_pts = out_coords
+
+    n_segs = len(poly_coords)
+    boundary_tags = {"wall": [], "outlet": []}
+
+    for seg_idx in range(n_segs):
+        p1 = np.array(poly_coords[seg_idx], dtype=np.float64)
+        p2 = np.array(poly_coords[(seg_idx + 1) % n_segs], dtype=np.float64)
+        mid_pt = 0.5 * (p1 + p2)
+        d_out = point_to_polyline_distance(np.array([mid_pt[0]]), np.array([mid_pt[1]]), out_pts)[0]
+        if d_out < max(target_res_m, 50.0):
+            boundary_tags["outlet"].append(seg_idx)
+        else:
+            boundary_tags["wall"].append(seg_idx)
+
+    # Clean empty tag keys
+    tag_dict = {k: v for k, v in boundary_tags.items() if len(v) > 0}
+    if not tag_dict:
+        tag_dict = {"exterior": list(range(n_segs))}
+
+    # 5. Create ANUGA Domain
+    max_triangle_area = max(0.5 * (target_res_m ** 2), 100.0)
     output_dir = SCRIPT_DIR / "output"
     output_dir.mkdir(parents=True, exist_ok=True)
     scenario_name = f"dam_break_{cfg.get('project_id', 'sim')}"
 
     logger.info("Generating 2D unstructured triangular mesh...")
-    try:
-        domain = anuga.create_domain_from_regions(
-            bounding_polygon=poly_coords,
-            boundary_tags={'bottom': [0], 'right': [1], 'top': [2], 'left': [3]},
-            maximum_triangle_area=max_triangle_area,
-            mesh_filename=str(output_dir / f"{scenario_name}.msh"),
-            use_cache=False,
-            verbose=True
-        )
-    except Exception as e:
-        logger.warning(f"Using direct domain fallback: {e}")
-        domain = anuga.Domain(bounding_polygon=poly_coords, use_cache=False)
+    domain = anuga.create_domain_from_regions(
+        bounding_polygon=poly_coords,
+        boundary_tags=tag_dict,
+        maximum_triangle_area=max_triangle_area,
+        use_cache=False,
+        verbose=False
+    )
 
-    domain.set_name(str(output_dir / scenario_name))
+    domain.set_name(scenario_name)
     domain.set_datadir(str(output_dir))
 
-    # 5. Build Explicit Dam Crest Ridge & Breach Gap on Working Terrain
+    # 6. Read DEM Raster & Build Interpolator
+    logger.info("Reading DEM raster and initializing spatial interpolator...")
+    with rasterio.open(dem_path) as src:
+        dem_data = src.read(1).astype(np.float64)
+        transform = src.transform
+        cols = np.arange(src.width)
+        rows = np.arange(src.height)
+        xs = transform.c + cols * transform.a
+        ys = transform.f + rows * transform.e
+        if transform.e < 0:
+            ys = ys[::-1]
+            dem_data = np.flipud(dem_data)
+        dem_interp = RegularGridInterpolator((ys, xs), dem_data, bounds_error=False, fill_value=np.nanmin(dem_data))
+
+    # 7. Build Explicit Dam Crest Ridge & Breach Gap on Working Terrain
     # Original dem.tif is preserved unchanged.
-    logger.info("Setting elevation quantity with burned dam crest and instantaneous breach gap...")
+    logger.info("Burning explicit dam crest and instantaneous breach gap into working terrain...")
     with open(dam_axis_path, "r", encoding="utf-8") as f:
         axis_data = json.load(f)
-    ax_feats = axis_data.get("features", [axis_data]) if axis_data.get("type") in ("FeatureCollection", "Feature") else [{"geometry": axis_data}]
-    axis_geom = shape(ax_feats[0]["geometry"])
+    axis_coords = extract_coords_from_geojson(axis_data)
+    if axis_coords and isinstance(axis_coords[0], list) and isinstance(axis_coords[0][0], list):
+        axis_pts = axis_coords[0]
+    else:
+        axis_pts = axis_coords
 
-    # Define dam crest ridge buffer and breach gap geometry
     dam_buffer_width = max(target_res_m, 15.0)
-    dam_poly = axis_geom.buffer(dam_buffer_width / 2.0)
+    bx = float(breach_center[0]) if breach_center else 0.0
+    by = float(breach_center[1]) if breach_center else 0.0
 
-    breach_pt = Point(float(breach_center[0]), float(breach_center[1])) if breach_center else None
-    breach_poly = None
-    if breach_pt is not None:
-        breach_poly = breach_pt.buffer(breach_width / 2.0)
+    # Get coordinate origin offset from ANUGA domain geo_reference
+    try:
+        x_orig = float(domain.geo_reference.get_xllcorner())
+        y_orig = float(domain.geo_reference.get_yllcorner())
+    except Exception:
+        x_orig = 0.0
+        y_orig = 0.0
 
-    # Set baseline elevation from DEM
-    domain.set_quantity('elevation', filename=str(dem_path), use_cache=False, verbose=False)
+    def elevation_func(x, y):
+        x_flat = np.asarray(x).ravel() + x_orig
+        y_flat = np.asarray(y).ravel() + y_orig
+        pts_yx = np.column_stack([y_flat, x_flat])
+        dem_z = dem_interp(pts_yx)
 
-    # Modify working terrain in memory for dam ridge and breach gap
-    elev_vals = domain.get_quantity('elevation').get_values()
-    pts = domain.get_nodes()
-    if pts is not None and len(pts) > 0:
-        modified_elev = np.copy(elev_vals)
-        for idx, (px, py) in enumerate(pts):
-            p = Point(px, py)
-            if breach_poly and breach_poly.contains(p):
-                # Breach gap lowered to breach invert elevation
-                modified_elev[idx] = min(modified_elev[idx], breach_invert)
-            elif dam_poly.contains(p):
-                # Dam crest raised to dam crest elevation
-                modified_elev[idx] = max(modified_elev[idx], dam_crest)
-        domain.set_quantity('elevation', modified_elev)
+        dist_to_axis = point_to_polyline_distance(x_flat, y_flat, axis_pts)
+        dist_to_breach = np.hypot(x_flat - bx, y_flat - by)
 
-    # 6. Set Friction (Manning's n)
+        is_dam = dist_to_axis <= (dam_buffer_width / 2.0)
+        is_breach = is_dam & (dist_to_breach <= (breach_width / 2.0))
+
+        elev_flat = np.where(
+            is_breach,
+            np.minimum(dem_z, breach_invert),
+            np.where(is_dam, np.maximum(dem_z, dam_crest), dem_z)
+        )
+        return elev_flat.reshape(np.shape(x))
+
+    domain.set_quantity('elevation', function=elevation_func)
+
+    # 8. Set Friction (Manning's n)
     domain.set_quantity('friction', manning_n)
 
-    # 7. Set Initial Water Stage (Reservoir Boundary)
+    # 9. Set Initial Water Stage (Reservoir Boundary)
     with open(reservoir_path, "r", encoding="utf-8") as f:
         res_data = json.load(f)
-    r_feats = res_data.get("features", [res_data]) if res_data.get("type") in ("FeatureCollection", "Feature") else [{"geometry": res_data}]
-    res_geom = shape(r_feats[0]["geometry"])
+    res_raw = extract_coords_from_geojson(res_data)
+    if isinstance(res_raw[0][0], list):
+        res_coords = res_raw[0]
+    else:
+        res_coords = res_raw
+    res_path = mpath.Path(res_coords)
 
     logger.info("Setting initial reservoir stage inside reservoir boundary polygon...")
-    def stage_function(x, y):
-        stages = []
-        for px, py in zip(x, y):
-            p = Point(px, py)
-            if res_geom.contains(p):
-                stages.append(reservoir_level)
-            else:
-                stages.append(0.0)
-        return np.array(stages)
+    def stage_func(x, y):
+        elev = elevation_func(x, y)
+        x_flat = np.asarray(x).ravel() + x_orig
+        y_flat = np.asarray(y).ravel() + y_orig
+        pts_xy = np.column_stack([x_flat, y_flat])
+        in_res = res_path.contains_points(pts_xy).reshape(np.shape(x))
+        return np.where(in_res, np.maximum(elev, reservoir_level), elev)
 
-    try:
-        domain.set_quantity('stage', expression='elevation')
-        domain.set_quantity('stage', stage_function)
-    except Exception as e:
-        logger.info(f"Setting initial stage expression: {e}")
-        domain.set_quantity('stage', expression=f'elevation + (elevation < {reservoir_level})')
+    domain.set_quantity('stage', function=stage_func)
 
-    # 8. Boundary Conditions (Transmissive Outlet / Reflective elsewhere)
-    logger.info("Configuring boundary conditions (Transmissive downstream outlet / Reflective walls)...")
-    Bs = anuga.Transmissive_boundary(domain)
-    Br = anuga.Reflective_boundary(domain)
-    domain.set_boundary({'bottom': Bs, 'right': Bs, 'top': Br, 'left': Br})
+    # 10. Boundary Conditions (Transmissive Outlet / Reflective walls)
+    logger.info("Configuring boundary conditions...")
+    b_trans = anuga.Transmissive_boundary(domain)
+    b_refl = anuga.Reflective_boundary(domain)
 
-    # 9. Execute Evolution Loop
+    bc_map = {}
+    for tag in tag_dict.keys():
+        if tag == "outlet":
+            bc_map[tag] = b_trans
+        elif tag == "wall":
+            bc_map[tag] = b_refl
+        else:
+            bc_map[tag] = b_trans
+
+    domain.set_boundary(bc_map)
+
+    # 11. Execute Evolution Loop
     logger.info(f"Starting ANUGA evolution (0 -> {duration_s}s with step {interval_s}s)...")
     for t in domain.evolve(yieldstep=interval_s, finaltime=duration_s):
         logger.info(domain.timestepping_statistics())
 
+    sww_file = output_dir / f"{scenario_name}.sww"
     logger.info("Hydrodynamic simulation execution completed successfully.")
-    logger.info(f"Output SWW file written to: {output_dir / f'{scenario_name}.sww'}")
+    logger.info(f"Output SWW file written to: {sww_file}")
 
 
 if __name__ == "__main__":
@@ -2409,3 +2514,626 @@ def get_dam_project_anuga_package_path(project_id: str) -> Path:
         )
 
     return zip_path
+
+
+# ==============================================================================
+# Gated ANUGA Execution Service (Stage 2)
+# ==============================================================================
+
+EXECUTION_THREAD_POOL = ThreadPoolExecutor(max_workers=2, thread_name_prefix="anuga_worker")
+
+
+def validate_run_uuid(run_id: str) -> str:
+    """Validate UUID format for run ID."""
+    try:
+        val = uuid.UUID(run_id, version=4)
+        return str(val)
+    except Exception:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Invalid run ID '{run_id}'. Must be a valid UUID v4.",
+        )
+
+
+def get_anuga_python_executable() -> Optional[str]:
+    """Resolve configured ANUGA python executable from server environment only."""
+    env_exe = os.environ.get("ANUGA_PYTHON_EXECUTABLE")
+    if env_exe and os.path.isfile(env_exe):
+        return env_exe
+
+    # Default conda environment locations
+    candidates = [
+        Path(os.environ.get("USERPROFILE", "")) / "miniforge3" / "envs" / "sih-anuga" / "python.exe",
+        Path(os.environ.get("USERPROFILE", "")) / "anaconda3" / "envs" / "sih-anuga" / "python.exe",
+        Path(os.environ.get("USERPROFILE", "")) / "miniconda3" / "envs" / "sih-anuga" / "python.exe",
+        Path("/opt/conda/envs/sih-anuga/bin/python"),
+        Path("/root/miniforge3/envs/sih-anuga/bin/python"),
+    ]
+    for c in candidates:
+        if c.is_file():
+            return str(c)
+
+    return None
+
+
+def detect_anuga_version(python_exe: Optional[str] = None) -> Tuple[bool, str]:
+    """Detect ANUGA package installation and version using importlib.metadata.version('anuga').
+
+    Returns (is_installed, version_str). Fallback to 'unknown' only if metadata cannot be read.
+    """
+    if not python_exe:
+        python_exe = get_anuga_python_executable()
+    if not python_exe or not os.path.isfile(python_exe):
+        return False, "unavailable"
+
+    exe_path = Path(python_exe)
+    site_candidates = [
+        exe_path.parent / "Lib" / "site-packages" / "anuga",
+        exe_path.parent.parent / "lib" / "python3.10" / "site-packages" / "anuga",
+        exe_path.parent.parent / "lib" / "python3.11" / "site-packages" / "anuga",
+        exe_path.parent.parent / "lib" / "python3.12" / "site-packages" / "anuga",
+    ]
+    has_dir = any(c.is_dir() for c in site_candidates)
+
+    cmd = (
+        "try:\n"
+        "    import importlib.metadata\n"
+        "    v = importlib.metadata.version('anuga')\n"
+        "    print(v.strip() if v else 'unknown')\n"
+        "except Exception:\n"
+        "    try:\n"
+        "        import anuga\n"
+        "        print(getattr(anuga, '__version__', 'unknown'))\n"
+        "    except Exception:\n"
+        "        print('unknown')\n"
+    )
+
+    try:
+        proc = subprocess.run(
+            [python_exe, "-c", cmd],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=30,
+            shell=False,
+        )
+        if proc.returncode == 0:
+            out_lines = [l.strip() for l in proc.stdout.splitlines() if l.strip() and not l.startswith("WARNING")]
+            ver = out_lines[-1] if out_lines else "unknown"
+            return True, ver
+        elif has_dir:
+            return True, "unknown"
+        else:
+            return False, "unavailable"
+    except Exception:
+        if has_dir:
+            return True, "unknown"
+        return False, "unavailable"
+
+
+_ANUGA_VERSION_CACHE: Dict[str, Tuple[bool, str]] = {}
+
+
+def get_custom_anuga_capabilities() -> DamProjectAnugaCapabilitiesResponse:
+    """Retrieve capability status for custom ANUGA hydrodynamic simulation runs."""
+    enabled_str = os.environ.get("ENABLE_CUSTOM_ANUGA_EXECUTION", "false").strip().lower()
+    is_enabled = enabled_str in ("true", "1", "yes")
+
+    python_exe = get_anuga_python_executable()
+    anuga_installed = False
+    anuga_version = "unavailable"
+
+    if python_exe:
+        if python_exe in _ANUGA_VERSION_CACHE:
+            anuga_installed, anuga_version = _ANUGA_VERSION_CACHE[python_exe]
+        else:
+            anuga_installed, anuga_version = detect_anuga_version(python_exe)
+            if anuga_installed:
+                _ANUGA_VERSION_CACHE[python_exe] = (anuga_installed, anuga_version)
+
+    reason = None
+    if not is_enabled:
+        reason = "Custom ANUGA execution is disabled by default via ENABLE_CUSTOM_ANUGA_EXECUTION=false."
+    elif not python_exe:
+        reason = "ANUGA Python executable (sih-anuga) is not configured or found on the server."
+    elif not anuga_installed:
+        reason = "ANUGA module could not be loaded in the configured Python environment."
+
+    return DamProjectAnugaCapabilitiesResponse(
+        execution_enabled=is_enabled and anuga_installed,
+        anuga_installed=anuga_installed,
+        anuga_version=anuga_version,
+        python_executable_configured=bool(python_exe),
+        reason=reason,
+    )
+
+
+def sanitize_log_output(text: str) -> str:
+    """Strip server filesystem paths and sensitive environment details from log output."""
+    if not text:
+        return ""
+    sanitized = text
+    user_home = os.environ.get("USERPROFILE") or os.environ.get("HOME")
+    if user_home:
+        sanitized = sanitized.replace(user_home, "~")
+    sanitized = re.sub(r"[A-Za-z]:\\[^ \n\r\t\"']+", lambda m: Path(m.group(0)).name, sanitized)
+    sanitized = re.sub(r"/(?:home|var|tmp|opt|usr)/[^ \n\r\t\"']+", lambda m: Path(m.group(0)).name, sanitized)
+    return sanitized
+
+
+def safe_extract_zip(zip_path: Path, target_dir: Path) -> List[str]:
+    """Safely extract all members from a ZIP archive into target_dir.
+
+    Rejects any member with:
+    - Absolute paths
+    - Windows drive paths (e.g. C:...)
+    - Parent directory traversal ('..')
+    - Resolved destination outside target_dir
+    """
+    resolved_target = target_dir.resolve()
+    extracted_files: List[str] = []
+    with zipfile.ZipFile(zip_path, "r") as zf:
+        for member in zf.infolist():
+            raw_name = member.filename
+            if not raw_name:
+                continue
+
+            # Reject absolute or Windows drive paths
+            if os.path.isabs(raw_name) or bool(re.match(r"^[a-zA-Z]:", raw_name)):
+                raise ValueError(f"Insecure absolute or drive path in zip member: '{raw_name}'")
+
+            # Check path parts for traversal tokens
+            norm_parts = Path(raw_name).parts
+            if any(p in ("..", "/", "\\") for p in norm_parts):
+                raise ValueError(f"Directory traversal detected in zip member: '{raw_name}'")
+
+            dest_path = (resolved_target / raw_name).resolve()
+            try:
+                dest_path.relative_to(resolved_target)
+            except ValueError:
+                raise ValueError(f"Zip member '{raw_name}' resolves outside target directory '{resolved_target}'")
+
+            if member.is_dir():
+                dest_path.mkdir(parents=True, exist_ok=True)
+            else:
+                dest_path.parent.mkdir(parents=True, exist_ok=True)
+                with zf.open(member, "r") as src_file, open(dest_path, "wb") as dst_file:
+                    shutil.copyfileobj(src_file, dst_file)
+                extracted_files.append(raw_name)
+
+    return extracted_files
+
+
+_ACTIVE_RUN_IDS: Set[str] = set()
+_ACTIVE_RUNS_LOCK = threading.Lock()
+
+
+def register_active_run(run_id: str) -> None:
+    """Register an actively executing local worker run."""
+    with _ACTIVE_RUNS_LOCK:
+        _ACTIVE_RUN_IDS.add(run_id)
+
+
+def unregister_active_run(run_id: str) -> None:
+    """Unregister a finished worker run."""
+    with _ACTIVE_RUNS_LOCK:
+        _ACTIVE_RUN_IDS.discard(run_id)
+
+
+def is_run_active(run_id: str) -> bool:
+    """Check if a run worker is actively running in this process."""
+    with _ACTIVE_RUNS_LOCK:
+        return run_id in _ACTIVE_RUN_IDS
+
+
+def recover_interrupted_anuga_runs() -> int:
+    """Detect persisted queued/running jobs that have no active local worker.
+
+    Marks them status='interrupted' with a sanitized reason and finished timestamp.
+    Never marks them completed.
+    """
+    projects_dir = get_dam_projects_dir()
+    recovered_count = 0
+    if not projects_dir.is_dir():
+        return 0
+
+    for proj_entry in projects_dir.iterdir():
+        if not proj_entry.is_dir() or proj_entry.name.startswith("."):
+            continue
+        runs_dir = proj_entry / "runs"
+        if not runs_dir.is_dir():
+            continue
+        for run_entry in runs_dir.iterdir():
+            if not run_entry.is_dir() or run_entry.name.startswith("."):
+                continue
+            run_json = run_entry / "run.json"
+            if not run_json.is_file():
+                continue
+            try:
+                data = json.loads(run_json.read_text(encoding="utf-8"))
+                status = data.get("status")
+                r_id = data.get("run_id", run_entry.name)
+                if status in ("queued", "running") and not is_run_active(r_id):
+                    now_iso = datetime.now(timezone.utc).isoformat()
+                    data["status"] = "interrupted"
+                    data["completed_at"] = now_iso
+                    data["simulation_executed"] = False
+                    data["message"] = "Simulation was interrupted due to server restart or process termination."
+                    run_json.write_text(json.dumps(data, indent=2), encoding="utf-8")
+
+                    log_file = run_entry / "execution.log"
+                    if log_file.is_file():
+                        try:
+                            current_log = log_file.read_text(encoding="utf-8", errors="replace")
+                            updated_log = current_log + f"\n\n[WARNING] Simulation execution interrupted by server restart or worker shutdown at {now_iso}.\n"
+                            log_file.write_text(updated_log, encoding="utf-8")
+                        except Exception:
+                            pass
+                    recovered_count += 1
+            except Exception:
+                pass
+
+    return recovered_count
+
+
+def validate_sww_file(sww_path: Path) -> Tuple[bool, Optional[str]]:
+    """Validate produced SWW file as genuine NetCDF with hydrodynamic variables."""
+    if not sww_path.is_file():
+        return False, "SWW file does not exist"
+    if sww_path.stat().st_size < 1024:
+        return False, f"SWW file size ({sww_path.stat().st_size} bytes) is suspiciously small"
+
+    try:
+        ds = netcdf_file(str(sww_path), "r", mmap=False)
+        for req in ["time", "stage", "elevation", "xmomentum", "ymomentum"]:
+            if req not in ds.variables:
+                return False, f"Missing required hydrodynamic variable '{req}' in SWW NetCDF"
+
+        times = ds.variables["time"][:]
+        if len(times) < 2:
+            return False, f"Insufficient timesteps ({len(times)}) in SWW file"
+
+        stages = ds.variables["stage"][:]
+        if not np.all(np.isfinite(stages)):
+            return False, "Stage array contains non-finite or NaN values"
+
+        return True, None
+    except Exception as e:
+        return False, f"Failed to parse SWW NetCDF: {str(e)}"
+
+
+def _execute_anuga_run_worker(
+    run_id: str,
+    project_id: str,
+    run_dir: Path,
+    pkg_zip_path: Path,
+    package_sha256: str,
+    timeout_sec: int = 300,
+):
+    """Background worker executing the extracted ANUGA package in isolation."""
+    register_active_run(run_id)
+    run_json = run_dir / "run.json"
+    log_file = run_dir / "execution.log"
+    workspace_dir = run_dir / "workspace"
+    workspace_dir.mkdir(parents=True, exist_ok=True)
+
+    try:
+        data = json.loads(run_json.read_text(encoding="utf-8")) if run_json.is_file() else {}
+        data["status"] = "running"
+        data["started_at"] = datetime.now(timezone.utc).isoformat()
+        run_json.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    except Exception as exc:
+        log_file.write_text(f"[ERROR] Failed to update run.json at start: {exc}", encoding="utf-8")
+        unregister_active_run(run_id)
+        return
+
+    try:
+        # Extract package ZIP safely rejecting traversal and absolute paths
+        try:
+            safe_extract_zip(pkg_zip_path, workspace_dir)
+        except Exception as e:
+            data["status"] = "failed"
+            data["completed_at"] = datetime.now(timezone.utc).isoformat()
+            data["message"] = f"Failed to safely extract simulation package: {str(e)}"
+            run_json.write_text(json.dumps(data, indent=2), encoding="utf-8")
+            log_file.write_text(f"[ERROR] Failed to safely extract simulation package: {str(e)}", encoding="utf-8")
+            return
+
+        python_exe = get_anuga_python_executable()
+        if not python_exe:
+            data["status"] = "failed"
+            data["completed_at"] = datetime.now(timezone.utc).isoformat()
+            data["message"] = "Configured ANUGA Python executable is missing on the server."
+            run_json.write_text(json.dumps(data, indent=2), encoding="utf-8")
+            log_file.write_text("[ERROR] Configured ANUGA Python executable is missing on the server.", encoding="utf-8")
+            return
+
+        script_path = workspace_dir / "run_anuga.py"
+        if not script_path.is_file():
+            data["status"] = "failed"
+            data["completed_at"] = datetime.now(timezone.utc).isoformat()
+            data["message"] = "run_anuga.py is missing in extracted package."
+            run_json.write_text(json.dumps(data, indent=2), encoding="utf-8")
+            log_file.write_text("[ERROR] run_anuga.py is missing in extracted package.", encoding="utf-8")
+            return
+
+        # Run subprocess with clean environment and absolute script path
+        start_t = time.time()
+        log_lines: List[str] = [
+            f"=== ANUGA Simulation Execution Started: {datetime.now(timezone.utc).isoformat()} ===",
+            f"Project ID: {project_id} | Run ID: {run_id}",
+            f"Package SHA-256: {package_sha256}",
+            f"Scientific Status: hypothetical_unverified",
+            "--------------------------------------------------------------------------------\n",
+        ]
+        log_file.write_text("\n".join(log_lines), encoding="utf-8")
+
+        is_timed_out = False
+        exit_code = -1
+
+        clean_env = os.environ.copy()
+        clean_env.pop("PYTHONPATH", None)
+        clean_env.pop("PYTHONHOME", None)
+
+        # Prepend target conda environment paths to avoid host DLL conflicts
+        exe_p = Path(python_exe).parent
+        conda_paths = [
+            str(exe_p),
+            str(exe_p / "Library" / "mingw-w64" / "bin"),
+            str(exe_p / "Library" / "usr" / "bin"),
+            str(exe_p / "Library" / "bin"),
+            str(exe_p / "Scripts"),
+            str(exe_p / "bin"),
+        ]
+        existing_path = clean_env.get("PATH", "")
+        clean_env["PATH"] = os.pathsep.join(conda_paths) + os.pathsep + existing_path
+        clean_env["CONDA_PREFIX"] = str(exe_p)
+
+        try:
+            proc = subprocess.Popen(
+                [python_exe, str(script_path)],
+                cwd=str(workspace_dir),
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                env=clean_env,
+                shell=False,
+            )
+
+            try:
+                stdout_text, stderr_text = proc.communicate(timeout=timeout_sec)
+                exit_code = proc.returncode
+                if stdout_text:
+                    log_lines.append(stdout_text)
+                if stderr_text:
+                    log_lines.append(stderr_text)
+            except subprocess.TimeoutExpired:
+                is_timed_out = True
+                proc.kill()
+                stdout_text, stderr_text = proc.communicate()
+                if stdout_text:
+                    log_lines.append(stdout_text)
+                if stderr_text:
+                    log_lines.append(stderr_text)
+                log_lines.append(f"\n[ERROR] Simulation exceeded maximum timeout limit ({timeout_sec} s). Process killed.")
+
+        except Exception as e:
+            log_lines.append(f"\n[ERROR] Process execution failed to spawn: {str(e)}")
+            exit_code = -1
+
+        runtime_s = round(time.time() - start_t, 3)
+        log_lines.append(f"\n--------------------------------------------------------------------------------")
+        log_lines.append(f"Execution finished in {runtime_s:.2f} s with Exit Code: {exit_code}")
+
+        # Write log file (limited to 10MB)
+        combined_logs = "\n".join(log_lines)
+        if len(combined_logs) > 10 * 1024 * 1024:
+            combined_logs = combined_logs[: 10 * 1024 * 1024] + "\n[LOG TRUNCATED AT 10MB LIMIT]"
+        log_file.write_text(combined_logs, encoding="utf-8")
+
+        # Inspect outputs
+        output_hashes: Dict[str, str] = {}
+        output_dir = workspace_dir / "output"
+        sww_valid = False
+        sww_err: Optional[str] = None
+
+        if output_dir.is_dir():
+            for out_entry in output_dir.iterdir():
+                if out_entry.is_file():
+                    h = compute_file_sha256(out_entry) or ""
+                    output_hashes[f"output/{out_entry.name}"] = h
+                    if out_entry.name.endswith(".sww"):
+                        sww_valid, sww_err = validate_sww_file(out_entry)
+
+        # Finalize status
+        if is_timed_out:
+            final_status = "timed_out"
+            sim_executed = False
+            final_msg = f"Simulation timed out after {timeout_sec} s."
+        elif exit_code == 0 and sww_valid:
+            final_status = "completed"
+            sim_executed = True
+            final_msg = "Hydrodynamic simulation executed successfully and generated valid SWW results."
+        else:
+            final_status = "failed"
+            sim_executed = False
+            if exit_code != 0:
+                final_msg = f"ANUGA execution exited with code {exit_code}."
+            else:
+                final_msg = f"Simulation completed with exit code 0 but SWW validation failed: {sww_err or 'missing SWW output'}."
+
+        data["status"] = final_status
+        data["completed_at"] = datetime.now(timezone.utc).isoformat()
+        data["exit_code"] = exit_code
+        data["runtime_seconds"] = runtime_s
+        data["output_files"] = output_hashes
+        data["simulation_executed"] = sim_executed
+        data["message"] = final_msg
+
+        run_json.write_text(json.dumps(data, indent=2), encoding="utf-8")
+
+    except Exception as fatal_e:
+        try:
+            data["status"] = "failed"
+            data["completed_at"] = datetime.now(timezone.utc).isoformat()
+            data["message"] = f"Fatal worker exception: {fatal_e}"
+            run_json.write_text(json.dumps(data, indent=2), encoding="utf-8")
+            log_file.write_text(f"[FATAL WORKER ERROR] {fatal_e}", encoding="utf-8")
+        except Exception:
+            pass
+    finally:
+        unregister_active_run(run_id)
+
+
+def create_dam_project_anuga_run(
+    project_id: str,
+    request: DamProjectAnugaRunRequest,
+) -> DamProjectAnugaRunResponse:
+    """Queue a gated, isolated ANUGA simulation execution run for an onboarded dam project."""
+    caps = get_custom_anuga_capabilities()
+    if not caps.execution_enabled:
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "code": "custom_anuga_execution_disabled",
+                "message": caps.reason or "Custom ANUGA execution is disabled.",
+            },
+        )
+
+    if not request.acknowledge_hypothetical_unverified:
+        raise HTTPException(
+            status_code=422,
+            detail="User acknowledgment of hypothetical unverified simulation terms is required to execute.",
+        )
+
+    verify_project_integrity(project_id)
+    valid_id = validate_project_uuid(project_id)
+    proj_dir = get_dam_projects_dir() / valid_id
+    pkg_path = proj_dir / "packages" / "anuga_package.zip"
+
+    if not pkg_path.is_file():
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "code": "package_not_built",
+                "message": f"ANUGA package has not been built for project '{valid_id}'. Please run preflight and generate package first.",
+            },
+        )
+
+    package_sha256 = compute_file_sha256(pkg_path) or ""
+    proj_json = proj_dir / "project.json"
+    p_data = json.loads(proj_json.read_text(encoding="utf-8")) if proj_json.is_file() else {}
+    project_name = p_data.get("project_name", "Untitled Dam Project")
+
+    run_id = str(uuid.uuid4())
+    runs_dir = proj_dir / "runs"
+    run_dir = runs_dir / run_id
+    run_dir.mkdir(parents=True, exist_ok=True)
+
+    created_at = datetime.now(timezone.utc).isoformat()
+    run_dict: Dict[str, Any] = {
+        "run_id": run_id,
+        "project_id": valid_id,
+        "project_name": project_name,
+        "package_sha256": package_sha256,
+        "status": "queued",
+        "created_at": created_at,
+        "started_at": None,
+        "completed_at": None,
+        "exit_code": None,
+        "anuga_version": caps.anuga_version,
+        "runtime_seconds": None,
+        "log_file": "execution.log",
+        "output_files": {},
+        "scientific_status": "hypothetical_unverified",
+        "simulation_executed": False,
+        "message": "ANUGA hydrodynamic simulation queued for execution.",
+    }
+
+    run_json = run_dir / "run.json"
+    run_json.write_text(json.dumps(run_dict, indent=2), encoding="utf-8")
+
+    # Initialize execution log immediately
+    log_file = run_dir / "execution.log"
+    initial_log_header = (
+        f"=== ANUGA Simulation Execution Queued: {created_at} ===\n"
+        f"Project ID: {valid_id} | Run ID: {run_id}\n"
+        f"Package SHA-256: {package_sha256}\n"
+        f"Scientific Status: hypothetical_unverified\n"
+        "--------------------------------------------------------------------------------\n"
+    )
+    log_file.write_text(initial_log_header, encoding="utf-8")
+
+    # Dispatch to background thread pool
+    EXECUTION_THREAD_POOL.submit(
+        _execute_anuga_run_worker,
+        run_id=run_id,
+        project_id=valid_id,
+        run_dir=run_dir,
+        pkg_zip_path=pkg_path,
+        package_sha256=package_sha256,
+    )
+
+    return DamProjectAnugaRunResponse(**run_dict)
+
+
+def list_dam_project_anuga_runs(project_id: str) -> List[DamProjectAnugaRunResponse]:
+    """List all simulation execution runs for a custom dam project."""
+    recover_interrupted_anuga_runs()
+    verify_project_integrity(project_id)
+    valid_id = validate_project_uuid(project_id)
+    runs_dir = get_dam_projects_dir() / valid_id / "runs"
+    results: List[DamProjectAnugaRunResponse] = []
+
+    if runs_dir.is_dir():
+        for entry in runs_dir.iterdir():
+            if entry.is_dir() and not entry.name.startswith("."):
+                run_json = entry / "run.json"
+                if run_json.is_file():
+                    try:
+                        r_data = json.loads(run_json.read_text(encoding="utf-8"))
+                        results.append(DamProjectAnugaRunResponse(**r_data))
+                    except Exception:
+                        pass
+
+    results.sort(key=lambda r: r.created_at, reverse=True)
+    return results
+
+
+def get_dam_project_anuga_run(project_id: str, run_id: str) -> DamProjectAnugaRunResponse:
+    """Retrieve detailed status of an ANUGA simulation execution run."""
+    recover_interrupted_anuga_runs()
+    verify_project_integrity(project_id)
+    valid_pid = validate_project_uuid(project_id)
+    valid_rid = validate_run_uuid(run_id)
+
+    run_json = get_dam_projects_dir() / valid_pid / "runs" / valid_rid / "run.json"
+    if not run_json.is_file():
+        raise HTTPException(
+            status_code=404,
+            detail=f"ANUGA run '{valid_rid}' not found for project '{valid_pid}'.",
+        )
+
+    try:
+        r_data = json.loads(run_json.read_text(encoding="utf-8"))
+        return DamProjectAnugaRunResponse(**r_data)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to read run record: {str(e)}")
+
+
+def get_dam_project_anuga_run_logs(project_id: str, run_id: str) -> str:
+    """Retrieve sanitized execution logs for a specific ANUGA run."""
+    verify_project_integrity(project_id)
+    valid_pid = validate_project_uuid(project_id)
+    valid_rid = validate_run_uuid(run_id)
+
+    log_file = get_dam_projects_dir() / valid_pid / "runs" / valid_rid / "execution.log"
+    if not log_file.is_file():
+        return "Log file not yet generated or run is still initializing."
+
+    try:
+        raw_logs = log_file.read_text(encoding="utf-8", errors="replace")
+        return sanitize_log_output(raw_logs)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to read log file: {str(e)}")
