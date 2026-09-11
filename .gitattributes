@@ -1,0 +1,12 @@
+# Enforce LF for python, shell, and yaml
+*.py text eol=lf
+*.sh text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.md text eol=lf
+
+# Validation test manifests created with specific line endings
+validation/**/*.json text eol=crlf
+validation/**/*.csv text eol=crlf
+validation/**/*.yml text eol=lf
+validation/**/*.py text eol=lf

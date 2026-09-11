@@ -14,8 +14,17 @@ from fastapi.testclient import TestClient
 from PIL import Image
 
 from app.main import app
+from app.anuga_service import check_anuga_outputs_available
 
 client = TestClient(app)
+
+def check_hidkal_anuga_assets_present(run_id: str) -> bool:
+    """Helper to check if external precomputed Hidkal raster assets are present on disk."""
+    avail, _ = check_anuga_outputs_available(run_id)
+    return avail
+
+HIDKAL_PILOT_PRESENT = check_hidkal_anuga_assets_present("anuga_hidkal_pilot_hypothetical_v1")
+HIDKAL_REFINED_PRESENT = check_hidkal_anuga_assets_present("anuga_hidkal_refined_hypothetical_v1")
 
 
 def test_get_hazard_sources():
@@ -50,8 +59,8 @@ def test_get_hazard_sources():
     assert "depth" in refined["layers"]
 
 
-def test_get_anuga_runs_list_and_detail():
-    """Verify listing ANUGA runs (pilot and refined) and retrieving detailed run metadata with manifest."""
+def test_get_anuga_runs_list():
+    """Verify listing ANUGA runs (pilot and refined) metadata."""
     resp = client.get("/api/anuga/runs")
     assert resp.status_code == 200
     runs = resp.json()
@@ -72,17 +81,27 @@ def test_get_anuga_runs_list_and_detail():
     assert run_refined["mesh_triangles"] == 131351
     assert run_refined["mesh_vertices"] == 65941
 
-    # Get details for refined run
-    detail_resp = client.get(f"/api/anuga/runs/{run_refined['run_id']}")
+
+@pytest.mark.skipif(
+    not HIDKAL_REFINED_PRESENT,
+    reason="Requires external Hidkal ANUGA refined raster bundle; asset not present on disk."
+)
+def test_get_anuga_refined_run_detail():
+    """Verify retrieving detailed run metadata with manifest when external outputs are present."""
+    detail_resp = client.get("/api/anuga/runs/anuga_hidkal_refined_hypothetical_v1")
     assert detail_resp.status_code == 200
     detail = detail_resp.json()
-    assert detail["run_id"] == run_refined["run_id"]
+    assert detail["run_id"] == "anuga_hidkal_refined_hypothetical_v1"
     assert detail["breach_mechanics"]["effective_breach_width_m"] == 200.0
     err_val = detail["volume_conservation"].get("mass_balance_error_relative", detail["volume_conservation"].get("relative_volume_error", 0.0))
     assert err_val < 1e-10
     assert "manifest" in detail
 
 
+@pytest.mark.skipif(
+    not (HIDKAL_PILOT_PRESENT and HIDKAL_REFINED_PRESENT),
+    reason="Requires external Hidkal ANUGA pilot/refined raster bundle; asset not present on disk."
+)
 def test_anuga_raster_metadata_and_legend():
     """Verify metadata and legend endpoints for ANUGA pilot and refined layers."""
     for hazard_source in ["anuga_hidkal_pilot", "anuga_hidkal_refined"]:
@@ -101,6 +120,10 @@ def test_anuga_raster_metadata_and_legend():
             assert len(legend["color_ramp"]) > 0
 
 
+@pytest.mark.skipif(
+    not (HIDKAL_PILOT_PRESENT and HIDKAL_REFINED_PRESENT),
+    reason="Requires external Hidkal ANUGA pilot/refined raster bundle; asset not present on disk."
+)
 def test_anuga_raster_tile_endpoint():
     """Verify XYZ tile rendering for ANUGA pilot and refined rasters with bilinear interpolation."""
     for hazard_source in ["anuga_hidkal_pilot", "anuga_hidkal_refined"]:
@@ -117,7 +140,12 @@ def test_anuga_raster_tile_endpoint():
     assert oob_resp.headers["content-type"] == "image/png"
 
 
+@pytest.mark.skipif(
+    not HIDKAL_REFINED_PRESENT,
+    reason="Requires external Hidkal ANUGA refined raster bundle; asset not present on disk."
+)
 def test_anuga_raster_point_value_with_reprojection():
+
     """Verify point query with coordinate transformation from WGS84 to EPSG:32643 for refined run."""
     # Query point within reservoir area
     resp = client.get("/api/anuga/rasters/depth/value?lon=74.63&lat=16.20&hazard_source=anuga_hidkal_refined")
@@ -152,6 +180,10 @@ def test_anuga_path_traversal_and_invalid_layer_security():
     assert invalid_run.status_code == 404
 
 
+@pytest.mark.skipif(
+    not HIDKAL_PILOT_PRESENT,
+    reason="Requires external Hidkal ANUGA pilot raster bundle; asset not present on disk."
+)
 def test_exposure_screening_with_anuga_pilot_source():
     """Verify exposure analysis with hazard_source='anuga_hidkal_pilot'."""
     resp = client.get("/api/exposure/summary?hazard_source=anuga_hidkal_pilot&threshold=0.10")
@@ -172,6 +204,10 @@ def test_exposure_screening_with_anuga_pilot_source():
     assert props0["screening_threshold"] == 0.10
 
 
+@pytest.mark.skipif(
+    not HIDKAL_REFINED_PRESENT,
+    reason="Requires external Hidkal ANUGA refined raster bundle; asset not present on disk."
+)
 def test_exposure_screening_with_anuga_refined_source():
     """Verify exposure analysis with hazard_source='anuga_hidkal_refined'."""
     # 1. Summary
@@ -194,6 +230,10 @@ def test_exposure_screening_with_anuga_refined_source():
     assert props0["screening_threshold"] == 0.10
 
 
+@pytest.mark.skipif(
+    not HIDKAL_PILOT_PRESENT,
+    reason="Requires external Hidkal ANUGA pilot raster bundle; asset not present on disk."
+)
 def test_damage_scenario_with_anuga_pilot_source():
     """Verify damage estimation propagates baseline pilot ANUGA source and run ID."""
     payload = {
@@ -227,6 +267,10 @@ def test_damage_scenario_with_anuga_pilot_source():
     assert res["screening_threshold"] == 0.10
 
 
+@pytest.mark.skipif(
+    not HIDKAL_REFINED_PRESENT,
+    reason="Requires external Hidkal ANUGA refined raster bundle; asset not present on disk."
+)
 def test_damage_scenario_with_anuga_refined_source():
     """Verify damage estimation propagates refined ANUGA source and run ID."""
     payload = {
@@ -261,6 +305,10 @@ def test_damage_scenario_with_anuga_refined_source():
     assert "hypothetical" in res["disclaimer"].lower()
 
 
+@pytest.mark.skipif(
+    not HIDKAL_PILOT_PRESENT,
+    reason="Requires external Hidkal ANUGA pilot raster bundle; asset not present on disk."
+)
 def test_route_screening_with_anuga_pilot_source():
     """Verify route screening with hazard_source='anuga_hidkal_pilot'."""
     payload = {
@@ -281,6 +329,10 @@ def test_route_screening_with_anuga_pilot_source():
     assert res["screening_threshold"] == 0.10
 
 
+@pytest.mark.skipif(
+    not HIDKAL_REFINED_PRESENT,
+    reason="Requires external Hidkal ANUGA refined raster bundle; asset not present on disk."
+)
 def test_route_screening_with_anuga_refined_source():
     """Verify route screening with hazard_source='anuga_hidkal_refined'."""
     payload = {
@@ -301,6 +353,10 @@ def test_route_screening_with_anuga_refined_source():
     assert res["screening_threshold"] == 0.10
 
 
+@pytest.mark.skipif(
+    not HIDKAL_PILOT_PRESENT,
+    reason="Requires external Hidkal ANUGA pilot raster bundle; asset not present on disk."
+)
 def test_export_with_anuga_pilot_source():
     """Verify export endpoints support hazard_source='anuga_hidkal_pilot'."""
     resp = client.get("/api/export/assets?hazard_source=anuga_hidkal_pilot&threshold=0.10&format=geojson")
@@ -311,6 +367,10 @@ def test_export_with_anuga_pilot_source():
         assert fc["features"][0]["properties"]["hazard_source"] == "anuga_hidkal_pilot"
 
 
+@pytest.mark.skipif(
+    not HIDKAL_REFINED_PRESENT,
+    reason="Requires external Hidkal ANUGA refined raster bundle; asset not present on disk."
+)
 def test_export_with_anuga_refined_source():
     """Verify export endpoints support hazard_source='anuga_hidkal_refined'."""
     resp = client.get("/api/export/assets?hazard_source=anuga_hidkal_refined&threshold=0.10&format=geojson")
@@ -333,6 +393,10 @@ def test_export_with_anuga_refined_source():
     assert post_resp.status_code == 200
 
 
+@pytest.mark.skipif(
+    not HIDKAL_PILOT_PRESENT,
+    reason="Requires external Hidkal ANUGA pilot raster bundle; asset not present on disk."
+)
 def test_png_tile_signature_and_alpha_transparency():
     """Verify PNG tiles have exact PNG signature and RGBA alpha channel."""
     # Active tile over inundation (zoom 11, x 1448, y 930)
@@ -358,6 +422,10 @@ def test_png_tile_signature_and_alpha_transparency():
     assert oob_img.getextrema()[3] == (0, 0)
 
 
+@pytest.mark.skipif(
+    not HIDKAL_REFINED_PRESENT,
+    reason="Requires external Hidkal ANUGA refined raster bundle; asset not present on disk."
+)
 def test_anuga_stored_volume_agreement_within_half_percent():
     """Verify baseline and refined runs have initial stored volumes matching within 0.5%."""
     pilot_resp = client.get("/api/anuga/runs/anuga_hidkal_pilot_hypothetical_v1")
@@ -372,7 +440,12 @@ def test_anuga_stored_volume_agreement_within_half_percent():
     assert pct_diff < 0.5, f"Initial volume difference {pct_diff:.3f}% exceeds 0.5% limit"
 
 
+@pytest.mark.skipif(
+    not HIDKAL_REFINED_PRESENT,
+    reason="Requires external Hidkal ANUGA refined raster bundle; asset not present on disk."
+)
 def test_manifest_validation_for_both_runs(monkeypatch, tmp_path):
+
     """Verify SHA-256 hash manifest verification succeeds for both baseline and refined runs."""
     from app.anuga_service import validate_anuga_manifest, get_anuga_dir
 
@@ -433,6 +506,10 @@ def test_absent_anuga_outputs_handling(monkeypatch, tmp_path):
     assert "/users/" not in err_detail
 
 
+@pytest.mark.skipif(
+    not HIDKAL_PILOT_PRESENT,
+    reason="Requires external Hidkal ANUGA pilot raster bundle; asset not present on disk."
+)
 def test_anuga_pilot_exposure_threshold_reconciliation():
     """Regression test reconciling Phase 16 (29 assets at threshold 0.0) vs Phase 17 (8 assets at threshold 0.10)."""
     # Query at threshold 0.00 (Phase 16 raw wet query)

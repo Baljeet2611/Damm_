@@ -1,0 +1,201 @@
+.health-panel-container {
+  background: rgba(15, 23, 42, 0.75);
+  border: 1px solid rgba(56, 189, 248, 0.25);
+  border-radius: 8px;
+  padding: 0.75rem 1rem;
+  margin-bottom: 1rem;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+}
+
+.health-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 0.5rem;
+}
+
+.health-title {
+  font-size: 0.82rem;
+  font-weight: 700;
+  color: #38bdf8;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.health-summary-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.health-btn-toggle {
+  background: rgba(56, 189, 248, 0.1);
+  border: 1px solid rgba(56, 189, 248, 0.3);
+  color: #7dd3fc;
+  font-size: 0.72rem;
+  padding: 0.2rem 0.5rem;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.health-btn-toggle:hover {
+  background: rgba(56, 189, 248, 0.2);
+  border-color: #38bdf8;
+}
+
+.health-chips-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  gap: 0.4rem;
+}
+
+.health-chip {
+  padding: 0.35rem 0.5rem;
+  border-radius: 5px;
+  font-size: 0.72rem;
+  cursor: pointer;
+  border: 1px solid transparent;
+  transition: all 0.15s ease;
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  background: rgba(30, 41, 59, 0.6);
+}
+
+.health-chip:hover {
+  transform: translateY(-1px);
+  filter: brightness(1.1);
+}
+
+.health-chip-name {
+  font-weight: 600;
+  color: #f1f5f9;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.health-chip-status {
+  font-size: 0.68rem;
+  font-weight: 500;
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+
+.health-chip.status-ready {
+  background: rgba(34, 197, 94, 0.12);
+  border-color: rgba(34, 197, 94, 0.3);
+}
+.health-chip.status-ready .health-chip-status {
+  color: #4ade80;
+}
+
+.health-chip.status-execution_disabled {
+  background: rgba(245, 158, 11, 0.12);
+  border-color: rgba(245, 158, 11, 0.3);
+}
+.health-chip.status-execution_disabled .health-chip-status {
+  color: #fbbf24;
+}
+
+.health-chip.status-available_not_configured {
+  background: rgba(168, 85, 247, 0.12);
+  border-color: rgba(168, 85, 247, 0.3);
+}
+.health-chip.status-available_not_configured .health-chip-status {
+  color: #c084fc;
+}
+
+.health-chip.status-unavailable {
+  background: rgba(100, 116, 139, 0.15);
+  border-color: rgba(100, 116, 139, 0.3);
+}
+.health-chip.status-unavailable .health-chip-status {
+  color: #94a3b8;
+}
+
+.health-chip.status-missing_data {
+  background: rgba(234, 88, 12, 0.12);
+  border-color: rgba(234, 88, 12, 0.3);
+}
+.health-chip.status-missing_data .health-chip-status {
+  color: #fb923c;
+}
+
+.health-chip.status-failed {
+  background: rgba(239, 68, 68, 0.15);
+  border-color: rgba(239, 68, 68, 0.35);
+}
+.health-chip.status-failed .health-chip-status {
+  color: #f87171;
+}
+
+/* Expanded Details Drawer */
+.health-details-drawer {
+  margin-top: 0.6rem;
+  padding-top: 0.6rem;
+  border-top: 1px solid rgba(56, 189, 248, 0.15);
+  animation: fadeIn 0.2s ease;
+}
+
+.health-drawer-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.72rem;
+}
+
+.health-drawer-table th {
+  text-align: left;
+  padding: 0.3rem 0.5rem;
+  color: #94a3b8;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.15);
+  font-weight: 600;
+}
+
+.health-drawer-table td {
+  padding: 0.35rem 0.5rem;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.08);
+  color: #cbd5e1;
+  vertical-align: top;
+}
+
+.health-drawer-table tr:hover td {
+  background: rgba(30, 41, 59, 0.4);
+}
+
+.health-detail-caveat {
+  font-size: 0.68rem;
+  color: #94a3b8;
+  font-style: italic;
+  margin-top: 0.15rem;
+}
+
+.health-detail-env {
+  display: inline-block;
+  font-family: monospace;
+  font-size: 0.68rem;
+  padding: 0.1rem 0.35rem;
+  border-radius: 3px;
+  background: rgba(15, 23, 42, 0.8);
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  color: #38bdf8;
+}
+
+.health-loading {
+  font-size: 0.75rem;
+  color: #94a3b8;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.5rem 0;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: translateY(0); }
+}

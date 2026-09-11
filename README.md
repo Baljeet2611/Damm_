@@ -1,51 +1,97 @@
-# Dam Break Decision Support System (SIH26161)
+# Dam Break Decision Support System (SIH 26161)
 
-## Local Run Instructions
+Automated multi-engine hydrodynamic simulation, satellite cross-validation, and decision-support framework for dam-break inundation screening.
+
+---
+
+## Quick Start (Automated Safe Startup)
+
+To check prerequisites, inspect network ports, and safely launch both the FastAPI backend and Vite frontend dev server:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/start-dev.ps1
+```
+
+- **Frontend Application**: `http://127.0.0.1:5173`
+- **Backend API Documentation**: `http://127.0.0.1:8000/docs`
+- **System Health Status HUD**: `http://127.0.0.1:8000/api/system/health-summary`
+
+---
+
+## Environment Setup & Prerequisites
 
 ### Prerequisites
-- Conda (Miniforge / Anaconda)
-- Node.js (v20+) and npm
+- **Node.js**: v20+ and npm
+- **Conda**: Miniforge or Anaconda on Windows
 
-### 1. Conda Environment Setup
+### 1. Main Application Environment (`sih-app`)
+Contains FastAPI, GDAL, Rasterio, Shapely, PyProj, GeoPandas, and Pytest.
 ```powershell
 conda env create -f environment.yml
 conda activate sih-app
 ```
 
-### 2. Backend Service (FastAPI)
+### 2. Optional ANUGA Solver Environment (`sih-anuga`)
+Required only for executing live 2D hydrodynamic finite-volume SWE simulations locally.
 ```powershell
-cd backend
-pytest -v
-uvicorn app.main:app --reload --port 8000
+conda env create -f environment-anuga.yml
 ```
-- Health Check: `http://localhost:8000/api/health`
-- Datasets Catalog: `http://localhost:8000/api/datasets`
-- Raster Metadata: `http://localhost:8000/api/rasters/{id}/metadata`
-- Raster Point Value: `http://localhost:8000/api/rasters/{id}/value?lon={lon}&lat={lat}`
-- Raster XYZ Tiles: `http://localhost:8000/api/rasters/{id}/tiles/{z}/{x}/{y}.png`
-- Raster Legend & Color Ramp: `http://localhost:8000/api/rasters/{id}/legend`
-- Interactive API Docs: `http://localhost:8000/docs`
-- Vector Assets GeoJSON: `http://localhost:8000/api/assets`
-- Vector Roads GeoJSON: `http://localhost:8000/api/roads`
-- Assets Preliminary Exposure: `http://localhost:8000/api/exposure/assets`
-- Roads Preliminary Exposure: `http://localhost:8000/api/exposure/roads`
-- Exposure Screening Summary: `http://localhost:8000/api/exposure/summary`
-- Damage Scenario Default Config: `http://localhost:8000/api/damage/config`
-- Damage Scenario Estimation: `POST http://localhost:8000/api/damage/estimate`
-- Route Screening: `POST http://localhost:8000/api/routes/screening`
-- Geospatial Layer Export: `GET http://localhost:8000/api/export/{layer}?format={format}&exposure_filter={filter}` (`assets`, `roads`)
-- Screened Route Export: `POST http://localhost:8000/api/export/route` (or `POST http://localhost:8000/api/export`)
-- Scenarios Management: `GET / POST http://localhost:8000/api/scenarios` (Clone, Archive, Update)
-- Simulation Capabilities: `GET http://localhost:8000/api/simulation/capabilities`
-- Delft3D Draft Package Build: `POST http://localhost:8000/api/scenarios/{id}/build-package`
-- Delft3D Draft Package Download: `GET http://localhost:8000/api/scenarios/{id}/download-package`
-- Simulation Execution: `POST http://localhost:8000/api/scenarios/{id}/run` (Gated; requires engine)
-- Simulation Runs History & Logs: `GET http://localhost:8000/api/runs`, `GET http://localhost:8000/api/runs/{run_id}/logs`
-- PySPH Capabilities: `GET http://localhost:8000/api/sph/capabilities`
-- PySPH Package Build & Download: `POST /api/scenarios/{id}/build-sph-package`, `GET /api/scenarios/{id}/download-sph-package`
-- PySPH Simulation Run & Logs: `POST /api/scenarios/{id}/run-sph` (Gated), `GET /api/sph-runs`, `GET /api/sph-runs/{run_id}/logs`
-- Multi-Engine Comparison: `GET /api/comparison/readiness`, `GET /api/comparison/methodology`, `POST /api/comparison/compare`
-- Google Earth Engine Connector: `GET /api/gee/capabilities`, `GET /api/gee/datasets`, `POST /api/gee/export-plan`
+
+> [!NOTE]
+> **Separation of Discovery & Execution Permission (Phase 23)**:
+> The system automatically discovers installed ANUGA interpreters across standard Conda paths. However, solver execution permission remains **strictly disabled by default** (`ENABLE_CUSTOM_ANUGA_EXECUTION=false`) to prevent accidental solver execution.
+> To enable execution during demonstration or development:
+> ```powershell
+> $env:ENABLE_CUSTOM_ANUGA_EXECUTION="true"
+> ```
+
+### 3. Optional Google Earth Engine (GEE)
+The core application runs 100% offline without GEE. When `earthengine-api` or credentials are not configured, the System Health HUD truthfully reports `Available but not configured`, allowing simulation, exposure, and comparison tools to operate without disruption.
+
+---
+
+## System Verification & Smoke Testing
+
+To execute a complete audit of all environments, static analysis, full test suite, and production build:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/verify-system.ps1
+```
+
+To run the dedicated ANUGA real solver engineering smoke test (evolving an ANUGA domain, producing SWW, and validating GeoTIFF postprocessing):
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/run-smoke-tests.ps1
+```
+
+---
+
+## Product Workflow Stages
+
+The application organizes dam safety workflows into 8 logical, user-facing stages:
+
+1. **🌐 Overview**: System Health HUD chips and inventory of registered dam studies.
+2. **🏗️ Study Setup**: Ingest custom terrain DEM GeoTIFFs, define dam location coordinates, and parameterize structural characteristics.
+3. **⚡ Simulation**: Pre-simulation 5-tier readiness assessment, mesh generation parameters, gated ANUGA runner with live execution logs, and hazard rasters (depth, velocity, arrival time).
+4. **🛰️ Satellite Evidence**: Sentinel-1 SAR acquisition timeline, backscatter thresholding, and model vs. observation flood extent comparison.
+5. **⚖️ Model Comparison**: Multi-engine spatial comparison (ANUGA vs. Delft3D FM vs. PySPH) with difference maps, inter-model spread, and metric tables.
+6. **👥 Exposure & Impact**: Mass-conserving population exposure, building footprint intersections, segmented road network disruption, critical facilities screening, and LULC cross-tabulation.
+7. **🎯 Decision Support**: Evacuation corridor accessibility, warning lead-time timelines, impact severity matrix, and executive briefing downloads.
+8. **📜 Technical / Provenance**: Cryptographic manifest SHA-256 validation, vulnerability curve provenance (Huizinga et al., 2017 EUR 28552 EN; `unverified_reference`), and scientific governing assumptions.
+
+---
+
+## API Reference Summary
+
+- System Health Summary: `GET http://localhost:8000/api/system/health-summary`
+- Datasets Catalog: `GET http://localhost:8000/api/datasets`
+- Dam Projects Management: `GET / POST http://localhost:8000/api/dam-projects`
+- Project Simulation Readiness: `GET http://localhost:8000/api/dam-projects/{id}/readiness`
+- ANUGA Capabilities & Runs: `GET / POST http://localhost:8000/api/dam-projects/{id}/anuga/capabilities`, `runs`
+- Earth Observation Studio: `GET / POST http://localhost:8000/api/dam-projects/{id}/earth-observation/runs`
+- Model Comparison Studio: `GET / POST http://localhost:8000/api/dam-projects/{id}/model-comparison/runs`
+- Exposure & Vulnerability: `GET / POST http://localhost:8000/api/dam-projects/{id}/exposure/runs`
+
 
 ### Registered Dataset IDs
 - `dem` -> `data/raw/data_hidkal/hidkal_dem.tif` (Float32 DEM)
@@ -85,6 +131,82 @@ uvicorn app.main:app --reload --port 8000
   - Exposure Screening Differences ($h \ge 0.10\text{ m}$): Assets exposed = **8** (Baseline) vs **62** (Refined), $\Delta = +54$; Screening-positive road segments (depth $\ge 0.10$ assumed metres) = **108** (Baseline) vs **128** (Refined), $\Delta = +20$. (At unthresholded $h > 0.00\text{ m}$, baseline exposes 29 assets due to 21 sub-threshold shallow assets with $0.02\text{--}0.09\text{ m}$ depth).
   - Full reproducible toolchain (`validation/anuga_hidkal_refined/run_anuga_refined.py`, `postprocess_refined.py`), summary (`pilot_summary.json`), GeoTIFF exports, and cryptographic manifest (`manifest.json`).
 - **Hazard Source Switcher**: Frontend UI and all backend APIs seamlessly switch between `sample_hidkal`, `anuga_hidkal_pilot`, and `anuga_hidkal_refined` with complete state purging and provenance inspection.
+
+### Generalized Dam / River Ingestion (Phase 18)
+- **Minimal Generalized Onboarding**:
+  - Ingestion of arbitrary dams using only `project_name`, `dam_name`, `latitude`, `longitude` (WGS84 decimal degrees), and a DEM GeoTIFF (`dem_file`).
+  - Strict decoupling from vector requirements: Dam axis boundary polyline is now optional. When omitted, the system generates a synthesized dam point marker and allows regional terrain screening.
+  - Optional Engineering Parameters: Accepts `dam_height`, `crest_elevation`, `pool_elevation`, and `manning_n`, automatically validating physical feasibility (`crest_elevation > pool_elevation`) and computing `freeboard`.
+  - Automatic Point Sampling: Interrogates DEM elevation at the dam coordinates upon upload and records sampled elevation.
+  - Pre-Simulation Readiness Assessment: Detailed checklist endpoint (`GET /api/dam-projects/{id}/readiness`) clearly delineates whether a project is ready for basic terrain/hazard screening vs. what components are required before ANUGA hydrodynamic simulation can run (e.g., dam axis geometry, reservoir stage-storage, simulation boundary, downstream Manning's n).
+  - Dynamic DEM Legend & Value Probe: Interactive elevation color ramp endpoint (`GET /api/dam-projects/{id}/dem/legend`), dam marker GeoJSON endpoint (`GET /api/dam-projects/{id}/geometry/dam-marker`), and point sampling endpoint (`GET /api/dam-projects/{id}/dem/value`).
+  - Strict Scientific Integrity: All newly ingested projects enforce `scientific_status = "validated_unverified"` and `scientifically_verified = false`.
+  - Frontend Onboarding Studio: Guided tabbed wizard with interactive map preview, dam marker pin, readiness status badges, and project inspection list.
+
+### Live ANUGA Execution for Generalized Dam Projects (Phase 19)
+- **Multi-Environment Capability Discovery**:
+  - Gated discovery endpoint (`GET /api/dam-projects/anuga/capabilities`) detecting active Python executable, ANUGA importability, version provenance, and execution enable/disable state (`ENABLE_CUSTOM_ANUGA_EXECUTION`).
+  - Strict absence of single-developer hardcoded paths; cleanly probes host environments without crashes.
+- **5-Tier Progressive Simulation Readiness Model**:
+  - `GET /api/dam-projects/{id}/readiness` provides full `tier_breakdown`:
+    1. **Data Tier** (`data_ready`): DEM raster valid, single-band, valid coordinate bounds, dam point location.
+    2. **Geometry Tier** (`geometry_ready`): Dam axis line, downstream corridor / domain boundary, downstream outlet point.
+    3. **Hydraulic Tier** (`hydraulic_ready`): Upstream reservoir boundary, initial stage pool elevation, breach location & dimensions, downstream Manning's n.
+    4. **Solver Tier** (`solver_ready`): Target mesh resolution, duration, timestep, solver numerical stability parameters.
+    5. **Simulation Tier** (`simulation_ready`): Composite verification requiring Tiers 1-4 + active ANUGA engine availability.
+- **Terrain-Heuristic Hydraulic Assist & Scientific Integrity**:
+  - DEM slope gradient aspect derivation at dam marker location computes candidate dam axis, breach cut, downstream corridor, outlet point, and upstream reservoir boundary (`POST /api/dam-projects/{id}/heuristic-assist`).
+  - Topological safety guarantee: reservoir boundary is strictly contained within the model domain polygon and touches the dam axis.
+  - Strict scientific tagging: All inferred parameters are tagged `source="terrain_heuristic"`, `scientifically_verified=false`, and `confidence="low_unverified"`.
+  - Safeguarded saving: `POST /api/dam-projects/{id}/simulation-inputs` enforces `accept_heuristic_inputs=True` and updates `project.json` and cryptographic `manifest.json`.
+- **Reproducible ANUGA Package Generator**:
+  - Generates downloadable ZIP archive (`GET /api/dam-projects/{id}/anuga/download-package`) containing `run_anuga_project.py`, `postprocess_project.py`, cryptographic parameter snapshot `run_manifest.json`, standalone `environment.yml`, input geometries, and scientific caveats in `README_REQUIREMENTS.txt`.
+- **7-State Execution Lifecycle & Solver Gating**:
+  - Full execution state machine: `queued`, `preparing`, `running`, `postprocessing`, `completed`, `failed`, `cancelled`, `timed_out`, `interrupted`.
+  - Gated execution: Requires user acknowledgment (`acknowledge_hypothetical_simulation=True`). Returns HTTP 403 `custom_anuga_execution_disabled` when host environment lacks ANUGA, preventing fabricated outputs.
+  - Live log streaming (`GET /api/dam-projects/{id}/anuga/runs/{run_id}/logs`) and run cancellation (`POST /api/dam-projects/{id}/anuga/runs/{run_id}/cancel`).
+- **Rigorous Output Validation**:
+  - `validate_sww_file` verifies NetCDF structure, minimum 2 timesteps, finite values, and non-zero hydrodynamic depth (`max(stage - elevation) > 0.0001 m`).
+  - Generates verified peak depth, velocity, and arrival GeoTIFFs, with outputs inspection via `GET /api/dam-projects/{id}/anuga/runs/{run_id}/outputs`.
+- **Frontend Decision-Support UI**:
+  - `DamProjectAnugaReadiness.tsx` integration with 5-Tier Readiness badges HUD, Terrain-Heuristic Assist accordion, runtime parameter controls, cancellation controls, and hazard layer viewer.
+
+### Live Google Earth Engine & Remote-Sensing Integration (Phase 20)
+- **Zero-Fabrication Fallback & Capability Detection**:
+  - Dynamic discovery via `GET /api/gee/capabilities` inspecting ADC credentials and `GEE_PROJECT_ID`.
+  - Truthful degradation when unauthenticated or GEE is missing: returns status `gee_unavailable`, `authentication_required`, or `project_not_configured` without fabricating fake SAR scenes, fake permanent water masks, or fake rainfall accumulation.
+- **Project-Scoped AOI Derivation**:
+  - `GET /api/dam-projects/{id}/earth-observation/aoi?buffer_meters=` extracts AOI bounds and polygon from model domain or DEM extent with configurable UTM metric buffer.
+- **Sentinel-1 SAR Flood Inundation & Configurable Heuristics**:
+  - Configurable heuristics for thresholding: `change_threshold_db` (-3.0 dB default) and `post_event_water_threshold_db` (-15.0 dB default).
+  - Provenance strictly tagged with `threshold_source="configurable_heuristic"`, orbit metadata, and temporal windows.
+  - Pixels explicitly labeled `candidate_inundation` (never confirmed flood).
+- **JRC Global Surface Water & GPM IMERG Rainfall**:
+  - Differentiates permanent water bodies from flood candidate pixels using JRC occurrence masks.
+  - Ingests NASA GPM IMERG rainfall accumulation and time series for hydrological context.
+- **Observed vs. Modelled Comparison Engine**:
+  - Evaluates spatial overlap, union, model-only, and satellite-only areas between ANUGA 2D hydrodynamic simulation rasters (`maximum_depth.tif`) and candidate inundation masks.
+  - Calculates Intersection over Union ($IoU$ / Jaccard Index), strictly labeled `"model-observation spatial agreement"` (explicitly NOT labeled "simulation accuracy").
+  - Configurable `max_observation_time_delta_hours` with temporal validity metadata and warning logs.
+- **Frontend Earth Observation Studio**:
+  - Interactive `EarthObservationPanel.tsx` embedded in project cards with live GEE status HUD, AOI buffer controls, query builder, run history with log console, and comparison KPI card with scientific uncertainty caveats.
+
+### Multi-Engine Spatial Hydrodynamic Comparison (Phase 21)
+- **Normalized Output Contract**: Standardizes solver outputs across ANUGA, Delft3D FM, and PySPH, preserving native/analysis CRS, layer hashes, and scientific status.
+- **Projected Metric Grid Analysis**: Area calculations computed exclusively on projected metric grids (e.g. UTM) with common valid analysis masks.
+- **Spatial Agreement & Spread Diagnostic**: Evaluates pairwise $IoU$, depth MAE/RMSE, velocity deltas, arrival deltas, and multi-model spread.
+- **Frontend Studio**: `ModelComparisonPanel.tsx` embedded in project cards with capability discovery HUD and diverging difference tile overlays.
+
+### Population, Infrastructure Exposure & Vulnerability Assessment (Phase 22)
+- **Hazard vs. Exposure vs. Vulnerability**: Strictly maintains scientific distinction (`exposed population != casualties`; `inundated building != destroyed`; `flooded road != impassable`).
+- **Population Raster Semantics & Mass Conservation**: Supports `persons_per_cell` (mass conserved without bilinear distortion) and `persons_per_sq_km` (area integrated); categorized into configurable depth bands.
+- **Building Exposure**: True polygon raster zonal overlay deriving max/mean depth, max velocity, earliest arrival, and flooded footprint area; interior point sampling fallback.
+- **Road Exposure**: Metric length calculation via spatial segmentation; labeled `"potentially affected road segment"` (`road_passability_available = false` unless documented threshold exists).
+- **Critical Infrastructure**: Normalized mapping based strictly on confirmed OSM tags; ambiguous features strictly marked `normalized_category = "unknown"`.
+- **Categorical LULC**: Nearest-neighbour resampling; preserves unmapped classes as `unknown / class_<value>`.
+- **Vulnerability Curves & Zero Monetary Fabrication**: Evaluates relative damage ratios (0.0 to 1.0) using documented JRC flood curves; returns `monetary_damage = null` without local valuation data.
+- **Decision-Support Priority Index & Hotspots**: Multi-criteria priority score with visible heuristic weights; transparent hotspot flagging (`high_depth_settlement`, `critical_asset_flooded`, etc.).
+- **Frontend Studio**: `ExposureVulnerabilityPanel.tsx` with honest dataset capability matrix, KPI metrics, depth band breakdown, and MapLibre layer toggles.
 
 ### Delft3D FM Integration & Gated Execution Boundary (Phase 11)
 - Capability discovery: Detects local HydroMT-Delft3D FM and D-Flow FM solver binary availability.

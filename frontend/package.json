@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
-    "lint": "oxlint",
+    "lint": "oxlint -D correctness -D suspicious -A react/react-in-jsx-scope",
     "preview": "vite preview"
   },
   "dependencies": {

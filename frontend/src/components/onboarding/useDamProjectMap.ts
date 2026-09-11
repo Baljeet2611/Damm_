@@ -7,19 +7,25 @@ import {
   getDamProjectReservoirGeometry,
   getDamProjectBreachGeometry,
   getDamProjectAnugaLayerTileUrl,
+  fetchDamProjectDamMarkerGeometry,
 } from '../../api/damProjects'
 
 export function useDamProjectMap(mapRef: React.MutableRefObject<MapLibreMap | null>) {
   const breachMarkerRef = useRef<Marker | null>(null)
+  const damMarkerRef = useRef<Marker | null>(null)
 
   const clearDamProjectMap = useCallback(() => {
     const map = mapRef.current
     if (!map) return
 
-    // Remove breach marker
+    // Remove markers
     if (breachMarkerRef.current) {
       breachMarkerRef.current.remove()
       breachMarkerRef.current = null
+    }
+    if (damMarkerRef.current) {
+      damMarkerRef.current.remove()
+      damMarkerRef.current = null
     }
 
     // Remove layers
@@ -193,6 +199,68 @@ export function useDamProjectMap(mapRef: React.MutableRefObject<MapLibreMap | nu
         }
       } catch {
         // Breach point optional
+      }
+
+      // 4b. Fetch and add Dam Location Marker (Phase 18 Generalized Point)
+      try {
+        const damMarkerGeo = await fetchDamProjectDamMarkerGeometry(projectId)
+        if (damMarkerGeo && damMarkerGeo.features && damMarkerGeo.features.length > 0) {
+          const pt = damMarkerGeo.features[0]
+          const coords = pt.geometry.coordinates
+          const props = pt.properties || {}
+
+          const el = document.createElement('div')
+          el.className = 'custom-dam-location-marker'
+          el.innerHTML = `
+            <div style="
+              background: #0284c7;
+              color: #ffffff;
+              font-size: 11px;
+              font-weight: 700;
+              padding: 3px 8px;
+              border-radius: 12px;
+              border: 2px solid #ffffff;
+              box-shadow: 0 0 12px rgba(2, 132, 199, 0.8);
+              display: flex;
+              align-items: center;
+              gap: 4px;
+              cursor: pointer;
+              white-space: nowrap;
+            ">
+              <span>📍 ${props.dam_name || 'Dam Location'}</span>
+            </div>
+          `
+
+          const elevationInfo = props.elevation_at_point != null
+            ? `<p style="margin: 4px 0 0;"><strong>DEM Elevation:</strong> ${Number(props.elevation_at_point).toFixed(1)} m</p>`
+            : ''
+
+          const popupHtml = `
+            <div style="color: #0f172a; font-size: 12px; padding: 4px;">
+              <strong style="color: #0284c7;">📍 ${props.dam_name || 'Dam Location'}</strong>
+              <p style="margin: 4px 0 0; color: #475569;">
+                <strong>Coordinates:</strong> ${Number(coords[1]).toFixed(5)}°N, ${Number(coords[0]).toFixed(5)}°E<br/>
+                <em>User-declared point location</em>
+              </p>
+              ${elevationInfo}
+            </div>
+          `
+
+          const marker = new maplibregl.Marker({ element: el, anchor: 'bottom' })
+            .setLngLat([coords[0], coords[1]])
+            .setPopup(new maplibregl.Popup({ offset: 15 }).setHTML(popupHtml))
+            .addTo(map)
+
+          damMarkerRef.current = marker
+
+          // If project bounds are in projected coordinates (e.g. > 180), center on the WGS84 point
+          const b = 'bounds' in project ? project.bounds : project.raster_metadata?.bounds
+          if (!b || b.left < -180 || b.right > 180 || b.bottom < -90 || b.top > 90) {
+            map.flyTo({ center: [coords[0], coords[1]], zoom: 12 })
+          }
+        }
+      } catch {
+        // Dam marker optional
       }
 
       // 5. Fit Map to Project Bounds

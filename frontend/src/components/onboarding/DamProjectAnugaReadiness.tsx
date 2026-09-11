@@ -8,6 +8,8 @@ import type {
   DamProjectAnugaPointValueResponse,
   DamProjectSummary,
   DamProjectDetailResponse,
+  DamProjectReadinessResponse,
+  HeuristicAssistResponse,
 } from '../../types/damProjects'
 import {
   runAnugaPreflight,
@@ -21,6 +23,10 @@ import {
   fetchDamProjectAnugaResults,
   fetchDamProjectAnugaLayerLegend,
   fetchDamProjectAnugaLayerPointValue,
+  fetchDamProjectReadiness,
+  fetchTerrainHeuristicAssist,
+  saveProjectSimulationInputs,
+  cancelDamProjectAnugaRun,
 } from '../../api/damProjects'
 
 interface DamProjectAnugaReadinessProps {
@@ -41,6 +47,25 @@ export const DamProjectAnugaReadiness: React.FC<DamProjectAnugaReadinessProps> =
   const [buildingPackage, setBuildingPackage] = useState<boolean>(false)
   const [packageResult, setPackageResult] = useState<DamProjectAnugaPackageResponse | null>(null)
   const [packageError, setPackageError] = useState<string | null>(null)
+
+  // Phase 19: 5-Tier Readiness State
+  const [readiness, setReadiness] = useState<DamProjectReadinessResponse | null>(null)
+  const [loadingReadiness, setLoadingReadiness] = useState<boolean>(false)
+
+  // Phase 19: Heuristic Assist State
+  const [showHeuristics, setShowHeuristics] = useState<boolean>(false)
+  const [computingHeuristic, setComputingHeuristic] = useState<boolean>(false)
+  const [heuristicResult, setHeuristicResult] = useState<HeuristicAssistResponse | null>(null)
+  const [heuristicError, setHeuristicError] = useState<string | null>(null)
+  const [ackHeuristic, setAckHeuristic] = useState<boolean>(false)
+  const [applyingHeuristic, setApplyingHeuristic] = useState<boolean>(false)
+  const [heuristicSuccess, setHeuristicSuccess] = useState<string | null>(null)
+
+  // Phase 19: Simulation Configuration Inputs
+  const [simDuration, setSimDuration] = useState<string>('3600')
+  const [simInterval, setSimInterval] = useState<string>('60')
+  const [simResolution, setSimResolution] = useState<string>('')
+  const [cancellingRun, setCancellingRun] = useState<boolean>(false)
 
   // Execution state (Stage 3)
   const [capabilities, setCapabilities] = useState<DamProjectAnugaCapabilitiesResponse | null>(null)
@@ -67,10 +92,26 @@ export const DamProjectAnugaReadiness: React.FC<DamProjectAnugaReadinessProps> =
   const [pointError, setPointError] = useState<string | null>(null)
   const [showManifestDetails, setShowManifestDetails] = useState<boolean>(false)
 
+  const refreshReadiness = async () => {
+    setLoadingReadiness(true)
+    try {
+      const res = await fetchDamProjectReadiness(project.project_id)
+      setReadiness(res)
+    } catch {
+      // ignore
+    } finally {
+      setLoadingReadiness(false)
+    }
+  }
+
   useEffect(() => {
     fetchDamProjectAnugaCapabilities(project.project_id)
       .then(caps => setCapabilities(caps))
       .catch(() => setCapabilities(null))
+
+    fetchDamProjectReadiness(project.project_id)
+      .then(r => setReadiness(r))
+      .catch(() => setReadiness(null))
 
     fetchDamProjectAnugaRuns(project.project_id)
       .then(runs => {
@@ -93,14 +134,26 @@ export const DamProjectAnugaReadiness: React.FC<DamProjectAnugaReadinessProps> =
   }, [project.project_id])
 
   useEffect(() => {
-    if (activeRun && (activeRun.status === 'queued' || activeRun.status === 'running')) {
+    const isRunning = activeRun && (
+      activeRun.status === 'queued' ||
+      activeRun.status === 'preparing' ||
+      activeRun.status === 'running' ||
+      activeRun.status === 'postprocessing'
+    )
+    if (isRunning) {
       if (!pollingTimerRef.current) {
         pollingTimerRef.current = window.setInterval(async () => {
           try {
             const updated = await fetchDamProjectAnugaRuns(project.project_id)
             if (updated && updated.length > 0) {
               setActiveRun(updated[0])
-              if (updated[0].status !== 'queued' && updated[0].status !== 'running') {
+              const stillRunning = (
+                updated[0].status === 'queued' ||
+                updated[0].status === 'preparing' ||
+                updated[0].status === 'running' ||
+                updated[0].status === 'postprocessing'
+              )
+              if (!stillRunning) {
                 if (pollingTimerRef.current) {
                   clearInterval(pollingTimerRef.current)
                   pollingTimerRef.current = null
@@ -166,6 +219,56 @@ export const DamProjectAnugaReadiness: React.FC<DamProjectAnugaReadinessProps> =
     }
   }
 
+  const handleComputeHeuristic = async () => {
+    setComputingHeuristic(true)
+    setHeuristicError(null)
+    setHeuristicResult(null)
+    setHeuristicSuccess(null)
+    try {
+      const res = await fetchTerrainHeuristicAssist(project.project_id)
+      setHeuristicResult(res)
+    } catch (err: any) {
+      setHeuristicError(err.message || 'Heuristic assist calculation failed.')
+    } finally {
+      setComputingHeuristic(false)
+    }
+  }
+
+  const handleApplyHeuristic = async () => {
+    if (!heuristicResult || !ackHeuristic) return
+    setApplyingHeuristic(true)
+    setHeuristicError(null)
+    try {
+      await saveProjectSimulationInputs(project.project_id, {
+        dam_axis_geometry: heuristicResult.suggested_dam_axis,
+        reservoir_geometry: heuristicResult.suggested_reservoir_boundary,
+        model_domain_geometry: heuristicResult.suggested_model_domain,
+        downstream_outlet_geometry: heuristicResult.suggested_outlet_boundary,
+        dam_crest_elevation: heuristicResult.estimated_crest_elevation,
+        accept_heuristic_inputs: true,
+      })
+      setHeuristicSuccess('✅ Heuristic geometries applied to project inputs. Readiness re-evaluated.')
+      await refreshReadiness()
+    } catch (err: any) {
+      setHeuristicError(err.message || 'Failed to apply heuristic inputs.')
+    } finally {
+      setApplyingHeuristic(false)
+    }
+  }
+
+  const handleCancelRun = async () => {
+    if (!activeRun) return
+    setCancellingRun(true)
+    try {
+      const res = await cancelDamProjectAnugaRun(project.project_id, activeRun.run_id)
+      setActiveRun(res)
+    } catch (err: any) {
+      setExecutionError(err.message || 'Failed to cancel simulation run.')
+    } finally {
+      setCancellingRun(false)
+    }
+  }
+
   const handleExecuteRun = async () => {
     if (!ackHypothetical) return
     setExecutingRun(true)
@@ -173,6 +276,9 @@ export const DamProjectAnugaReadiness: React.FC<DamProjectAnugaReadinessProps> =
     try {
       const res = await executeDamProjectAnugaRun(project.project_id, {
         acknowledge_hypothetical_unverified: true,
+        simulation_duration_s: simDuration ? parseFloat(simDuration) : undefined,
+        output_interval_s: simInterval ? parseFloat(simInterval) : undefined,
+        target_mesh_resolution_m: simResolution ? parseFloat(simResolution) : undefined,
       })
       setActiveRun(res)
     } catch (err: any) {
@@ -259,6 +365,165 @@ export const DamProjectAnugaReadiness: React.FC<DamProjectAnugaReadinessProps> =
       <p className="readiness-intro">
         Assess spatial boundaries, physical water heads, and numerical mesh readiness before generating a reproducible ANUGA package.
       </p>
+
+      {/* 5-Tier Simulation Readiness Badges */}
+      <div className="preflight-report-card" style={{ marginBottom: '1rem' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
+          <strong style={{ fontSize: '0.85rem' }}>📊 5-Tier Simulation Readiness</strong>
+          <button
+            type="button"
+            onClick={refreshReadiness}
+            disabled={loadingReadiness}
+            style={{ background: 'none', border: 'none', color: '#38bdf8', fontSize: '0.72rem', cursor: 'pointer' }}
+          >
+            {loadingReadiness ? 'Refreshing...' : '🔄 Refresh Readiness'}
+          </button>
+        </div>
+
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))', gap: '0.4rem', fontSize: '0.72rem' }}>
+          <div style={{ background: '#0f172a', padding: '0.4rem', borderRadius: '4px', borderLeft: `3px solid ${readiness?.data_ready ? '#10b981' : '#f59e0b'}` }}>
+            <div style={{ color: '#94a3b8' }}>Tier 1: Data</div>
+            <div style={{ fontWeight: 600, color: readiness?.data_ready ? '#10b981' : '#f59e0b' }}>
+              {readiness?.data_ready ? '✅ Complete' : '⚠️ Missing'}
+            </div>
+          </div>
+          <div style={{ background: '#0f172a', padding: '0.4rem', borderRadius: '4px', borderLeft: `3px solid ${readiness?.geometry_ready ? '#10b981' : '#f59e0b'}` }}>
+            <div style={{ color: '#94a3b8' }}>Tier 2: Geometry</div>
+            <div style={{ fontWeight: 600, color: readiness?.geometry_ready ? '#10b981' : '#f59e0b' }}>
+              {readiness?.geometry_ready ? '✅ Defined' : '⚠️ Incomplete'}
+            </div>
+          </div>
+          <div style={{ background: '#0f172a', padding: '0.4rem', borderRadius: '4px', borderLeft: `3px solid ${readiness?.hydraulic_ready ? '#10b981' : '#f59e0b'}` }}>
+            <div style={{ color: '#94a3b8' }}>Tier 3: Hydraulic</div>
+            <div style={{ fontWeight: 600, color: readiness?.hydraulic_ready ? '#10b981' : '#f59e0b' }}>
+              {readiness?.hydraulic_ready ? '✅ Parameters Set' : '⚠️ Missing'}
+            </div>
+          </div>
+          <div style={{ background: '#0f172a', padding: '0.4rem', borderRadius: '4px', borderLeft: `3px solid ${readiness?.solver_ready ? '#10b981' : '#ef4444'}` }}>
+            <div style={{ color: '#94a3b8' }}>Tier 4: Solver</div>
+            <div style={{ fontWeight: 600, color: readiness?.solver_ready ? '#10b981' : '#ef4444' }}>
+              {readiness?.solver_ready ? '✅ Installed' : '❌ Unavailable'}
+            </div>
+          </div>
+          <div style={{ background: '#0f172a', padding: '0.4rem', borderRadius: '4px', borderLeft: `3px solid ${readiness?.simulation_ready ? '#10b981' : '#64748b'}` }}>
+            <div style={{ color: '#94a3b8' }}>Tier 5: Simulation</div>
+            <div style={{ fontWeight: 600, color: readiness?.simulation_ready ? '#10b981' : '#94a3b8' }}>
+              {readiness?.simulation_ready ? '🚀 Ready' : '⏳ Gated'}
+            </div>
+          </div>
+        </div>
+
+        {readiness && readiness.missing_requirements && readiness.missing_requirements.length > 0 && (
+          <div style={{ marginTop: '0.5rem', fontSize: '0.72rem', color: '#f59e0b' }}>
+            <span>Pending Requirements: </span>
+            <span className="font-mono">{readiness.missing_requirements.join(', ')}</span>
+          </div>
+        )}
+      </div>
+
+      {/* Terrain Heuristic Assist Panel */}
+      <div className="preflight-report-card" style={{ marginBottom: '1rem', background: '#1e293b' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <div>
+            <strong style={{ fontSize: '0.85rem' }}>🧭 Terrain-Heuristic Hydraulic Assist</strong>
+            <span className="legend-tag status-tag-unverified" style={{ marginLeft: '0.5rem' }}>HEURISTIC UNVERIFIED</span>
+          </div>
+          <button
+            type="button"
+            onClick={() => setShowHeuristics(!showHeuristics)}
+            style={{ background: 'none', border: 'none', color: '#38bdf8', fontSize: '0.72rem', cursor: 'pointer' }}
+          >
+            {showHeuristics ? 'Collapse' : 'Expand Assist'}
+          </button>
+        </div>
+
+        {showHeuristics && (
+          <div style={{ marginTop: '0.6rem' }}>
+            <p style={{ fontSize: '0.74rem', color: '#94a3b8', margin: '0 0 0.5rem 0' }}>
+              Synthesizes candidate dam axis, breach alignment, downstream model domain corridor, and reservoir polygon from DEM slope aspect analysis.
+            </p>
+
+            <button
+              type="button"
+              className="btn-preflight"
+              onClick={handleComputeHeuristic}
+              disabled={computingHeuristic}
+              style={{ padding: '0.3rem 0.6rem', fontSize: '0.75rem' }}
+            >
+              {computingHeuristic ? 'Analyzing DEM Slope Gradient...' : '🔍 Analyze DEM & Derive Candidate Geometries'}
+            </button>
+
+            {heuristicError && (
+              <div className="damage-error-box font-mono" style={{ marginTop: '0.4rem' }}>
+                ⛔ {heuristicError}
+              </div>
+            )}
+
+            {heuristicSuccess && (
+              <div className="val-status-banner success" style={{ marginTop: '0.4rem', fontSize: '0.75rem' }}>
+                {heuristicSuccess}
+              </div>
+            )}
+
+            {heuristicResult && (
+              <div style={{ marginTop: '0.6rem', background: '#0f172a', padding: '0.6rem', borderRadius: '4px' }}>
+                <div className="val-disclaimer-box font-mono" style={{ fontSize: '0.7rem', margin: '0 0 0.5rem 0', borderColor: '#f59e0b', color: '#fbbf24' }}>
+                  ⚠️ <strong>SCIENTIFIC CAVEAT:</strong> {heuristicResult.caveats.join(' ')}
+                </div>
+
+                <div className="val-metadata-grid font-mono" style={{ fontSize: '0.72rem' }}>
+                  <div className="val-meta-item">
+                    <span className="val-meta-label">Downstream Bearing</span>
+                    <span className="val-meta-value">{heuristicResult.downstream_bearing_deg}° ({heuristicResult.downstream_direction})</span>
+                  </div>
+                  <div className="val-meta-item">
+                    <span className="val-meta-label">Slope Gradient</span>
+                    <span className="val-meta-value">{(heuristicResult.slope_gradient * 100).toFixed(2)}%</span>
+                  </div>
+                  <div className="val-meta-item">
+                    <span className="val-meta-label">Dam Point Elevation</span>
+                    <span className="val-meta-value">{heuristicResult.dam_point_elevation != null ? `${heuristicResult.dam_point_elevation.toFixed(1)} m` : 'N/A'}</span>
+                  </div>
+                  <div className="val-meta-item">
+                    <span className="val-meta-label">Estimated Crest</span>
+                    <span className="val-meta-value">{heuristicResult.estimated_crest_elevation != null ? `${heuristicResult.estimated_crest_elevation.toFixed(1)} m` : 'N/A'}</span>
+                  </div>
+                </div>
+
+                <div style={{ marginTop: '0.6rem' }}>
+                  <label style={{ display: 'flex', alignItems: 'flex-start', gap: '0.4rem', fontSize: '0.75rem', cursor: 'pointer', color: '#fbbf24' }}>
+                    <input
+                      type="checkbox"
+                      checked={ackHeuristic}
+                      onChange={e => setAckHeuristic(e.target.checked)}
+                      style={{ marginTop: '2px' }}
+                    />
+                    <span>
+                      I confirm and accept using these terrain-derived heuristic inputs for simulation setup (scientifically unverified).
+                    </span>
+                  </label>
+                </div>
+
+                <div style={{ marginTop: '0.5rem' }}>
+                  <button
+                    type="button"
+                    className="btn-build-package"
+                    onClick={handleApplyHeuristic}
+                    disabled={!ackHeuristic || applyingHeuristic}
+                    style={{
+                      padding: '0.3rem 0.7rem',
+                      fontSize: '0.75rem',
+                      backgroundColor: ackHeuristic ? '#0284c7' : '#475569',
+                    }}
+                  >
+                    {applyingHeuristic ? 'Applying Geometries...' : '💾 Apply Heuristics to Project Inputs'}
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
 
       <div className="readiness-actions-row">
         <button
@@ -478,6 +743,41 @@ export const DamProjectAnugaReadiness: React.FC<DamProjectAnugaReadinessProps> =
           </label>
         </div>
 
+        {/* Phase 19: Runtime Parameters */}
+        <div style={{ display: 'flex', gap: '0.6rem', flexWrap: 'wrap', margin: '0.5rem 0' }}>
+          <label style={{ fontSize: '0.72rem', color: '#94a3b8', display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
+            Duration (s):
+            <input
+              type="number"
+              value={simDuration}
+              onChange={e => setSimDuration(e.target.value)}
+              className="point-probe-input"
+              style={{ width: '70px' }}
+            />
+          </label>
+          <label style={{ fontSize: '0.72rem', color: '#94a3b8', display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
+            Interval (s):
+            <input
+              type="number"
+              value={simInterval}
+              onChange={e => setSimInterval(e.target.value)}
+              className="point-probe-input"
+              style={{ width: '60px' }}
+            />
+          </label>
+          <label style={{ fontSize: '0.72rem', color: '#94a3b8', display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
+            Target Res (m):
+            <input
+              type="number"
+              value={simResolution}
+              placeholder="auto"
+              onChange={e => setSimResolution(e.target.value)}
+              className="point-probe-input"
+              style={{ width: '60px' }}
+            />
+          </label>
+        </div>
+
         <div style={{ marginTop: '0.6rem', display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
           <button
             className="btn-build-package"
@@ -521,13 +821,16 @@ export const DamProjectAnugaReadiness: React.FC<DamProjectAnugaReadinessProps> =
         {/* Active / Latest Run Status */}
         {activeRun && (
           <div className="preflight-report-card" style={{ marginTop: '0.8rem' }}>
-            <div className={`val-status-banner ${activeRun.status === 'completed' ? 'success' : activeRun.status === 'failed' || activeRun.status === 'timed_out' || activeRun.status === 'interrupted' ? 'failure' : 'running'}`}>
+            <div className={`val-status-banner ${activeRun.status === 'completed' ? 'success' : activeRun.status === 'failed' || activeRun.status === 'timed_out' || activeRun.status === 'interrupted' || activeRun.status === 'cancelled' ? 'failure' : 'running'}`}>
               <span>
                 {activeRun.status === 'completed' && '✅ Simulation Completed Successfully'}
                 {activeRun.status === 'failed' && '❌ Simulation Failed'}
+                {activeRun.status === 'cancelled' && '🛑 Simulation Cancelled by User'}
                 {activeRun.status === 'timed_out' && '⏱️ Simulation Timed Out'}
                 {activeRun.status === 'interrupted' && '⚠️ Simulation Interrupted (Server restart / terminated)'}
                 {activeRun.status === 'running' && '⏳ Simulation Running in Background...'}
+                {activeRun.status === 'preparing' && '⚙️ Preparing Simulation Runtime Workspace...'}
+                {activeRun.status === 'postprocessing' && '⚡ Automatic Postprocessing in Progress...'}
                 {activeRun.status === 'queued' && '🕒 Simulation Queued in Worker...'}
               </span>
               <span className="legend-tag">{activeRun.status.toUpperCase()}</span>
@@ -556,7 +859,7 @@ export const DamProjectAnugaReadiness: React.FC<DamProjectAnugaReadinessProps> =
               </div>
             </div>
 
-            <div style={{ marginTop: '0.5rem' }}>
+            <div style={{ marginTop: '0.5rem', display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
               <button
                 type="button"
                 className="btn-preflight"
@@ -565,6 +868,18 @@ export const DamProjectAnugaReadiness: React.FC<DamProjectAnugaReadinessProps> =
               >
                 {showLogs ? 'Hide Logs' : '📄 View Sanitized Execution Logs'}
               </button>
+
+              {activeRun && (activeRun.status === 'queued' || activeRun.status === 'preparing' || activeRun.status === 'running' || activeRun.status === 'postprocessing') && (
+                <button
+                  type="button"
+                  className="btn-preflight"
+                  onClick={handleCancelRun}
+                  disabled={cancellingRun}
+                  style={{ padding: '0.25rem 0.5rem', fontSize: '0.72rem', color: '#ef4444', borderColor: '#ef4444' }}
+                >
+                  {cancellingRun ? 'Cancelling...' : '🛑 Cancel Simulation Run'}
+                </button>
+              )}
             </div>
 
             {showLogs && (

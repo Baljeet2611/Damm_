@@ -103,6 +103,13 @@ def validate_sww_file(sww_path: Path) -> Tuple[bool, Optional[str]]:
             if elev.shape not in ((n_points,), (1, n_points), (n_times, n_points)):
                 return False, f"Variable 'elevation' shape {elev.shape} is invalid. Expected ({n_points},), (1, {n_points}), or ({n_times}, {n_points})"
 
+            # Ensure simulation is not silently all-zero water depth
+            stage_arr = ds.variables["stage"][:]
+            elev_arr = elev if elev.ndim == 1 else elev[0]
+            max_depth = float(np.max(stage_arr - elev_arr))
+            if max_depth <= 0.0001:
+                return False, f"Simulation SWW output is non-hydrodynamic or all-zero (maximum computed water depth is {max_depth:.6f} m)"
+
             return True, None
         finally:
             ds.close()

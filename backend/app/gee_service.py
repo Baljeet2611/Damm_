@@ -98,36 +98,47 @@ def check_gee_capabilities() -> GEECapabilitiesResponse:
     Evaluates Earth Engine library presence, ADC authentication, and project configuration.
     Never exposes API secrets or bearer tokens.
     """
-    gee_available = False
+    import_success = False
     authenticated = False
     auth_mode = "none"
+    reason = ""
+
+    gee_project_id = os.environ.get("GEE_PROJECT_ID", "").strip() or None
+    project_configured = bool(gee_project_id)
+    tasks_enabled = os.environ.get("ENABLE_GEE_TASKS", "false").lower() in ("true", "1", "yes")
 
     try:
         import ee
-        gee_available = True
-        
-        # Test initialization with configured project ID if available
-        if GEE_PROJECT_ID:
+        import_success = True
+
+        if gee_project_id:
             try:
-                ee.Initialize(project=GEE_PROJECT_ID)
+                ee.Initialize(project=gee_project_id)
                 authenticated = True
-                auth_mode = f"adc_project_{GEE_PROJECT_ID}"
-            except Exception:
+                auth_mode = f"adc_project_{gee_project_id}"
+                reason = "Google Earth Engine is configured and authenticated."
+            except Exception as e:
                 authenticated = False
                 auth_mode = "unauthenticated"
+                reason = f"Earth Engine initialization failed with project '{gee_project_id}': {str(e)}"
         else:
             try:
                 ee.Initialize()
                 authenticated = True
                 auth_mode = "adc_default"
+                reason = "Google Earth Engine is authenticated using default application credentials."
             except Exception:
                 authenticated = False
                 auth_mode = "unauthenticated"
+                reason = "Google Cloud Project ID is not configured (set GEE_PROJECT_ID environment variable) and default credentials are unavailable."
 
     except ImportError:
-        gee_available = False
+        import_success = False
         authenticated = False
         auth_mode = "missing_library"
+        reason = "Earth Engine Python package (earthengine-api) is not installed in this environment."
+
+    gee_available = import_success and authenticated
 
     guidance = (
         "Google Earth Engine is an optional external connector. To enable live queries: "
@@ -141,16 +152,34 @@ def check_gee_capabilities() -> GEECapabilitiesResponse:
         "All satellite exports remain disabled by default to avoid unintended cloud costs."
     )
 
+    supported = [
+        {
+            "id": ds["id"],
+            "title": ds["title"],
+            "provider": ds["provider"],
+            "type": ds["type"],
+            "spatial_resolution": ds["spatial_resolution"],
+            "bands": ds["bands"],
+        }
+        for ds in WHITELISTED_DATASETS.values()
+    ]
+
     return GEECapabilitiesResponse(
         gee_available=gee_available,
         authenticated=authenticated,
-        project_id=GEE_PROJECT_ID if GEE_PROJECT_ID else None,
+        project_configured=project_configured,
+        earthengine_import_success=import_success,
+        gee_project_id=gee_project_id,
+        project_id=gee_project_id,
         auth_mode=auth_mode,
-        tasks_enabled=ENABLE_GEE_TASKS,
+        tasks_enabled=tasks_enabled,
+        reason=reason,
+        supported_datasets=supported,
         whitelisted_collections=list(WHITELISTED_DATASETS.keys()),
         disclaimer=disclaimer,
         guidance=guidance,
     )
+
 
 
 def list_whitelisted_datasets() -> List[GEEDatasetInfo]:

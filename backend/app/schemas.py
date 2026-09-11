@@ -471,12 +471,17 @@ class MethodologyComparisonResponse(BaseModel):
 class GEECapabilitiesResponse(BaseModel):
     gee_available: bool
     authenticated: bool
+    project_configured: bool = False
+    earthengine_import_success: bool = False
+    gee_project_id: Optional[str] = None
     project_id: Optional[str] = None
-    auth_mode: str
-    tasks_enabled: bool
-    whitelisted_collections: List[str]
-    disclaimer: str
-    guidance: str
+    auth_mode: str = "none"
+    tasks_enabled: bool = False
+    reason: str = ""
+    supported_datasets: List[Dict[str, Any]] = []
+    whitelisted_collections: List[str] = []
+    disclaimer: str = ""
+    guidance: str = ""
 
 
 class GEEDatasetInfo(BaseModel):
@@ -516,6 +521,116 @@ class GEEExportPlanResponse(BaseModel):
     cloud_task_submitted: bool
     notes: List[str]
     disclaimer: str
+
+
+# Phase 20: Project-Scoped Earth Observation & Model-Observation Comparison Schemas
+
+class ProjectAOIResponse(BaseModel):
+    project_id: str
+    aoi_bounds: Tuple[float, float, float, float] = Field(..., description="(min_lon, min_lat, max_lon, max_lat) in WGS84")
+    aoi_geojson: Dict[str, Any]
+    aoi_area_km2: float
+    source: str = Field(..., description="simulation_domain, dem_extent, or buffered_dam_point")
+    buffer_applied_meters: float = 1000.0
+
+
+class Sentinel1ProcessingParams(BaseModel):
+    polarization: Literal["VV", "VH", "both"] = "VV"
+    change_threshold_db: float = Field(default=-3.0, description="Configurable initial heuristic threshold for backscatter drop")
+    post_event_water_threshold_db: float = Field(default=-15.0, description="Configurable initial heuristic threshold for absolute water backscatter")
+    threshold_source: str = "configurable_heuristic"
+
+
+class EarthObservationRunRequest(BaseModel):
+    datasets: List[Literal["sentinel1", "jrc_water", "gpm_imerg"]] = Field(default=["sentinel1", "jrc_water", "gpm_imerg"])
+    event_date: str = Field(..., description="Event reference date formatted as YYYY-MM-DD")
+    pre_event_window_days: int = Field(default=30, ge=7, le=90)
+    post_event_window_days: int = Field(default=7, ge=1, le=30)
+    rainfall_start_date: Optional[str] = Field(default=None, description="Optional custom start date for rainfall (YYYY-MM-DD)")
+    rainfall_end_date: Optional[str] = Field(default=None, description="Optional custom end date for rainfall (YYYY-MM-DD)")
+    aoi_buffer_meters: float = Field(default=1000.0, ge=0.0, le=10000.0)
+    s1_params: Optional[Sentinel1ProcessingParams] = None
+
+
+class RainfallTimeSeriesPoint(BaseModel):
+    timestamp: str
+    precipitation_mm_hr: float
+    accumulated_precipitation_mm: float
+
+
+class EarthObservationRunResponse(BaseModel):
+    eo_run_id: str
+    project_id: str
+    status: Literal[
+        "queued",
+        "retrieving",
+        "processing",
+        "completed",
+        "failed",
+        "dry_run_unauthenticated",
+        "gee_unavailable",
+        "authentication_required",
+        "project_not_configured",
+        "no_imagery_available",
+    ]
+    created_at: str
+    completed_at: Optional[str] = None
+    aoi_bounds: Tuple[float, float, float, float]
+    aoi_area_km2: float
+    requested_datasets: List[str]
+    layers: Dict[str, Any] = {}
+    candidate_inundation_area_km2: Optional[float] = None
+    permanent_water_area_km2: Optional[float] = None
+    rainfall_accumulation_mm: Optional[float] = None
+    rainfall_time_series: List[RainfallTimeSeriesPoint] = []
+    provenance: Dict[str, Any] = {}
+    scientific_disclaimer: str = (
+        "EARTH OBSERVATION DISCLAIMER: Satellite-derived layers represent observational context "
+        "and candidate water-change observations. They are subject to radar speckle, cloud gaps, "
+        "and temporal revisit intervals. They do NOT constitute ground-truth validation of dam failure."
+    )
+    message: str = ""
+
+
+class ModelObservationComparisonRequest(BaseModel):
+    anuga_run_id: str
+    eo_run_id: str
+    depth_threshold_m: float = Field(default=0.10, ge=0.0, le=5.0, description="Minimum ANUGA inundation depth to consider flooded")
+    jrc_permanent_threshold_pct: float = Field(default=80.0, ge=0.0, le=100.0, description="Threshold above which historical JRC water is considered permanent")
+    max_observation_time_delta_hours: float = Field(default=72.0, ge=1.0, le=720.0, description="Configurable maximum allowed time offset between event and observation")
+
+
+class TemporalValidityMetadata(BaseModel):
+    comparison_valid: bool
+    event_reference_time: str
+    satellite_acquisition_time: str
+    absolute_delta_hours: float
+    configured_tolerance_hours: float
+    warning: Optional[str] = None
+
+
+class ModelObservationComparisonResponse(BaseModel):
+    comparison_id: str
+    project_id: str
+    anuga_run_id: str
+    eo_run_id: str
+    created_at: str
+    model_inundated_area_km2: float
+    satellite_candidate_area_km2: float
+    overlap_area_km2: float
+    model_only_area_km2: float
+    satellite_only_area_km2: float
+    union_area_km2: float
+    spatial_agreement_iou: float = Field(..., description="Intersection over Union (IoU / Jaccard Index)")
+    temporal_validity: TemporalValidityMetadata
+    label: str = "model-observation spatial agreement"
+    provenance: Dict[str, Any] = {}
+    scientific_caveats: List[str] = [
+        "Satellite-derived inundation is observational evidence with classification, timing, resolution, vegetation, radar-shadow, and permanent-water uncertainties.",
+        "Model-observation spatial agreement (IoU) measures spatial concordance, NOT hydraulic solver accuracy.",
+        "Unobserved flood peaks occurring between satellite overpasses cannot be captured by remote sensing.",
+    ]
+
 
 
 # ==========================================
@@ -603,12 +718,41 @@ class RasterDerivedMetadata(BaseModel):
     nodata: Optional[float] = None
     min_elevation: Optional[float] = None
     max_elevation: Optional[float] = None
+    mean_elevation: Optional[float] = None
+    valid_pixel_count: Optional[int] = None
+    nodata_pixel_count: Optional[int] = None
+    file_sha256: Optional[str] = None
     vertical_unit_in_header: str = "unknown"
     vertical_datum_in_header: str = "unknown"
 
 
+class DamPointMetadata(BaseModel):
+    dam_name: Optional[str] = None
+    longitude: float
+    latitude: float
+    crs_x: Optional[float] = None
+    crs_y: Optional[float] = None
+    sampled_elevation: Optional[float] = None
+    elevation_at_point: Optional[float] = None
+    sampled_from_dem: bool = True
+    is_nodata: bool = False
+
+
+class EngineeringParameters(BaseModel):
+    dam_height: Optional[float] = None
+    crest_elevation: Optional[float] = None
+    pool_elevation: Optional[float] = None
+    reservoir_level: Optional[float] = None
+    freeboard: Optional[float] = None
+    breach_width: Optional[float] = None
+    breach_formation_time_hr: Optional[float] = None
+    manning_n: Optional[float] = None
+    simulation_duration_s: Optional[float] = None
+
+
 class UserProvidedMetadata(BaseModel):
     project_name: str
+    dam_name: Optional[str] = None
     vertical_unit: Optional[str] = None
     vertical_datum: Optional[str] = None
     reservoir_level: Optional[float] = None
@@ -617,6 +761,9 @@ class UserProvidedMetadata(BaseModel):
     breach_formation_time_hr: Optional[float] = None
     manning_roughness: Optional[float] = None
     dam_crest_elevation: Optional[float] = None
+    dam_height: Optional[float] = None
+    dam_latitude: Optional[float] = None
+    dam_longitude: Optional[float] = None
     breach_invert_elevation: Optional[float] = None
     target_mesh_resolution_m: Optional[float] = None
     simulation_duration_s: Optional[float] = None
@@ -636,8 +783,11 @@ class GeometryValidationMetadata(BaseModel):
 
 class NormalizedProjectMetadata(BaseModel):
     project_name: str
+    dam_name: Optional[str] = None
     raster_metadata: Optional[RasterDerivedMetadata] = None
     user_provided_metadata: Optional[UserProvidedMetadata] = None
+    dam_point: Optional[DamPointMetadata] = None
+    engineering_parameters: Optional[EngineeringParameters] = None
     dam_axis_metadata: Optional[GeometryValidationMetadata] = None
     reservoir_metadata: Optional[GeometryValidationMetadata] = None
     model_domain_metadata: Optional[GeometryValidationMetadata] = None
@@ -645,24 +795,31 @@ class NormalizedProjectMetadata(BaseModel):
     breach_on_dam_axis: bool = False
     breach_distance_to_axis_m: Optional[float] = None
     distance_calculation_crs: Optional[str] = None
+    scientific_status: str = "validated_unverified"
 
 
 class DamProjectValidationResponse(BaseModel):
     valid: bool
     project_name: str
+    dam_name: Optional[str] = None
     errors: List[str]
     warnings: List[str]
     normalized_metadata: Optional[NormalizedProjectMetadata] = None
+    dam_point: Optional[DamPointMetadata] = None
+    sampled_dam_elevation: Optional[float] = None
     assumptions_requiring_confirmation: List[str]
     metadata_declared: bool
     onboarding_validation_passed: bool
+    scientific_status: str = "validated_unverified"
     scientifically_verified: bool = False
 
 
 class DamProjectSummary(BaseModel):
     project_id: str
     project_name: str
+    dam_name: Optional[str] = None
     status: str = "validated_unverified"
+    scientific_status: str = "validated_unverified"
     available: bool = True
     integrity_status: str = "integrity_ok"
     integrity_error: Optional[str] = None
@@ -673,6 +830,7 @@ class DamProjectSummary(BaseModel):
     has_reservoir_boundary: bool
     has_model_domain: bool = False
     has_downstream_outlet: bool = False
+    dam_point: Optional[DamPointMetadata] = None
     metadata_declared: bool
     onboarding_validation_passed: bool
     scientifically_verified: bool = False
@@ -683,28 +841,75 @@ class DamProjectSummary(BaseModel):
 class DamProjectDetailResponse(BaseModel):
     project_id: str
     project_name: str
+    dam_name: Optional[str] = None
     status: str = "validated_unverified"
+    scientific_status: str = "validated_unverified"
     created_at: str
+    updated_at: Optional[str] = None
     dem_file: str
-    dam_axis_file: str
+    dam_axis_file: Optional[str] = None
+    original_dem_filename: Optional[str] = "dem.tif"
+    safe_internal_dem_path: Optional[str] = "dem.tif"
+    dem_sha256: Optional[str] = None
     reservoir_boundary_file: Optional[str] = None
     model_domain_file: Optional[str] = None
     downstream_outlet_file: Optional[str] = None
     raster_metadata: RasterDerivedMetadata
     user_provided_metadata: UserProvidedMetadata
-    dam_axis_metadata: GeometryValidationMetadata
+    dam_point: Optional[DamPointMetadata] = None
+    engineering_parameters: Optional[EngineeringParameters] = None
+    dam_axis_metadata: Optional[GeometryValidationMetadata] = None
     reservoir_metadata: Optional[GeometryValidationMetadata] = None
     model_domain_metadata: Optional[GeometryValidationMetadata] = None
     downstream_outlet_metadata: Optional[GeometryValidationMetadata] = None
-    breach_parameters: Dict[str, Any]
+    breach_parameters: Optional[Dict[str, Any]] = None
     simulation_parameters: Optional[Dict[str, Any]] = None
     anuga_package_built: bool = False
     manifest: Dict[str, Any]
-    assumptions_requiring_confirmation: List[str]
-    metadata_declared: bool
-    onboarding_validation_passed: bool
+    provenance: Optional[Dict[str, Any]] = None
+    assumptions_requiring_confirmation: List[str] = []
+    metadata_declared: bool = False
+    onboarding_validation_passed: bool = True
     scientifically_verified: bool = False
     warnings: List[str] = []
+
+
+class DamProjectReadinessResponse(BaseModel):
+    project_id: str
+    project_name: str
+    dam_name: Optional[str] = None
+    dem_valid: bool = True
+    dam_location_valid: bool = True
+    dam_elevation_available: bool = True
+    engineering_parameters_complete: bool = False
+    anuga_ready: bool = False
+    has_dem: bool = True
+    has_dam_point: bool = True
+    has_engineering_parameters: bool = False
+    has_dam_axis: bool = False
+    has_reservoir_boundary: bool = False
+    has_model_domain: bool = False
+    has_downstream_outlet: bool = False
+    ready_for_screening: bool = True
+    ready_for_anuga_simulation: bool = False
+    # Phase 19: 5-tier simulation readiness model
+    data_ready: bool = False
+    geometry_ready: bool = False
+    hydraulic_ready: bool = False
+    solver_ready: bool = False
+    simulation_ready: bool = False
+    tier_breakdown: Dict[str, Dict[str, Any]] = {}
+    missing_requirements: List[str] = []
+    missing_for_anuga: List[str] = []
+    recommended_next_steps: List[str] = []
+    scientific_status: str = "validated_unverified"
+    scientifically_verified: bool = False
+    sampled_elevation: Optional[float] = None
+    dam_point: Optional[DamPointMetadata] = None
+    engineering_parameters: Optional[EngineeringParameters] = None
+    disclaimer: str = (
+        "Input data validated. Scientific model verification has not yet been performed."
+    )
 
 
 class DamProjectAnugaPreflightResponse(BaseModel):
@@ -734,6 +939,9 @@ class DamProjectAnugaPackageResponse(BaseModel):
 class DamProjectAnugaCapabilitiesResponse(BaseModel):
     execution_enabled: bool
     anuga_installed: bool
+    anuga_environment_available: bool = False
+    python_executable_path: Optional[str] = None
+    anuga_import_success: bool = False
     anuga_version: str
     version_source: Literal["importlib_metadata", "conda_meta", "fallback_runtime", "unavailable"] = "unavailable"
     raw_distribution_version: Optional[str] = None
@@ -745,9 +953,60 @@ class DamProjectAnugaCapabilitiesResponse(BaseModel):
     )
 
 
+class HeuristicAssistRequest(BaseModel):
+    search_radius_cells: int = Field(50, ge=10, le=500, description="Pixel search radius for local slope aspect analysis")
+    downstream_length_m: float = Field(5000.0, ge=500.0, le=50000.0, description="Approximate downstream corridor extent in meters")
+    corridor_width_m: float = Field(1000.0, ge=100.0, le=10000.0, description="Approximate downstream corridor width in meters")
+    dam_crest_length_m: float = Field(500.0, ge=50.0, le=5000.0, description="Approximate dam axis length in meters")
+
+
+class HeuristicAssistResponse(BaseModel):
+    project_id: str
+    downstream_bearing_deg: float
+    downstream_direction: str
+    slope_gradient: float
+    dam_point_elevation: Optional[float] = None
+    estimated_crest_elevation: Optional[float] = None
+    suggested_dam_axis: Dict[str, Any]
+    suggested_breach_line: Dict[str, Any]
+    suggested_model_domain: Dict[str, Any]
+    suggested_outlet_boundary: Dict[str, Any]
+    suggested_reservoir_boundary: Dict[str, Any]
+    source: Literal["terrain_heuristic"] = "terrain_heuristic"
+    scientifically_verified: bool = False
+    confidence: str = "low_unverified"
+    caveats: List[str] = [
+        "Terrain heuristic estimate derived solely from surface DEM gradient.",
+        "Does not reflect bathymetric soundings, true structural dam crest alignment, or surveyed channel cross-sections.",
+        "Requires explicit user review and confirmation before use in hydrodynamic simulations."
+    ]
+
+
+class SimulationInputsUpdateRequest(BaseModel):
+    reservoir_level: Optional[float] = None
+    dam_crest_elevation: Optional[float] = None
+    dam_height: Optional[float] = None
+    breach_width: Optional[float] = None
+    breach_invert_elevation: Optional[float] = None
+    breach_formation_time_hr: Optional[float] = None
+    manning_roughness: Optional[float] = None
+    simulation_duration_s: Optional[float] = None
+    output_interval_s: Optional[float] = None
+    target_mesh_resolution_m: Optional[float] = None
+    dam_axis_geometry: Optional[Dict[str, Any]] = None
+    reservoir_geometry: Optional[Dict[str, Any]] = None
+    model_domain_geometry: Optional[Dict[str, Any]] = None
+    downstream_outlet_geometry: Optional[Dict[str, Any]] = None
+    accept_heuristic_inputs: bool = False
+    custom_notes: Optional[str] = None
+
+
 class DamProjectAnugaRunRequest(BaseModel):
     acknowledge_hypothetical_unverified: bool = False
     custom_notes: Optional[str] = None
+    simulation_duration_s: Optional[float] = None
+    output_interval_s: Optional[float] = None
+    target_mesh_resolution_m: Optional[float] = None
 
 
 class DamProjectAnugaRunResponse(BaseModel):
@@ -755,8 +1014,8 @@ class DamProjectAnugaRunResponse(BaseModel):
     project_id: str
     project_name: str
     package_sha256: str
-    status: Literal["queued", "running", "completed", "failed", "timed_out", "interrupted"] = Field(
-        ..., description="queued, running, completed, failed, timed_out, interrupted"
+    status: Literal["queued", "preparing", "running", "postprocessing", "completed", "failed", "cancelled", "timed_out", "interrupted"] = Field(
+        ..., description="queued, preparing, running, postprocessing, completed, failed, cancelled, timed_out, interrupted"
     )
     created_at: str
     started_at: Optional[str] = None
@@ -768,10 +1027,29 @@ class DamProjectAnugaRunResponse(BaseModel):
     runtime_seconds: Optional[float] = None
     log_file: Optional[str] = None
     output_files: Dict[str, str] = {}
+    parameters_snapshot: Dict[str, Any] = {}
+    run_manifest_sha256: Optional[str] = None
     scientific_status: str = "hypothetical_unverified"
     simulation_executed: bool = False
     has_results: bool = False
     message: str
+
+
+class DamProjectAnugaOutputsResponse(BaseModel):
+    project_id: str
+    run_id: str
+    status: str
+    sww_file: Optional[str] = None
+    sww_size_bytes: Optional[int] = None
+    sww_sha256: Optional[str] = None
+    output_files: Dict[str, str] = {}
+    has_results: bool = False
+    available_layers: List[str] = []
+    layer_statistics: Dict[str, Any] = {}
+    runtime_seconds: Optional[float] = None
+    scientific_status: str = "hypothetical_unverified"
+    simulation_executed: bool = False
+    message: str = ""
 
 
 class DamProjectAnugaPostprocessRequest(BaseModel):
@@ -838,3 +1116,408 @@ class DamProjectAnugaPointValueResponse(BaseModel):
     is_valid: bool
     is_nodata: bool
     disclaimer: str = "Derived raster visualization value — not an exact certified solver prediction."
+
+
+# Phase 21: Multi-Engine Spatial Hydrodynamic Comparison Schemas
+
+class ModelComparisonEngineCapability(BaseModel):
+    environment_available: bool = Field(..., description="Whether the required software environment/libraries exist")
+    solver_available: bool = Field(..., description="Whether the actual solver binary/engine executable is discovered")
+    completed_run_count: int = Field(default=0, description="Total completed runs in disk storage")
+    comparable_run_count: int = Field(default=0, description="Runs with verified output rasters ready for comparison")
+    available_for_comparison: bool = Field(..., description="True only if comparable_run_count > 0")
+    version: Optional[str] = None
+    reason: Optional[str] = None
+
+
+class ModelComparisonCapabilitiesResponse(BaseModel):
+    project_id: str
+    engines: Dict[str, ModelComparisonEngineCapability]
+    completed_runs_by_engine: Dict[str, List[Dict[str, Any]]]
+    ready_for_comparison: bool = Field(..., description="True if at least 2 distinct comparable runs or engines exist")
+    message: str
+
+
+class HydrodynamicOutputContract(BaseModel):
+    engine: str = Field(..., description="Solver engine name, e.g. anuga, delft3d_fm, pysph")
+    engine_version: Optional[str] = None
+    source_run_id: str
+    run_timestamp: Optional[str] = None
+    simulation_duration_s: Optional[float] = None
+    native_crs: str
+    native_resolution_m: Optional[float] = None
+    analysis_crs: str
+    analysis_resolution_m: Optional[float] = None
+    bounds: Tuple[float, float, float, float] = Field(..., description="(west, south, east, north) in analysis_crs")
+    nodata_value: float = -9999.0
+    maximum_depth_available: bool = False
+    maximum_velocity_available: bool = False
+    arrival_time_available: bool = False
+    inundation_extent_available: bool = False
+    arrival_time_definition: Optional[str] = None
+    source_file_hashes: Dict[str, str] = {}
+    layer_paths: Dict[str, str] = {}
+    provenance: Dict[str, Any] = {}
+    scientific_status: str = "hypothetical_unverified"
+
+
+class ToleranceBandCoverage(BaseModel):
+    band_label: str
+    tolerance_m: float
+    pixel_count: int
+    area_km2: float
+    percentage_of_common_valid_area: float
+
+
+class DepthDifferenceStats(BaseModel):
+    common_valid_pixel_count: int
+    common_analysis_area_km2: float
+    mean_signed_difference_m: float
+    median_signed_difference_m: float
+    mae_m: float
+    rmse_m: float
+    max_positive_difference_m: float = Field(..., description="Max where Engine A > Engine B")
+    max_negative_difference_m: float = Field(..., description="Max where Engine A < Engine B")
+    tolerance_bands: List[ToleranceBandCoverage]
+    label: str = "inter-model depth difference"
+    formula: str = "engine_A_depth - engine_B_depth"
+
+
+class VelocityDifferenceStats(BaseModel):
+    available: bool
+    common_valid_pixel_count: Optional[int] = None
+    common_analysis_area_km2: Optional[float] = None
+    mean_signed_difference_m_s: Optional[float] = None
+    mae_m_s: Optional[float] = None
+    rmse_m_s: Optional[float] = None
+    max_difference_m_s: Optional[float] = None
+    reason_if_unavailable: Optional[str] = None
+    label: str = "inter-model velocity difference"
+
+
+class InundationAgreementStats(BaseModel):
+    depth_threshold_m: float
+    model_a_inundated_area_km2: float
+    model_b_inundated_area_km2: float
+    overlap_area_km2: float
+    model_a_only_area_km2: float
+    model_b_only_area_km2: float
+    union_area_km2: float
+    spatial_agreement_iou: float
+    label: str = "inter-model spatial agreement"
+    disclaimer: str = (
+        "Neither model is ground truth. Inundation agreement reflects spatial overlap of simulated footprints."
+    )
+
+
+class ArrivalTimeDifferenceStats(BaseModel):
+    available: bool
+    comparison_valid: bool
+    threshold_definition_a: Optional[str] = None
+    threshold_definition_b: Optional[str] = None
+    mean_absolute_difference_s: Optional[float] = None
+    median_difference_s: Optional[float] = None
+    rmse_s: Optional[float] = None
+    early_zone_area_km2: Optional[float] = None
+    late_zone_area_km2: Optional[float] = None
+    invalidation_reason: Optional[str] = None
+    label: str = "inter-model arrival-time comparison"
+
+
+class InterModelSpreadDiagnostic(BaseModel):
+    computed: bool
+    model_count: int
+    mean_depth_mean_m: Optional[float] = None
+    min_depth_mean_m: Optional[float] = None
+    max_depth_mean_m: Optional[float] = None
+    mean_spread_m: Optional[float] = None
+    max_spread_m: Optional[float] = None
+    common_coverage_area_km2: Optional[float] = None
+    label: str = "inter-model spread"
+    disclaimer: str = (
+        "Diagnostic inter-model spread (max - min). Not a calibrated uncertainty quantification or confidence interval."
+    )
+
+
+class ModelComparisonRunRequest(BaseModel):
+    engine_a: str = Field(..., description="Engine A identifier, e.g. anuga")
+    run_id_a: str = Field(..., description="Run ID A")
+    engine_b: str = Field(..., description="Engine B identifier, e.g. anuga, delft3d_fm, pysph")
+    run_id_b: str = Field(..., description="Run ID B")
+    additional_models: Optional[List[Dict[str, str]]] = Field(
+        default=None,
+        description="Optional list of {'engine': str, 'run_id': str} for 3+ model ensemble spread",
+    )
+    depth_inundation_threshold_m: float = Field(default=0.10, ge=0.01, le=5.0)
+    tolerance_bands_m: List[float] = Field(default=[0.10, 0.25, 0.50])
+    target_crs: Optional[str] = Field(default=None, description="Optional target projected metric CRS, e.g. EPSG:32643")
+    synthetic_test_fixture: Optional[bool] = Field(
+        default=False,
+        description="Explicit test-only fixture flag for offline unit testing without real engine assets",
+    )
+
+
+class ModelComparisonRunResponse(BaseModel):
+    comparison_id: str
+    project_id: str
+    status: Literal["completed", "failed", "unavailable"]
+    created_at: str
+    engine_a: str
+    run_id_a: str
+    engine_b: str
+    run_id_b: str
+    contract_a: HydrodynamicOutputContract
+    contract_b: HydrodynamicOutputContract
+    analysis_crs: str
+    analysis_resolution_m: float
+    depth_difference: DepthDifferenceStats
+    velocity_difference: VelocityDifferenceStats
+    inundation_agreement: InundationAgreementStats
+    arrival_time_difference: ArrivalTimeDifferenceStats
+    ensemble_spread: Optional[InterModelSpreadDiagnostic] = None
+    layer_files: Dict[str, str] = {}
+    provenance: Dict[str, Any] = {}
+    scientific_caveats: List[str]
+    message: str = ""
+
+
+# Phase 22: Exposure & Vulnerability Assessment Schemas
+
+class ExposureDepthBandConfig(BaseModel):
+    name: str
+    min_depth: float
+    max_depth: Optional[float] = None
+
+
+class PopulationExposureSummary(BaseModel):
+    available: bool = False
+    status: str = "not_provided"  # available, not_provided, error, unsupported_unit
+    reason_if_unavailable: Optional[str] = None
+    population_source: Optional[str] = None
+    population_unit: Optional[str] = None  # count_per_cell, persons_per_km2, etc.
+    native_resolution: Optional[float] = None
+    native_crs: Optional[str] = None
+    analysis_crs: Optional[str] = None
+    resampling_or_aggregation_method: Optional[str] = None
+    count_conservation_method: Optional[str] = None
+    total_population_in_aoi: Optional[float] = None
+    population_in_inundation_extent: Optional[float] = None
+    population_percentage_exposed: Optional[float] = None
+    population_by_depth_band: Dict[str, float] = {}
+    population_by_arrival_window: Dict[str, float] = {}
+
+
+class BuildingExposureSummary(BaseModel):
+    available: bool = False
+    status: str = "not_provided"
+    reason_if_unavailable: Optional[str] = None
+    source_dataset: Optional[str] = None
+    total_buildings: int = 0
+    buildings_exposed: int = 0
+    buildings_exposed_percentage: float = 0.0
+    building_footprint_area_exposed_m2: float = 0.0
+    building_footprint_area_exposed_km2: float = 0.0
+    buildings_by_depth_band: Dict[str, int] = {}
+    buildings_by_usage: Dict[str, int] = {}  # residential, commercial, industrial, public, unknown
+    sampling_method: str = "polygon_zonal_overlay_with_fallback"
+
+
+class RoadExposureSummary(BaseModel):
+    available: bool = False
+    status: str = "not_provided"
+    reason_if_unavailable: Optional[str] = None
+    source_dataset: Optional[str] = None
+    total_road_length_km: float = 0.0
+    affected_road_length_km: float = 0.0
+    affected_percentage: float = 0.0
+    max_depth_m: Optional[float] = None
+    mean_depth_m: Optional[float] = None
+    road_length_by_depth_band_km: Dict[str, float] = {}
+    road_class_breakdown_km: Dict[str, Dict[str, float]] = {}  # class -> {total_km, affected_km}
+    road_passability_available: bool = False
+    passability_rule_note: str = (
+        "Road passability rule not configured. Flooded segments are reported as potentially affected road segments only."
+    )
+
+
+class CriticalAssetItem(BaseModel):
+    asset_id: str
+    name: Optional[str] = None
+    source_category: str
+    normalized_category: str  # hospital, school, police, fire_station, power_substation, water_facility, bridge, evacuation_shelter, unknown
+    depth_m: Optional[float] = None
+    velocity_mps: Optional[float] = None
+    arrival_time_s: Optional[float] = None
+    hazard_band: Optional[str] = None
+    arrival_window: Optional[str] = None
+    source_provenance: str
+
+
+class CriticalInfrastructureSummary(BaseModel):
+    available: bool = False
+    status: str = "not_provided"
+    reason_if_unavailable: Optional[str] = None
+    source_dataset: Optional[str] = None
+    total_critical_assets: int = 0
+    exposed_critical_assets: int = 0
+    exposed_by_category: Dict[str, int] = {}
+    assets: List[CriticalAssetItem] = []
+
+
+class LULCClassExposure(BaseModel):
+    class_id: int
+    class_name: str
+    flooded_area_m2: float
+    flooded_area_km2: float
+    flooded_percentage_of_class: Optional[float] = None
+
+
+class LULCExposureSummary(BaseModel):
+    available: bool = False
+    status: str = "not_provided"
+    reason_if_unavailable: Optional[str] = None
+    source_dataset: Optional[str] = None
+    total_flooded_area_km2: float = 0.0
+    classes: List[LULCClassExposure] = []
+    resampling_method: str = "nearest_neighbour"
+
+
+class VulnerabilityCurveInfo(BaseModel):
+    curve_id: str
+    curve_source: str
+    asset_class: str
+    hazard_variable: str
+    units: str
+    curve_provenance: str
+    region_applicability: str = "Asia / Continental (uncalibrated reference)"
+    curve_status: str = "unverified_reference"
+    version_year: Optional[int] = 2017
+
+
+class DamageEstimationSummary(BaseModel):
+    vulnerability_available: bool = False
+    monetary_damage_available: bool = False
+    reason_if_unavailable: Optional[str] = None
+    relative_damage_index: Optional[float] = None  # average relative damage ratio across exposed assets (0-1)
+    monetary_damage: Optional[float] = None
+    currency: Optional[str] = None
+    valuation_year: Optional[int] = None
+    value_source: Optional[str] = None
+    methodology_note: str = (
+        "Separation of exposure from vulnerability: vulnerability curves are only applied if documented and matched. "
+        "Monetary loss is suppressed unless authoritative valuation exists; rupee losses are never fabricated."
+    )
+
+
+class DecisionSupportHotspot(BaseModel):
+    hotspot_id: str
+    name: str
+    latitude: float
+    longitude: float
+    priority_score: float  # 0 - 100
+    reasons: List[str]
+    hazard_depth_m: float
+    exposed_features: List[str]
+
+
+class DecisionSupportPrioritySummary(BaseModel):
+    composite_index: float  # 0 - 100
+    formula: str
+    weights: Dict[str, float]
+    weights_label: str = "heuristic_default"
+    normalization_method: str
+    hotspots: List[DecisionSupportHotspot] = []
+    caveat: str = (
+        "Decision-support priority index is a heuristic prioritization metric for planning. "
+        "It is NOT true disaster risk, casualty probability, or fatality forecast."
+    )
+
+
+class ExposureCapabilitiesResponse(BaseModel):
+    project_id: str
+    hazard_sources: List[Dict[str, Any]]
+    available_exposure_datasets: Dict[str, Dict[str, Any]]
+    supported_vulnerability_curves: List[VulnerabilityCurveInfo]
+    default_depth_bands: List[Dict[str, Any]]
+    default_arrival_windows: List[Dict[str, Any]]
+    default_priority_weights: Dict[str, float]
+
+
+class ExposureRunRequest(BaseModel):
+    hazard_engine: str = Field(default="anuga", description="anuga, delft3d, pysph, or legacy_hidkal")
+    hazard_run_id: Optional[str] = Field(default=None, description="Run ID in project storage (or None for legacy_hidkal)")
+    depth_threshold_m: float = Field(default=0.10, ge=0.0, le=10.0)
+    depth_bands: Optional[List[Dict[str, Any]]] = None
+    arrival_windows: Optional[List[Dict[str, Any]]] = None
+    population_unit_override: Optional[str] = None  # count_per_cell, persons_per_km2
+    priority_weights: Optional[Dict[str, float]] = None  # custom heuristic weights
+    passability_depth_threshold_m: Optional[float] = None  # only if user explicitly configures
+    target_analysis_crs: Optional[str] = None
+    synthetic_test_fixture: Optional[bool] = False
+
+
+class ExposureRunSummary(BaseModel):
+    run_id: str
+    project_id: str
+    hazard_engine: str
+    hazard_run_id: Optional[str]
+    status: Literal["completed", "failed", "partial"]
+    created_at: str
+    depth_threshold_m: float
+    population_exposed: Optional[float] = None
+    buildings_exposed: Optional[int] = None
+    affected_road_length_km: Optional[float] = None
+    critical_assets_exposed: Optional[int] = None
+    priority_score: Optional[float] = None
+    scientific_status: str
+
+
+class ExposureRunDetailResponse(BaseModel):
+    run_id: str
+    project_id: str
+    status: Literal["completed", "failed", "partial"]
+    created_at: str
+    hazard_contract: Dict[str, Any]
+    depth_threshold_m: float
+    depth_bands: List[Dict[str, Any]]
+    arrival_windows: List[Dict[str, Any]]
+    population: PopulationExposureSummary
+    buildings: BuildingExposureSummary
+    roads: RoadExposureSummary
+    critical_infrastructure: CriticalInfrastructureSummary
+    lulc: LULCExposureSummary
+    vulnerability_and_damage: DamageEstimationSummary
+    decision_support_priority: DecisionSupportPrioritySummary
+    provenance: Dict[str, Any]
+    scientific_caveats: List[str]
+    message: str = ""
+
+
+# Phase 23: System Capability & Health Schemas
+
+class SubsystemHealth(BaseModel):
+    id: str
+    name: str
+    status: Literal[
+        "ready",
+        "available_not_configured",
+        "unavailable",
+        "missing_data",
+        "failed",
+        "execution_disabled",
+    ]
+    status_label: str
+    version: Optional[str] = None
+    environment: Optional[str] = None
+    details: str
+    is_optional: bool = False
+    scientific_caveat: Optional[str] = None
+
+
+class SystemHealthSummaryResponse(BaseModel):
+    overall_status: str
+    timestamp: str
+    subsystems: List[SubsystemHealth]
+
+
+

@@ -1187,13 +1187,17 @@ function App() {
         values: { dem: null, depth: null, velocity: null, arrival: null },
       })
 
-      // Query all 4 rasters simultaneously (using active hazard source)
+      // Query rasters (sampling active custom dam project DEM if onboarded study is active)
       const layerIds: LayerId[] = ['dem', 'depth', 'velocity', 'arrival']
       const promises = layerIds.map((id) => {
-        const queryUrl =
-          hazardSource !== 'sample_hidkal' && id !== 'dem'
-            ? `${apiBaseUrl}/api/anuga/rasters/${id}/value?lon=${queryLon}&lat=${queryLat}&hazard_source=${hazardSource}`
-            : `${apiBaseUrl}/api/rasters/${id}/value?lon=${queryLon}&lat=${queryLat}`
+        let queryUrl: string
+        if (activeCustomDamProject && id === 'dem') {
+          queryUrl = `${apiBaseUrl}/api/dam-projects/${encodeURIComponent(activeCustomDamProject.project_id)}/dem/value?lon=${queryLon}&lat=${queryLat}`
+        } else if (hazardSource !== 'sample_hidkal' && id !== 'dem') {
+          queryUrl = `${apiBaseUrl}/api/anuga/rasters/${id}/value?lon=${queryLon}&lat=${queryLat}&hazard_source=${hazardSource}`
+        } else {
+          queryUrl = `${apiBaseUrl}/api/rasters/${id}/value?lon=${queryLon}&lat=${queryLat}`
+        }
 
         return fetch(queryUrl)
           .then((res) => {
@@ -1238,7 +1242,7 @@ function App() {
     return () => {
       map.off('click', handleMapClick)
     }
-  }, [apiBaseUrl, hazardSource])
+  }, [apiBaseUrl, hazardSource, activeCustomDamProject])
 
   // Execute Damage Estimation
   const handleCalculateDamage = () => {
@@ -1706,7 +1710,7 @@ function App() {
       fetchSphRuns()
       fetchComparisonReadiness()
     }
-  }, [activeTab, includeArchived, scenarioSubTab, fetchScenarios, fetchRuns, fetchSphRuns, fetchComparisonReadiness])
+  }, [activeTab, includeArchived, fetchScenarios, fetchRuns, fetchSphRuns, fetchComparisonReadiness])
 
 
   const selectedScenario = scenarios.find((s) => s.id === selectedScenarioId) || null
@@ -1999,7 +2003,7 @@ function App() {
                     <span className="source-btn-dot anuga-dot" />
                     <span className="source-btn-title">ANUGA Pilot</span>
                   </div>
-                  <span className="source-btn-sub">Phase 15 • 200m Mesh</span>
+                  <span className="source-btn-sub">Pilot SWE • 200m Mesh</span>
                 </button>
 
                 <button
@@ -2011,7 +2015,7 @@ function App() {
                     <span className="source-btn-dot refined-dot" />
                     <span className="source-btn-title">ANUGA Refined</span>
                   </div>
-                  <span className="source-btn-sub">Phase 17 • ≤50m Adaptive</span>
+                  <span className="source-btn-sub">Refined SWE • ≤50m Adaptive</span>
                 </button>
               </div>
 
@@ -2169,7 +2173,7 @@ function App() {
                 className={`hud-tab-btn ${activeTab === 'onboarding' ? 'active' : ''}`}
                 onClick={() => setActiveTab('onboarding')}
               >
-                🏗️ New Dam
+                🏛️ Dam Studies
               </button>
             </div>
 
