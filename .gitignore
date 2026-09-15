@@ -101,3 +101,6 @@ desktop.ini
 
 # Jupyter Notebook Checkpoints
 .ipynb_checkpoints/
+
+# Local Test Bundles and Runtime Temporary Archives
+hidkal_real_test_bundle/

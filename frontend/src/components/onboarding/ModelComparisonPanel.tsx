@@ -1,5 +1,5 @@
-// ModelComparisonPanel.tsx - Phase 21 Multi-Engine Spatial Hydrodynamic Comparison
-import React, { useEffect, useState, useCallback } from 'react'
+// ModelComparisonPanel.tsx - Phase 21 & Phase 25 Multi-Engine Spatial Hydrodynamic Comparison
+import React, { useEffect, useState, useCallback, useRef } from 'react'
 import type {
   ModelComparisonCapabilitiesResponse,
   ModelComparisonRunResponse,
@@ -10,6 +10,13 @@ import {
   fetchModelComparisonRuns,
   fetchModelComparisonLogs,
   getModelComparisonTileUrl,
+  buildDamProjectDelft3DPackage,
+  getDamProjectDelft3DPackageDownloadUrl,
+  importDamProjectDelft3DRun,
+  buildDamProjectSPHPackage,
+  getDamProjectSPHPackageDownloadUrl,
+  importDamProjectSPHRun,
+  runDamProjectSPHBenchmark,
 } from '../../api/damProjects'
 import './ModelComparisonPanel.css'
 
@@ -29,10 +36,21 @@ export const ModelComparisonPanel: React.FC<ModelComparisonPanelProps> = ({
   const [runs, setRuns] = useState<ModelComparisonRunResponse[]>([])
   const [selectedRun, setSelectedRun] = useState<ModelComparisonRunResponse | null>(null)
   const [executing, setExecuting] = useState<boolean>(false)
+  const [actionLoading, setActionLoading] = useState<string | null>(null)
+  const [actionMessage, setActionMessage] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
 
+  // Import Modal States
+  const [importEngine, setImportEngine] = useState<'delft3d' | 'sph' | null>(null)
+  const [importLabel, setImportLabel] = useState<string>('')
+  const [importNotes, setImportNotes] = useState<string>('')
+  const [targetResM, setTargetResM] = useState<number>(10.0)
+  const [selectedFiles, setSelectedFiles] = useState<FileList | null>(null)
+  const [importing, setImporting] = useState<boolean>(false)
+  const fileInputRef = useRef<HTMLInputElement>(null)
+
   // Form parameters
-  const [engineA, setEngineA] = useState<string>('anuga')
+  const [engineA, setEngineA] = useState<string>('pysph')
   const [runIdA, setRunIdA] = useState<string>('')
   const [engineB, setEngineB] = useState<string>('delft3d_fm')
   const [runIdB, setRunIdB] = useState<string>('')
@@ -45,49 +63,105 @@ export const ModelComparisonPanel: React.FC<ModelComparisonPanelProps> = ({
   const [logsContent, setLogsContent] = useState<string | null>(null)
   const [loadingLogs, setLoadingLogs] = useState<boolean>(false)
 
+  const loadCapabilities = useCallback(async () => {
+    try {
+      setLoadingCaps(true)
+      setError(null)
+      const [caps, runList] = await Promise.all([
+        fetchModelComparisonCapabilities(projectId),
+        fetchModelComparisonRuns(projectId).catch(() => []),
+      ])
+      setCapabilities(caps)
+      setRuns(runList)
+      if (runList.length > 0 && !selectedRun) {
+        setSelectedRun(runList[0])
+      }
+
+      const anugaRuns = caps.completed_runs_by_engine?.anuga || caps.runs_available?.anuga || []
+      const d3dRuns = caps.completed_runs_by_engine?.delft3d_fm || caps.runs_available?.delft3d_fm || []
+      const sphRuns = caps.completed_runs_by_engine?.pysph || caps.runs_available?.pysph || []
+
+      if (sphRuns.length > 0 && d3dRuns.length > 0) {
+        setEngineA('pysph')
+        setRunIdA(sphRuns[0].run_id)
+        setEngineB('delft3d_fm')
+        setRunIdB(d3dRuns[0].run_id)
+      } else if (sphRuns.length > 0 && anugaRuns.length > 0) {
+        setEngineA('pysph')
+        setRunIdA(sphRuns[0].run_id)
+        setEngineB('anuga')
+        setRunIdB(anugaRuns[0].run_id)
+      } else if (d3dRuns.length > 0 && anugaRuns.length > 0) {
+        setEngineA('anuga')
+        setRunIdA(anugaRuns[0].run_id)
+        setEngineB('delft3d_fm')
+        setRunIdB(d3dRuns[0].run_id)
+      } else if (anugaRuns.length > 0) {
+        setEngineA('anuga')
+        setRunIdA(anugaRuns[0].run_id)
+        if (anugaRuns.length > 1) {
+          setEngineB('anuga')
+          setRunIdB(anugaRuns[1].run_id)
+        }
+      }
+    } catch (err: any) {
+      setError(err.message || 'Failed to query engine capabilities')
+    } finally {
+      setLoadingCaps(false)
+    }
+  }, [projectId, selectedRun])
+
   useEffect(() => {
-    let mounted = true
+    let active = true
     const init = async () => {
       try {
-        setLoadingCaps(true)
-        setError(null)
         const [caps, runList] = await Promise.all([
           fetchModelComparisonCapabilities(projectId),
           fetchModelComparisonRuns(projectId).catch(() => []),
         ])
-        if (!mounted) return
+        if (!active) return
         setCapabilities(caps)
         setRuns(runList)
         if (runList.length > 0) {
           setSelectedRun(runList[0])
         }
 
-        const anugaRuns = caps.runs_available?.anuga || []
-        const d3dRuns = caps.runs_available?.delft3d_fm || []
-        const sphRuns = caps.runs_available?.pysph || []
+        const anugaRuns = caps.completed_runs_by_engine?.anuga || caps.runs_available?.anuga || []
+        const d3dRuns = caps.completed_runs_by_engine?.delft3d_fm || caps.runs_available?.delft3d_fm || []
+        const sphRuns = caps.completed_runs_by_engine?.pysph || caps.runs_available?.pysph || []
 
-        if (anugaRuns.length > 0) {
-          setRunIdA(anugaRuns[0].run_id)
-        }
-        if (d3dRuns.length > 0) {
+        if (sphRuns.length > 0 && d3dRuns.length > 0) {
+          setEngineA('pysph')
+          setRunIdA(sphRuns[0].run_id)
           setEngineB('delft3d_fm')
           setRunIdB(d3dRuns[0].run_id)
-        } else if (sphRuns.length > 0) {
-          setEngineB('pysph')
-          setRunIdB(sphRuns[0].run_id)
-        } else if (anugaRuns.length > 1) {
+        } else if (sphRuns.length > 0 && anugaRuns.length > 0) {
+          setEngineA('pysph')
+          setRunIdA(sphRuns[0].run_id)
           setEngineB('anuga')
-          setRunIdB(anugaRuns[1].run_id)
+          setRunIdB(anugaRuns[0].run_id)
+        } else if (d3dRuns.length > 0 && anugaRuns.length > 0) {
+          setEngineA('anuga')
+          setRunIdA(anugaRuns[0].run_id)
+          setEngineB('delft3d_fm')
+          setRunIdB(d3dRuns[0].run_id)
+        } else if (anugaRuns.length > 0) {
+          setEngineA('anuga')
+          setRunIdA(anugaRuns[0].run_id)
+          if (anugaRuns.length > 1) {
+            setEngineB('anuga')
+            setRunIdB(anugaRuns[1].run_id)
+          }
         }
       } catch (err: any) {
-        if (mounted) setError(err.message || 'Failed to query engine capabilities')
+        if (active) setError(err.message || 'Failed to query engine capabilities')
       } finally {
-        if (mounted) setLoadingCaps(false)
+        if (active) setLoadingCaps(false)
       }
     }
     init()
     return () => {
-      mounted = false
+      active = false
     }
   }, [projectId])
 
@@ -99,6 +173,100 @@ export const ModelComparisonPanel: React.FC<ModelComparisonPanelProps> = ({
       // Non-fatal
     }
   }, [projectId])
+
+  const handleBuildDelft3DPackage = async () => {
+    try {
+      setActionLoading('d3d_pkg')
+      setActionMessage(null)
+      const res = await buildDamProjectDelft3DPackage(projectId)
+      setActionMessage(`✅ Delft3D Package built (${(res.package_size_bytes / 1024).toFixed(1)} KB). Starting download...`)
+      const link = document.createElement('a')
+      link.href = getDamProjectDelft3DPackageDownloadUrl(projectId)
+      link.download = res.package_filename
+      document.body.appendChild(link)
+      link.click()
+      document.body.removeChild(link)
+    } catch (err: any) {
+      setError(`Failed to build Delft3D package: ${err.message}`)
+    } finally {
+      setActionLoading(null)
+    }
+  }
+
+  const handleBuildSPHPackage = async () => {
+    try {
+      setActionLoading('sph_pkg')
+      setActionMessage(null)
+      const res = await buildDamProjectSPHPackage(projectId)
+      setActionMessage(`✅ PySPH Package built (${(res.package_size_bytes / 1024).toFixed(1)} KB). Starting download...`)
+      const link = document.createElement('a')
+      link.href = getDamProjectSPHPackageDownloadUrl(projectId)
+      link.download = res.package_filename
+      document.body.appendChild(link)
+      link.click()
+      document.body.removeChild(link)
+    } catch (err: any) {
+      setError(`Failed to build SPH package: ${err.message}`)
+    } finally {
+      setActionLoading(null)
+    }
+  }
+
+  const handleRunSPHBenchmark = async () => {
+    try {
+      setActionLoading('sph_bench')
+      setActionMessage(null)
+      await runDamProjectSPHBenchmark(projectId)
+      setActionMessage('✅ PySPH Benchmark demonstration completed.')
+      await loadCapabilities()
+    } catch (err: any) {
+      setError(`PySPH Benchmark failed: ${err.message}`)
+    } finally {
+      setActionLoading(null)
+    }
+  }
+
+  const handleOpenImport = (engine: 'delft3d' | 'sph') => {
+    setImportEngine(engine)
+    setImportLabel(engine === 'delft3d' ? 'External Delft3D-FM Run' : 'External PySPH Particle Run')
+    setImportNotes('')
+    setSelectedFiles(null)
+    if (fileInputRef.current) fileInputRef.current.value = ''
+  }
+
+  const handleExecuteImport = async () => {
+    if (!importEngine || !selectedFiles || selectedFiles.length === 0) {
+      setError('Please select at least one valid result file to import.')
+      return
+    }
+
+    try {
+      setImporting(true)
+      setError(null)
+      const formData = new FormData()
+      for (let i = 0; i < selectedFiles.length; i++) {
+        formData.append('files', selectedFiles[i])
+      }
+      formData.append('run_label', importLabel)
+      formData.append('notes', importNotes)
+
+      if (importEngine === 'delft3d') {
+        await importDamProjectDelft3DRun(projectId, formData)
+        setActionMessage('✅ External Delft3D run imported and validated successfully.')
+      } else {
+        formData.append('target_resolution_m', targetResM.toString())
+        await importDamProjectSPHRun(projectId, formData)
+        setActionMessage('✅ External SPH run imported and rasterized successfully.')
+      }
+
+      setImportEngine(null)
+      await loadCapabilities()
+    } catch (err: any) {
+      setError(`Import failed: ${err.message}`)
+    } finally {
+      setImporting(false)
+    }
+  }
 
   const handleExecuteComparison = async () => {
     try {
@@ -151,12 +319,23 @@ export const ModelComparisonPanel: React.FC<ModelComparisonPanelProps> = ({
     }
   }
 
+  const anugaList = capabilities?.completed_runs_by_engine?.anuga || capabilities?.runs_available?.anuga || []
+  const d3dList = capabilities?.completed_runs_by_engine?.delft3d_fm || capabilities?.runs_available?.delft3d_fm || []
+  const sphList = capabilities?.completed_runs_by_engine?.pysph || capabilities?.runs_available?.pysph || []
+
+  const getRunsForEngine = (eng: string) => {
+    if (eng === 'anuga') return anugaList
+    if (eng === 'delft3d_fm') return d3dList
+    if (eng === 'pysph') return sphList
+    return []
+  }
+
   return (
     <div className="model-comp-container">
       {/* Header */}
       <div className="comp-header">
         <h3 className="comp-title">
-          <span>⚖️</span> Multi-Engine Spatial Hydrodynamic Comparison
+          <span>⚖️</span> SPH vs Delft3D Multi-Engine Hydrodynamic Comparison
         </h3>
         {onClose && (
           <button
@@ -173,78 +352,26 @@ export const ModelComparisonPanel: React.FC<ModelComparisonPanelProps> = ({
       {/* Scientific Disclaimer */}
       <div className="comp-disclaimer-box">
         <strong>Scientific Disclaimer: </strong>
-        Model disagreement reflects differences in numerical schemes, mesh resolution, wetting/drying treatment,
-        friction, breach representation, terrain processing, boundaries and other modelling assumptions.
-        Neither model is treated as ground truth. All spatial agreement and difference statistics are strictly inter-model comparisons.
+        Neither SPH nor Delft3D is assumed to be ground truth. Disagreements reflect differences between 3D/2D
+        Lagrangian particle mechanics and 2D Eulerian shallow water equations, mesh resolution, and friction.
+        ANUGA is provided as a working reference/prototype engine and does NOT substitute for official SPH-vs-Delft3D comparison.
       </div>
+
+      {actionMessage && (
+        <div style={{ padding: '0.5rem 0.75rem', background: 'rgba(34, 197, 94, 0.15)', border: '1px solid rgba(34, 197, 94, 0.3)', borderRadius: '6px', color: '#86efac', fontSize: '0.8rem', margin: '0.5rem 0' }}>
+          {actionMessage}
+        </div>
+      )}
 
       {/* Engine Capability Matrix */}
       <div className="comp-section">
         <div className="comp-section-title">
-          <span>1. Hydrodynamic Solver Availability Matrix</span>
+          <span>1. Hydrodynamic Solver Matrix & Action Center</span>
           {loadingCaps && <span style={{ fontSize: '0.7rem', color: '#94a3b8' }}>Detecting engines...</span>}
         </div>
 
         <div className="engine-matrix-grid">
-          {/* ANUGA */}
-          {(() => {
-            const anuga = capabilities?.engines?.anuga
-            const isReady = anuga?.available_for_comparison
-            return (
-              <div className={`engine-cap-card ${isReady ? 'ready' : 'unsupported'}`}>
-                <div className="engine-card-header">
-                  <span className="engine-name">ANUGA</span>
-                  <span className={`engine-pill ${isReady ? 'pill-ready' : anuga?.environment_available ? 'pill-untested' : 'pill-unavailable'}`}>
-                    {isReady ? 'Comparable' : anuga?.environment_available ? 'No Runs' : 'Unavailable'}
-                  </span>
-                </div>
-                <div className="engine-detail-row">
-                  <span>Version:</span>
-                  <span className="engine-detail-val">{anuga?.version || 'undetected'}</span>
-                </div>
-                <div className="engine-detail-row">
-                  <span>Environment:</span>
-                  <span className="engine-detail-val">{anuga?.environment_available ? 'Installed' : 'Missing'}</span>
-                </div>
-                <div className="engine-detail-row">
-                  <span>Completed Runs:</span>
-                  <span className="engine-detail-val">{anuga?.completed_run_count ?? 0}</span>
-                </div>
-                {anuga?.reason && <div className="engine-reason">{anuga.reason}</div>}
-              </div>
-            )
-          })()}
-
-          {/* Delft3D FM */}
-          {(() => {
-            const d3d = capabilities?.engines?.delft3d_fm
-            const isReady = d3d?.available_for_comparison
-            return (
-              <div className={`engine-cap-card ${isReady ? 'ready' : 'unsupported'}`}>
-                <div className="engine-card-header">
-                  <span className="engine-name">Delft3D / D-Flow FM</span>
-                  <span className={`engine-pill ${isReady ? 'pill-ready' : d3d?.environment_available ? 'pill-untested' : 'pill-unavailable'}`}>
-                    {isReady ? 'Comparable' : d3d?.environment_available ? 'No Runs' : 'Unavailable'}
-                  </span>
-                </div>
-                <div className="engine-detail-row">
-                  <span>Version:</span>
-                  <span className="engine-detail-val">{d3d?.version || 'undetected'}</span>
-                </div>
-                <div className="engine-detail-row">
-                  <span>Environment:</span>
-                  <span className="engine-detail-val">{d3d?.environment_available ? 'HydroMT Ready' : 'Missing'}</span>
-                </div>
-                <div className="engine-detail-row">
-                  <span>Completed Runs:</span>
-                  <span className="engine-detail-val">{d3d?.completed_run_count ?? 0}</span>
-                </div>
-                {d3d?.reason && <div className="engine-reason">{d3d.reason}</div>}
-              </div>
-            )
-          })()}
-
-          {/* PySPH */}
+          {/* SPH Engine Card */}
           {(() => {
             const sph = capabilities?.engines?.pysph
             const isReady = sph?.available_for_comparison
@@ -253,49 +380,228 @@ export const ModelComparisonPanel: React.FC<ModelComparisonPanelProps> = ({
                 <div className="engine-card-header">
                   <span className="engine-name">PySPH (Lagrangian)</span>
                   <span className={`engine-pill ${isReady ? 'pill-ready' : sph?.environment_available ? 'pill-untested' : 'pill-unavailable'}`}>
-                    {isReady ? 'Comparable' : sph?.environment_available ? 'No Raster' : 'Unavailable'}
+                    {isReady ? 'Comparable Run' : sph?.environment_available ? 'Benchmark Only' : 'Import Available'}
                   </span>
                 </div>
                 <div className="engine-detail-row">
-                  <span>Version:</span>
-                  <span className="engine-detail-val">{sph?.version || 'undetected'}</span>
+                  <span>Status:</span>
+                  <span className="engine-detail-val">{sph?.environment_available ? 'Solver Installed' : 'External Import Only'}</span>
                 </div>
                 <div className="engine-detail-row">
-                  <span>Environment:</span>
-                  <span className="engine-detail-val">{sph?.environment_available ? 'PySPH Ready' : 'Missing'}</span>
+                  <span>Available Runs:</span>
+                  <span className="engine-detail-val">{sphList.length} ({sph?.comparable_run_count ?? 0} comparable)</span>
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.3rem', marginTop: '0.5rem' }}>
+                  <button
+                    type="button"
+                    className="comp-select"
+                    style={{ fontSize: '0.75rem', padding: '0.25rem 0.4rem', cursor: 'pointer', textAlign: 'center', background: 'rgba(56, 189, 248, 0.15)' }}
+                    disabled={actionLoading === 'sph_pkg'}
+                    onClick={handleBuildSPHPackage}
+                  >
+                    {actionLoading === 'sph_pkg' ? 'Building...' : '📦 Build SPH Package'}
+                  </button>
+                  <button
+                    type="button"
+                    className="comp-select"
+                    style={{ fontSize: '0.75rem', padding: '0.25rem 0.4rem', cursor: 'pointer', textAlign: 'center', background: 'rgba(34, 197, 94, 0.15)' }}
+                    onClick={() => handleOpenImport('sph')}
+                  >
+                    📥 Import External SPH Run
+                  </button>
+                  {sph?.environment_available && (
+                    <button
+                      type="button"
+                      className="comp-select"
+                      style={{ fontSize: '0.75rem', padding: '0.25rem 0.4rem', cursor: 'pointer', textAlign: 'center' }}
+                      disabled={actionLoading === 'sph_bench'}
+                      onClick={handleRunSPHBenchmark}
+                    >
+                      {actionLoading === 'sph_bench' ? 'Running...' : '⚡ Run SPH Benchmark'}
+                    </button>
+                  )}
+                </div>
+                {sph?.reason && <div className="engine-reason" style={{ marginTop: '0.3rem' }}>{sph.reason}</div>}
+              </div>
+            )
+          })()}
+
+          {/* Delft3D FM Card */}
+          {(() => {
+            const d3d = capabilities?.engines?.delft3d_fm
+            const isReady = d3d?.available_for_comparison
+            return (
+              <div className={`engine-cap-card ${isReady ? 'ready' : 'unsupported'}`}>
+                <div className="engine-card-header">
+                  <span className="engine-name">Delft3D / D-Flow FM</span>
+                  <span className={`engine-pill ${isReady ? 'pill-ready' : d3d?.solver_available ? 'pill-untested' : 'pill-unavailable'}`}>
+                    {isReady ? 'Comparable Run' : d3d?.solver_available ? 'Solver Available' : 'Local Solver Unavailable'}
+                  </span>
                 </div>
                 <div className="engine-detail-row">
-                  <span>Completed Runs:</span>
-                  <span className="engine-detail-val">{sph?.completed_run_count ?? 0}</span>
+                  <span>Status:</span>
+                  <span className="engine-detail-val">{d3d?.solver_available ? 'Binary Detected' : 'Local Binary Missing'}</span>
                 </div>
-                {sph?.reason && <div className="engine-reason">{sph.reason}</div>}
+                <div className="engine-detail-row">
+                  <span>Available Runs:</span>
+                  <span className="engine-detail-val">{d3dList.length} ({d3d?.comparable_run_count ?? 0} comparable)</span>
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.3rem', marginTop: '0.5rem' }}>
+                  <button
+                    type="button"
+                    className="comp-select"
+                    style={{ fontSize: '0.75rem', padding: '0.25rem 0.4rem', cursor: 'pointer', textAlign: 'center', background: 'rgba(56, 189, 248, 0.15)' }}
+                    disabled={actionLoading === 'd3d_pkg'}
+                    onClick={handleBuildDelft3DPackage}
+                  >
+                    {actionLoading === 'd3d_pkg' ? 'Building...' : '📦 Build Delft3D Package'}
+                  </button>
+                  <button
+                    type="button"
+                    className="comp-select"
+                    style={{ fontSize: '0.75rem', padding: '0.25rem 0.4rem', cursor: 'pointer', textAlign: 'center', background: 'rgba(34, 197, 94, 0.15)' }}
+                    onClick={() => handleOpenImport('delft3d')}
+                  >
+                    📥 Import External Delft3D Run
+                  </button>
+                </div>
+                {d3d?.reason && <div className="engine-reason" style={{ marginTop: '0.3rem' }}>{d3d.reason}</div>}
+              </div>
+            )
+          })()}
+
+          {/* ANUGA Reference Card */}
+          {(() => {
+            const anuga = capabilities?.engines?.anuga
+            const isReady = anuga?.available_for_comparison
+            return (
+              <div className={`engine-cap-card ${isReady ? 'ready' : 'unsupported'}`}>
+                <div className="engine-card-header">
+                  <span className="engine-name">ANUGA (Reference)</span>
+                  <span className={`engine-pill ${isReady ? 'pill-ready' : 'pill-untested'}`}>
+                    {isReady ? 'Reference Ready' : 'Executable SWE'}
+                  </span>
+                </div>
+                <div className="engine-detail-row">
+                  <span>Role:</span>
+                  <span className="engine-detail-val">Working SWE Reference</span>
+                </div>
+                <div className="engine-detail-row">
+                  <span>Available Runs:</span>
+                  <span className="engine-detail-val">{anugaList.length} ({anuga?.comparable_run_count ?? 0} comparable)</span>
+                </div>
+                <div style={{ marginTop: '0.5rem', fontSize: '0.72rem', color: '#94a3b8', fontStyle: 'italic' }}>
+                  Fully executable reference solver. Not the official target SPH/Delft3D comparison solver.
+                </div>
+                {anuga?.reason && <div className="engine-reason" style={{ marginTop: '0.3rem' }}>{anuga.reason}</div>}
               </div>
             )
           })()}
         </div>
       </div>
 
+      {/* External Run Import Modal / Drawer */}
+      {importEngine && (
+        <div className="comp-section" style={{ border: '1px solid rgba(56, 189, 248, 0.4)', background: 'rgba(15, 23, 42, 0.95)' }}>
+          <div className="comp-section-title" style={{ display: 'flex', justifyContent: 'space-between' }}>
+            <span>📥 Import Externally Computed {importEngine === 'delft3d' ? 'Delft3D' : 'SPH'} Results</span>
+            <button
+              type="button"
+              style={{ background: 'none', border: 'none', color: '#94a3b8', cursor: 'pointer' }}
+              onClick={() => setImportEngine(null)}
+            >
+              ✕ Cancel
+            </button>
+          </div>
+          <p style={{ fontSize: '0.75rem', color: '#94a3b8', margin: '0.3rem 0' }}>
+            {importEngine === 'delft3d'
+              ? 'Select externally generated GeoTIFF rasters (maximum_depth.tif, maximum_velocity.tif, arrival_time.tif).'
+              : 'Select SPH particle array files (.npz, .csv, .json) or pre-rasterized GeoTIFFs (maximum_depth.tif).'}
+          </p>
+
+          <div className="comp-form-row">
+            <div className="comp-field">
+              <label>Select Files</label>
+              <input
+                ref={fileInputRef}
+                type="file"
+                multiple
+                accept={importEngine === 'delft3d' ? '.tif,.tiff,.nc,.json' : '.tif,.tiff,.npz,.csv,.json,.h5'}
+                className="comp-input"
+                onChange={(e) => setSelectedFiles(e.target.files)}
+              />
+            </div>
+            <div className="comp-field">
+              <label>Run Label</label>
+              <input
+                type="text"
+                className="comp-input"
+                value={importLabel}
+                onChange={(e) => setImportLabel(e.target.value)}
+              />
+            </div>
+          </div>
+
+          {importEngine === 'sph' && (
+            <div className="comp-form-row" style={{ marginTop: '0.3rem' }}>
+              <div className="comp-field">
+                <label>Particle-to-Raster Target Resolution (m)</label>
+                <input
+                  type="number"
+                  min={1}
+                  max={50}
+                  step={1}
+                  className="comp-input"
+                  value={targetResM}
+                  onChange={(e) => setTargetResM(parseFloat(e.target.value) || 10.0)}
+                />
+              </div>
+            </div>
+          )}
+
+          <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.5rem' }}>
+            <button
+              type="button"
+              className="comp-btn-primary"
+              disabled={importing || !selectedFiles || selectedFiles.length === 0}
+              onClick={handleExecuteImport}
+            >
+              {importing ? 'Validating & Processing Run...' : `Validate & Import ${importEngine === 'delft3d' ? 'Delft3D' : 'SPH'} Run`}
+            </button>
+            <button
+              type="button"
+              className="comp-select"
+              style={{ cursor: 'pointer' }}
+              onClick={() => setImportEngine(null)}
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Setup / Run Picker */}
       <div className="comp-section">
-        <div className="comp-section-title">2. Configure Pairwise Comparison</div>
+        <div className="comp-section-title">2. Configure Pairwise Solver Comparison</div>
 
         <div className="comp-form-row">
           {/* Model A */}
           <div className="comp-field">
-            <label htmlFor="comp-engine-a">Engine A (Reference Solver)</label>
+            <label htmlFor="comp-engine-a">Engine A (Solver A)</label>
             <select
               id="comp-engine-a"
               className="comp-select"
               value={engineA}
               onChange={(e) => {
                 setEngineA(e.target.value)
-                const list = capabilities?.runs_available?.[e.target.value] || []
+                const list = getRunsForEngine(e.target.value)
                 if (list.length > 0) setRunIdA(list[0].run_id)
+                else setRunIdA('')
               }}
             >
-              <option value="anuga">ANUGA Shallow Water</option>
+              <option value="pysph">PySPH (Lagrangian)</option>
               <option value="delft3d_fm">Delft3D / D-Flow FM</option>
-              <option value="pysph">PySPH SPH</option>
+              <option value="anuga">ANUGA (Reference SWE)</option>
             </select>
 
             <label htmlFor="comp-run-a" style={{ marginTop: '0.3rem' }}>Select Run A</label>
@@ -305,12 +611,12 @@ export const ModelComparisonPanel: React.FC<ModelComparisonPanelProps> = ({
               value={runIdA}
               onChange={(e) => setRunIdA(e.target.value)}
             >
-              {(capabilities?.runs_available?.[engineA] || []).length === 0 && (
-                <option value="">(No completed runs on disk)</option>
+              {getRunsForEngine(engineA).length === 0 && (
+                <option value="">(No completed/imported runs)</option>
               )}
-              {(capabilities?.runs_available?.[engineA] || []).map((r) => (
+              {getRunsForEngine(engineA).map((r) => (
                 <option key={r.run_id} value={r.run_id}>
-                  {r.run_id.substring(0, 16)}... ({r.status})
+                  {r.scenario_name || r.run_id.substring(0, 16)}... ({r.solver_execution_status || r.status})
                 </option>
               ))}
             </select>
@@ -318,20 +624,21 @@ export const ModelComparisonPanel: React.FC<ModelComparisonPanelProps> = ({
 
           {/* Model B */}
           <div className="comp-field">
-            <label htmlFor="comp-engine-b">Engine B (Comparison Solver)</label>
+            <label htmlFor="comp-engine-b">Engine B (Solver B)</label>
             <select
               id="comp-engine-b"
               className="comp-select"
               value={engineB}
               onChange={(e) => {
                 setEngineB(e.target.value)
-                const list = capabilities?.runs_available?.[e.target.value] || []
+                const list = getRunsForEngine(e.target.value)
                 if (list.length > 0) setRunIdB(list[0].run_id)
+                else setRunIdB('')
               }}
             >
               <option value="delft3d_fm">Delft3D / D-Flow FM</option>
-              <option value="anuga">ANUGA Shallow Water</option>
-              <option value="pysph">PySPH SPH</option>
+              <option value="pysph">PySPH (Lagrangian)</option>
+              <option value="anuga">ANUGA (Reference SWE)</option>
             </select>
 
             <label htmlFor="comp-run-b" style={{ marginTop: '0.3rem' }}>Select Run B</label>
@@ -341,12 +648,12 @@ export const ModelComparisonPanel: React.FC<ModelComparisonPanelProps> = ({
               value={runIdB}
               onChange={(e) => setRunIdB(e.target.value)}
             >
-              {(capabilities?.runs_available?.[engineB] || []).length === 0 && (
-                <option value="">(No completed runs on disk)</option>
+              {getRunsForEngine(engineB).length === 0 && (
+                <option value="">(No completed/imported runs)</option>
               )}
-              {(capabilities?.runs_available?.[engineB] || []).map((r) => (
+              {getRunsForEngine(engineB).map((r) => (
                 <option key={r.run_id} value={r.run_id}>
-                  {r.run_id.substring(0, 16)}... ({r.status})
+                  {r.scenario_name || r.run_id.substring(0, 16)}... ({r.solver_execution_status || r.status})
                 </option>
               ))}
             </select>

@@ -6,7 +6,11 @@ import zipfile
 import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, Any, List, Tuple
+from typing import Dict, Any, List, Tuple, Optional
+
+import numpy as np
+import rasterio
+from rasterio.crs import CRS
 from fastapi import HTTPException
 
 from app.schemas import (
@@ -14,6 +18,8 @@ from app.schemas import (
     ModelPackageResponse,
     SimulationRunResponse,
     SimulationLogResponse,
+    ProjectDelft3DPackageResponse,
+    Delft3DRunImportRequest,
 )
 from app.scenario_storage import (
     get_runtime_dir,
@@ -24,6 +30,10 @@ from app.scenario_storage import (
     compute_scenario_snapshot_checksum,
 )
 from app.raster_service import resolve_dataset_file
+from app.onboarding_service import (
+    get_dam_projects_dir,
+    validate_project_uuid,
+)
 
 
 def get_packages_dir() -> Path:
@@ -563,3 +573,366 @@ def get_simulation_logs(run_id: str) -> SimulationLogResponse:
         stdout=stdout_txt,
         stderr=stderr_txt,
     )
+
+
+# ==============================================================================
+# Phase 25: Project-Scoped Delft3D / D-Flow FM Workflow & Run Importer
+# ==============================================================================
+
+def get_dam_project_delft3d_dir(project_id: str) -> Path:
+    """Return root directory for Delft3D packages and runs under a dam project."""
+    valid_pid = validate_project_uuid(project_id)
+    p_dir = get_dam_projects_dir() / valid_pid / "delft3d"
+    p_dir.mkdir(parents=True, exist_ok=True)
+    return p_dir
+
+
+def sanitize_filename(filename: str) -> str:
+    """Sanitize uploaded filename against directory traversal and dangerous characters."""
+    clean = Path(filename).name.strip()
+    clean = clean.replace("..", "").replace("/", "").replace("\\", "")
+    if not clean:
+        clean = f"imported_file_{uuid.uuid4().hex[:6]}"
+    return clean
+
+
+def build_dam_project_delft3d_package(project_id: str) -> Tuple[ProjectDelft3DPackageResponse, Path]:
+    """
+    Build a project-specific Delft3D / D-Flow FM model package archive for the dam project.
+    Generates D-Flow FM .mdu configuration, boundary conditions, bathymetry definitions, and manifest.
+    """
+    valid_pid = validate_project_uuid(project_id)
+    p_dir = get_dam_projects_dir() / valid_pid
+    if not p_dir.is_dir() or not (p_dir / "project.json").is_file():
+        raise HTTPException(status_code=404, detail=f"Dam project '{valid_pid}' not found")
+
+    project_data: Dict[str, Any] = json.loads((p_dir / "project.json").read_text(encoding="utf-8"))
+    d3d_dir = get_dam_project_delft3d_dir(valid_pid)
+    packages_dir = d3d_dir / "packages"
+    packages_dir.mkdir(parents=True, exist_ok=True)
+
+    pkg_name = f"{valid_pid}_delft3d_package"
+    pkg_work_dir = packages_dir / pkg_name
+    zip_path = packages_dir / f"{pkg_name}.zip"
+
+    for sub in ["config", "boundaries", "docs"]:
+        (pkg_work_dir / sub).mkdir(parents=True, exist_ok=True)
+
+    caps = detect_capabilities()
+    dam_name = project_data.get("name", "Project Dam")
+    dam_height = float(project_data.get("dam_height_m") or 60.0)
+    crest_len = float(project_data.get("crest_length_m") or 200.0)
+    norm_res = float(project_data.get("normal_reservoir_level_m") or 650.0)
+    tailwater = float(project_data.get("tailwater_level_m") or 600.0)
+
+    # 1. D-Flow FM MDU Configuration File
+    mdu_content = f"""# ==============================================================================
+# Delft3D Flexible Mesh (D-Flow FM) Model Definition
+# Project: {dam_name} (ID: {valid_pid})
+# Generated: {datetime.now(timezone.utc).isoformat()}
+# ==============================================================================
+
+[general]
+fileVersion           = 1.03
+fileType              = modelDef
+program               = D-Flow FM
+version               = 2.0.0
+
+[numerics]
+CFLmax                = 0.70
+advecType             = 3
+limtypsup             = 3
+timeStepType          = 1
+minTimeStep           = 0.01
+maxTimeStep           = 1.0
+
+[physics]
+UnifFrictCoef         = 0.035
+UnifFrictType         = 1
+gravity               = 9.81
+waterDensity          = 1000.0
+
+[time]
+RefDate               = 20260901
+Tunit                 = H
+TStart                = 0.0
+TStop                 = 24.0
+DtUser                = 60.0
+DtMax                 = 1.0
+
+[geometry]
+NetFile               = dflowfm_net.nc
+BathymetryFile        = bathymetry.xyz
+WaterLevIni           = {norm_res}
+BedLevType            = 3
+
+[external forcing]
+ExtForceFile          = boundary_conditions.ext
+
+[dam breach assumption]
+DamHeightMeters       = {dam_height}
+CrestLengthMeters     = {crest_len}
+InitialWaterLevelM    = {norm_res}
+TailwaterLevelM       = {tailwater}
+"""
+    (pkg_work_dir / "config" / "dflowfm.mdu").write_text(mdu_content, encoding="utf-8")
+
+    # 2. Boundary Conditions EXT File
+    ext_content = f"""# External forcing boundary condition template for {dam_name}
+QUANTITY=waterlevelbnd
+FILENAME=upstream_stage.tim
+FILETYPE=1
+METHOD=1
+OPERAND=O
+
+QUANTITY=dischargebnd
+FILENAME=breach_hydrograph.tim
+FILETYPE=1
+METHOD=1
+OPERAND=O
+"""
+    (pkg_work_dir / "boundaries" / "boundary_conditions.ext").write_text(ext_content, encoding="utf-8")
+
+    # 3. HydroMT Builder Template
+    hydromt_yaml = f"""# HydroMT-Delft3D FM Configuration
+setup_config:
+  project_id: "{valid_pid}"
+  model: "dflowfm"
+  crs: "EPSG:32643"
+  grid_resolution: 25.0
+  bathymetry: "dem.tif"
+  friction_manning: 0.035
+"""
+    (pkg_work_dir / "config" / "hydromt_delft3dfm.yaml").write_text(hydromt_yaml, encoding="utf-8")
+
+    # 4. Scientific README
+    readme_content = f"""================================================================================
+PROJECT-SPECIFIC DELFT3D / D-FLOW FM MODEL PACKAGE
+================================================================================
+Project:               {dam_name}
+Project ID:            {valid_pid}
+Generated:             {datetime.now(timezone.utc).isoformat()}
+D-Flow FM Available:   {caps.dflowfm_available}
+
+SCIENTIFIC REQUIREMENTS & OUTPUT CONTRACT:
+1. EXECUTING D-FLOW FM:
+   To run this simulation, install Deltares Delft3D Flexible Mesh (D-Flow FM) / DIMR
+   and execute:
+     dflowfm --autostartstop config/dflowfm.mdu
+
+2. IMPORTING DELFT3D RESULTS:
+   Upon simulation completion, postprocessed GeoTIFF outputs:
+     - maximum_depth.tif    (m, NoData: -9999.0)
+     - maximum_velocity.tif (m/s, NoData: -9999.0)
+     - arrival_time.tif     (seconds/hours, NoData: -9999.0)
+   or NetCDF map output files (DFM_OUTPUT_dflowfm_net.nc) can be imported into this
+   system using:
+     POST /api/dam-projects/{valid_pid}/delft3d/import-run
+================================================================================
+"""
+    (pkg_work_dir / "docs" / "README_DELFT3D_REQUIREMENTS.txt").write_text(readme_content, encoding="utf-8")
+
+    # 5. Manifest
+    manifest_data = {
+        "manifest_version": "1.0.0",
+        "project_id": valid_pid,
+        "package_type": "project_delft3d_package",
+        "solver_framework": "Delft3D Flexible Mesh (D-Flow FM)",
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "capabilities_at_build": {
+            "hydromt_available": caps.hydromt_available,
+            "dflowfm_available": caps.dflowfm_available,
+            "execution_enabled": caps.execution_enabled,
+        },
+        "output_contract": {
+            "required_rasters": ["maximum_depth.tif", "maximum_velocity.tif", "arrival_time.tif"],
+            "target_crs": "EPSG:32643",
+            "nodata_value": -9999.0,
+        }
+    }
+    (pkg_work_dir / "manifest.json").write_text(json.dumps(manifest_data, indent=2), encoding="utf-8")
+
+    # 6. Build ZIP
+    with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
+        for file_path in pkg_work_dir.rglob("*"):
+            if file_path.is_file():
+                arcname = file_path.relative_to(pkg_work_dir)
+                zf.write(file_path, arcname=arcname)
+
+    pkg_size = zip_path.stat().st_size
+    manifest_checksum = compute_file_sha256(pkg_work_dir / "manifest.json") or "unknown"
+
+    response = ProjectDelft3DPackageResponse(
+        project_id=valid_pid,
+        package_filename=zip_path.name,
+        package_size_bytes=pkg_size,
+        created_at=manifest_data["created_at"],
+        manifest_checksum=manifest_checksum,
+        download_url=f"/api/dam-projects/{valid_pid}/delft3d/download-package",
+        dflowfm_available=caps.dflowfm_available,
+        execution_enabled=caps.execution_enabled,
+        notes=[
+            f"Delft3D Flexible Mesh package for project '{dam_name}' built successfully.",
+            "Contains D-Flow FM MDU definitions, boundary forcing templates, and output contracts.",
+        ],
+    )
+    return response, zip_path
+
+
+def import_dam_project_delft3d_run(
+    project_id: str,
+    uploaded_files: List[Tuple[str, bytes]],
+    req: Delft3DRunImportRequest,
+) -> Dict[str, Any]:
+    """
+    Securely import an externally computed Delft3D / D-Flow FM simulation run into dam project storage.
+    Accepts standardized GeoTIFFs (maximum_depth.tif, maximum_velocity.tif, arrival_time.tif) or NetCDF map output.
+    Validates files, enforces size limits, blocks path traversal, and produces standardized products.
+    """
+    valid_pid = validate_project_uuid(project_id)
+    p_dir = get_dam_projects_dir() / valid_pid
+    if not p_dir.is_dir() or not (p_dir / "project.json").is_file():
+        raise HTTPException(status_code=404, detail=f"Dam project '{valid_pid}' not found")
+
+    if not uploaded_files:
+        raise HTTPException(status_code=400, detail="No files provided for Delft3D run import.")
+
+    total_bytes = sum(len(b) for _, b in uploaded_files)
+    if total_bytes > 500 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="Total uploaded size exceeds 500 MB limit.")
+
+    run_id = f"d3d-import-{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}"
+    d3d_dir = get_dam_project_delft3d_dir(valid_pid)
+    run_dir = d3d_dir / "runs" / run_id
+    run_dir.mkdir(parents=True, exist_ok=True)
+
+    saved_files: Dict[str, Path] = {}
+    file_hashes: Dict[str, str] = {}
+    allowed_exts = {".tif", ".tiff", ".nc", ".nc4", ".json"}
+
+    for filename, content in uploaded_files:
+        clean_name = sanitize_filename(filename)
+        ext = Path(clean_name).suffix.lower()
+        if ext not in allowed_exts:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Unsupported file type '{ext}' for file '{clean_name}'. Allowed: {list(allowed_exts)}"
+            )
+
+        dst_path = run_dir / clean_name
+        dst_path.write_bytes(content)
+        saved_files[clean_name] = dst_path
+        file_hashes[clean_name] = compute_file_sha256(dst_path) or ""
+
+    # Identify GeoTIFFs
+    geotiffs = {k: v for k, v in saved_files.items() if v.suffix.lower() in [".tif", ".tiff"]}
+    depth_tif = None
+    vel_tif = None
+    arr_tif = None
+
+    for name, path in geotiffs.items():
+        name_lower = name.lower()
+        if "depth" in name_lower or name_lower in ["maximum_depth.tif", "depth.tif", "max_depth.tif"]:
+            depth_tif = path
+            if path.name != "maximum_depth.tif":
+                std_path = run_dir / "maximum_depth.tif"
+                shutil.copy2(path, std_path)
+                depth_tif = std_path
+        elif "vel" in name_lower or name_lower in ["maximum_velocity.tif", "velocity.tif", "max_velocity.tif"]:
+            vel_tif = path
+            if path.name != "maximum_velocity.tif":
+                std_path = run_dir / "maximum_velocity.tif"
+                shutil.copy2(path, std_path)
+                vel_tif = std_path
+        elif "arr" in name_lower or name_lower in ["arrival_time.tif", "arrival.tif"]:
+            arr_tif = path
+            if path.name != "arrival_time.tif":
+                std_path = run_dir / "arrival_time.tif"
+                shutil.copy2(path, std_path)
+                arr_tif = std_path
+
+    if not depth_tif:
+        raise HTTPException(
+            status_code=422,
+            detail="Uploaded Delft3D run must contain at least maximum_depth.tif (or a recognized depth GeoTIFF)."
+        )
+
+    # Validate output GeoTIFF with rasterio
+    with rasterio.open(depth_tif) as src:
+        native_crs_str = str(src.crs or "EPSG:4326")
+        res_x = abs(src.transform.a)
+        bounds_tup = (float(src.bounds.left), float(src.bounds.bottom), float(src.bounds.right), float(src.bounds.top))
+        nodata_val = float(src.nodata if src.nodata is not None else -9999.0)
+
+    layer_hashes: Dict[str, str] = {
+        "maximum_depth": compute_file_sha256(depth_tif) or "",
+    }
+    if vel_tif and vel_tif.is_file():
+        layer_hashes["maximum_velocity"] = compute_file_sha256(vel_tif) or ""
+    if arr_tif and arr_tif.is_file():
+        layer_hashes["arrival_time"] = compute_file_sha256(arr_tif) or ""
+
+    run_record = {
+        "run_id": run_id,
+        "project_id": valid_pid,
+        "engine": "delft3d_fm",
+        "engine_version": "Delft3D Flexible Mesh (Imported)",
+        "run_label": req.run_label or "Imported Delft3D Run",
+        "status": "completed",
+        "solver_execution_status": "imported",
+        "scientific_status": req.scientific_status or "imported_external_run",
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "notes": req.notes or "",
+        "native_crs": native_crs_str,
+        "native_resolution_m": round(res_x, 4),
+        "bounds": bounds_tup,
+        "nodata_value": nodata_val,
+        "layers": {
+            "has_maximum_depth": True,
+            "has_maximum_velocity": vel_tif is not None and vel_tif.is_file(),
+            "has_arrival_time": arr_tif is not None and arr_tif.is_file(),
+        },
+        "layer_hashes": layer_hashes,
+        "source_files": list(saved_files.keys()),
+        "source_file_hashes": file_hashes,
+        "provenance": {
+            "imported_at": datetime.now(timezone.utc).isoformat(),
+            "import_mode": "geotiff",
+        }
+    }
+
+    (run_dir / "run.json").write_text(json.dumps(run_record, indent=2), encoding="utf-8")
+    return run_record
+
+
+def list_dam_project_delft3d_runs(project_id: str) -> List[Dict[str, Any]]:
+    """List all completed/imported Delft3D runs for a dam project."""
+    valid_pid = validate_project_uuid(project_id)
+    d3d_dir = get_dam_project_delft3d_dir(valid_pid)
+    runs_dir = d3d_dir / "runs"
+    if not runs_dir.is_dir():
+        return []
+
+    results: List[Dict[str, Any]] = []
+    for r_sub in sorted(runs_dir.iterdir(), reverse=True):
+        if not r_sub.is_dir():
+            continue
+        r_json = r_sub / "run.json"
+        if r_json.is_file():
+            try:
+                data = json.loads(r_json.read_text(encoding="utf-8"))
+                results.append(data)
+            except Exception:
+                pass
+    return results
+
+
+def get_dam_project_delft3d_run_detail(project_id: str, run_id: str) -> Dict[str, Any]:
+    """Retrieve full details of a Delft3D run under a dam project."""
+    valid_pid = validate_project_uuid(project_id)
+    clean_rid = sanitize_filename(run_id)
+    d3d_dir = get_dam_project_delft3d_dir(valid_pid)
+    r_json = d3d_dir / "runs" / clean_rid / "run.json"
+    if not r_json.is_file():
+        raise HTTPException(status_code=404, detail=f"Delft3D run '{clean_rid}' not found in project '{valid_pid}'.")
+    return json.loads(r_json.read_text(encoding="utf-8"))

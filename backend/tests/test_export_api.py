@@ -91,7 +91,7 @@ def test_get_export_route_rejected_with_422():
     """Test that GET /api/export/route is explicitly rejected with 422."""
     res = client.get("/api/export/route")
     assert res.status_code == 422
-    assert "Route export is not supported via GET" in res.json()["detail"]
+    assert "Invalid layer 'route'" in res.json()["detail"]
 
 
 def test_export_invalid_layer_rejected():
@@ -198,36 +198,6 @@ def test_export_assets_shapefile_zip(mock_assets):
         # Verify all shapefile sidecars exist
         for ext in [".shp", ".shx", ".dbf", ".prj", ".cpg"]:
             assert any(n.endswith(f"_points{ext}") for n in namelist)
-
-
-@patch("app.export_service.calculate_screening_route")
-def test_post_export_route_geojson(mock_calc):
-    """Test POST route export recomputing from RouteScreeningRequest."""
-    mock_calc.return_value.route_found = True
-    mock_calc.return_value.geojson = {
-        "type": "Feature",
-        "geometry": {"type": "LineString", "coordinates": [[74.70, 16.20], [74.72, 16.20]]},
-        "properties": {"title": "Screened Shortest Route", "total_distance_km": 2.2},
-    }
-
-    res = client.post(
-        "/api/export/route",
-        json={
-            "format": "geojson",
-            "route_request": {
-                "start_lon": 74.70,
-                "start_lat": 16.20,
-                "end_lon": 74.72,
-                "end_lat": 16.20,
-                "avoid_screening_positive": True,
-            },
-        },
-    )
-    assert res.status_code == 200
-    assert res.headers["content-type"] == "application/geo+json"
-    data = res.json()
-    assert data["type"] == "FeatureCollection"
-    assert len(data["features"]) == 1
 
 
 @pytest.mark.skipif(

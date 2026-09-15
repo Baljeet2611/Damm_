@@ -38,6 +38,8 @@ interface DamProjectAnugaReadinessProps {
   onPackageBuilt?: () => void
   onDisplayHazardLayer?: (projectId: string, runId: string, layer: string, processingId?: string) => void
   onDisplayTimestepLayer?: (projectId: string, runId: string, stepIdx: number, processingId?: string) => void
+  focusResultsOnly?: boolean
+  onNavigateToSimulation?: () => void
 }
 
 export const DamProjectAnugaReadiness: React.FC<DamProjectAnugaReadinessProps> = ({
@@ -45,6 +47,8 @@ export const DamProjectAnugaReadiness: React.FC<DamProjectAnugaReadinessProps> =
   onPackageBuilt,
   onDisplayHazardLayer,
   onDisplayTimestepLayer,
+  focusResultsOnly,
+  onNavigateToSimulation,
 }) => {
   const [runningPreflight, setRunningPreflight] = useState<boolean>(false)
   const [preflightResult, setPreflightResult] = useState<DamProjectAnugaPreflightResponse | null>(null)
@@ -423,6 +427,435 @@ export const DamProjectAnugaReadiness: React.FC<DamProjectAnugaReadinessProps> =
     }
   }
 
+  const renderResultsContent = () => {
+    if (!activeRun || activeRun.status !== 'completed') {
+      return (
+        <div className="results-card" style={{ marginTop: '0.6rem' }}>
+          <div className="results-header">
+            <h6>🌊 Hydrodynamic Flood Results</h6>
+            <span className="legend-tag status-tag-unverified">AWAITING RUN</span>
+          </div>
+          <p style={{ fontSize: '0.78rem', color: '#94a3b8', margin: '0.5rem 0' }}>
+            No completed ANUGA simulation runs are available for this study yet. Please execute the reference simulation in Stage 3 first.
+          </p>
+          {onNavigateToSimulation && (
+            <button
+              type="button"
+              className="btn-preflight"
+              onClick={onNavigateToSimulation}
+              style={{ background: '#2563eb', color: '#fff', padding: '0.45rem 0.9rem', fontSize: '0.78rem', fontWeight: 600 }}
+            >
+              ⚡ Go to Simulation Stage
+            </button>
+          )}
+        </div>
+      )
+    }
+
+    if (!results) {
+      return (
+        <div className="results-card" style={{ marginTop: '0.6rem' }}>
+          <div className="results-header">
+            <h6>⚡ Hydrodynamic Postprocessing Required</h6>
+            <span className="legend-tag status-tag-unverified">RUN COMPLETED</span>
+          </div>
+          <p style={{ fontSize: '0.78rem', color: '#94a3b8', margin: '0.5rem 0' }}>
+            The ANUGA simulation completed successfully. Generate standard maximum depth, velocity, and arrival time GeoTIFFs to visualize results.
+          </p>
+          <div style={{ display: 'flex', gap: '0.8rem', alignItems: 'center', marginTop: '0.4rem', flexWrap: 'wrap' }}>
+            <label style={{ fontSize: '0.72rem', color: '#94a3b8', display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
+              Dry Depth (m):
+              <input
+                type="number"
+                step="0.001"
+                min="0.001"
+                value={dryDepthThreshold}
+                onChange={e => setDryDepthThreshold(parseFloat(e.target.value) || 0.005)}
+                className="point-probe-input"
+                style={{ width: '65px' }}
+              />
+            </label>
+            <label style={{ fontSize: '0.72rem', color: '#94a3b8', display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
+              Arrival Depth (m):
+              <input
+                type="number"
+                step="0.01"
+                min="0.001"
+                value={arrivalDepthThreshold}
+                onChange={e => setArrivalDepthThreshold(parseFloat(e.target.value) || 0.05)}
+                className="point-probe-input"
+                style={{ width: '65px' }}
+              />
+            </label>
+            <button
+              type="button"
+              className="btn-postprocess-trigger"
+              onClick={handlePostprocess}
+              disabled={postprocessing}
+            >
+              {postprocessing ? (
+                <>
+                  <span className="spinner" /> Postprocessing Mesh & Timesteps...
+                </>
+              ) : (
+                '⚡ Generate Hazard Rasters (GeoTIFFs)'
+              )}
+            </button>
+          </div>
+          {postprocessError && (
+            <div className="damage-error-box font-mono" style={{ marginTop: '0.4rem' }}>
+              ⛔ {postprocessError}
+            </div>
+          )}
+        </div>
+      )
+    }
+
+    return (
+      <div className="results-card" style={{ marginTop: '0.6rem' }}>
+        <div className="results-header">
+          <h6>🗺️ Hydrodynamic Hazard Maps & Transient Animation</h6>
+          <span className="legend-tag status-tag-unverified">HYPOTHETICAL UNVERIFIED</span>
+        </div>
+
+        <div className="val-disclaimer-box font-mono" style={{ fontSize: '0.68rem', margin: '0.2rem 0' }}>
+          ⚠️ <strong>SCIENTIFIC DISCLAIMER:</strong> Hazard rasters and animation frames generated from uncalibrated 2D shallow water equations with zero-extrapolation mesh masking. Not for engineering decision-making.
+        </div>
+
+        {/* Mode Selector */}
+        <div style={{ display: 'flex', gap: '0.4rem', marginBottom: '0.6rem', borderBottom: '1px solid #334155', paddingBottom: '0.4rem' }}>
+          <button
+            type="button"
+            className={`btn-layer-tab ${activeResultsTab === 'static' ? 'active' : ''}`}
+            onClick={() => {
+              setActiveResultsTab('static')
+              setIsPlaying(false)
+              if (onDisplayHazardLayer && activeRun) {
+                onDisplayHazardLayer(project.project_id, activeRun.run_id, selectedLayer, results.processing_id)
+              }
+            }}
+            style={{ flex: 1, textAlign: 'center', padding: '0.4rem 0.6rem' }}
+          >
+            📊 Static Hazard Maps
+          </button>
+          <button
+            type="button"
+            className={`btn-layer-tab ${activeResultsTab === 'animation' ? 'active' : ''}`}
+            onClick={() => {
+              setActiveResultsTab('animation')
+              if (onDisplayTimestepLayer && activeRun) {
+                onDisplayTimestepLayer(project.project_id, activeRun.run_id, currentStep, results.processing_id)
+              }
+            }}
+            style={{ flex: 1, textAlign: 'center', padding: '0.4rem 0.6rem' }}
+          >
+            🌊 Transient Flood Animation ({timestepsInfo?.total_timesteps || 61} Frames)
+          </button>
+        </div>
+
+        {activeResultsTab === 'animation' ? (
+          <div className="animation-timeline-card" style={{ background: '#0f172a', border: '1px solid #1e293b', borderRadius: '6px', padding: '0.8rem', marginTop: '0.4rem' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.4rem' }}>
+              <div style={{ fontWeight: 600, color: '#38bdf8', fontSize: '0.85rem' }}>
+                ⏱️ Simulation Time: <span style={{ color: '#f8fafc' }}>{currentStep} min</span> ({currentStep * 60} s / 3600 s)
+              </div>
+              <span className="legend-tag status-tag-unverified font-mono" style={{ fontSize: '0.65rem' }}>
+                Frame {currentStep + 1} / {timestepsInfo?.total_timesteps || 61}
+              </span>
+            </div>
+
+            <div style={{ margin: '0.6rem 0' }}>
+              <input
+                type="range"
+                min={0}
+                max={(timestepsInfo?.total_timesteps || 61) - 1}
+                value={currentStep}
+                onChange={(e) => handleStepChange(Number(e.target.value))}
+                style={{ width: '100%', cursor: 'pointer', accentColor: '#0284c7' }}
+              />
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.65rem', color: '#94a3b8', marginTop: '0.15rem' }}>
+                <span>0 min (Breach)</span>
+                <span>15 min</span>
+                <span>30 min</span>
+                <span>45 min</span>
+                <span>60 min (Final Extent)</span>
+              </div>
+            </div>
+
+            <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap', alignItems: 'center', marginTop: '0.6rem' }}>
+              <button
+                type="button"
+                className="btn-project-action"
+                onClick={handleTogglePlay}
+                style={{
+                  background: isPlaying ? '#dc2626' : '#16a34a',
+                  color: '#ffffff',
+                  borderColor: isPlaying ? '#ef4444' : '#22c55e',
+                  fontWeight: 600,
+                  minWidth: '85px',
+                }}
+              >
+                {isPlaying ? '⏸ Pause' : '▶ Play'}
+              </button>
+              <button
+                type="button"
+                className="btn-layer-tab"
+                onClick={() => handleStepChange(0)}
+                title="Go to Start (0 min)"
+                disabled={currentStep === 0}
+              >
+                ⏮ 0m
+              </button>
+              <button
+                type="button"
+                className="btn-layer-tab"
+                onClick={() => handleStepChange(Math.max(0, currentStep - 1))}
+                title="Previous Step (-1 min)"
+                disabled={currentStep === 0}
+              >
+                ◀ -1m
+              </button>
+              <button
+                type="button"
+                className="btn-layer-tab"
+                onClick={() => handleStepChange(Math.min((timestepsInfo?.total_timesteps || 61) - 1, currentStep + 1))}
+                title="Next Step (+1 min)"
+                disabled={currentStep >= (timestepsInfo?.total_timesteps || 61) - 1}
+              >
+                ▶ +1m
+              </button>
+              <button
+                type="button"
+                className="btn-layer-tab"
+                onClick={() => handleStepChange((timestepsInfo?.total_timesteps || 61) - 1)}
+                title="Go to End (60 min)"
+                disabled={currentStep >= (timestepsInfo?.total_timesteps || 61) - 1}
+              >
+                ⏭ 60m
+              </button>
+
+              <div style={{ display: 'flex', gap: '0.2rem', marginLeft: 'auto', alignItems: 'center' }}>
+                <span style={{ fontSize: '0.7rem', color: '#94a3b8' }}>Speed:</span>
+                {[0.5, 1, 2, 4].map((speed) => (
+                  <button
+                    key={speed}
+                    type="button"
+                    className={`btn-layer-tab ${playbackSpeed === speed ? 'active' : ''}`}
+                    onClick={() => setPlaybackSpeed(speed)}
+                    style={{ padding: '0.2rem 0.4rem', fontSize: '0.7rem' }}
+                  >
+                    {speed}x
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="layer-stats-grid font-mono" style={{ fontSize: '0.7rem', marginTop: '0.6rem' }}>
+              <div className="val-meta-item">
+                <span className="val-meta-label">Variable</span>
+                <span className="val-meta-value">Transient Water Depth</span>
+              </div>
+              <div className="val-meta-item">
+                <span className="val-meta-label">Time Elapsed</span>
+                <span className="val-meta-value">{currentStep * 60} s / 3600 s</span>
+              </div>
+              <div className="val-meta-item">
+                <span className="val-meta-label">Output Interval</span>
+                <span className="val-meta-value">60 s</span>
+              </div>
+              <div className="val-meta-item">
+                <span className="val-meta-label">Max Scaled Depth</span>
+                <span className="val-meta-value">{timestepsInfo?.valid_max?.toFixed(3) || '20.159'} m</span>
+              </div>
+            </div>
+          </div>
+        ) : (
+          <>
+            <div className="layer-switcher-row" style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap', alignItems: 'center' }}>
+              <button
+                type="button"
+                className={`btn-layer-tab ${selectedLayer === 'maximum_depth' ? 'active' : ''}`}
+                onClick={() => {
+                  setSelectedLayer('maximum_depth')
+                  if (onDisplayHazardLayer && activeRun) {
+                    onDisplayHazardLayer(project.project_id, activeRun.run_id, 'maximum_depth', results.processing_id)
+                  }
+                }}
+              >
+                🌊 Maximum Depth (m)
+              </button>
+              <button
+                type="button"
+                className={`btn-layer-tab ${selectedLayer === 'maximum_velocity' ? 'active' : ''}`}
+                onClick={() => {
+                  setSelectedLayer('maximum_velocity')
+                  if (onDisplayHazardLayer && activeRun) {
+                    onDisplayHazardLayer(project.project_id, activeRun.run_id, 'maximum_velocity', results.processing_id)
+                  }
+                }}
+              >
+                💨 Maximum Velocity (m/s)
+              </button>
+              <button
+                type="button"
+                className={`btn-layer-tab ${selectedLayer === 'arrival_time' ? 'active' : ''}`}
+                onClick={() => {
+                  setSelectedLayer('arrival_time')
+                  if (onDisplayHazardLayer && activeRun) {
+                    onDisplayHazardLayer(project.project_id, activeRun.run_id, 'arrival_time', results.processing_id)
+                  }
+                }}
+              >
+                ⏱️ Flood Arrival Time (s)
+              </button>
+              {onDisplayHazardLayer && (
+                <button
+                  type="button"
+                  className="btn-project-action"
+                  onClick={() => {
+                    if (activeRun) {
+                      onDisplayHazardLayer(project.project_id, activeRun.run_id, selectedLayer, results.processing_id)
+                    }
+                  }}
+                  style={{ marginLeft: 'auto', background: '#0284c7', color: '#ffffff', borderColor: '#38bdf8' }}
+                  title="Render active hazard raster tiles onto MapLibre map"
+                >
+                  🗺️ Render on Map
+                </button>
+              )}
+            </div>
+          </>
+        )}
+
+        {/* Statistics & Legend */}
+        {results.layer_statistics[selectedLayer] && (
+          <div className="layer-stats-grid font-mono" style={{ fontSize: '0.7rem' }}>
+            <div className="val-meta-item">
+              <span className="val-meta-label">Min</span>
+              <span className="val-meta-value">
+                {results.layer_statistics[selectedLayer].min != null
+                  ? `${results.layer_statistics[selectedLayer].min?.toFixed(3)} ${results.layer_statistics[selectedLayer].unit}`
+                  : 'N/A'}
+              </span>
+            </div>
+            <div className="val-meta-item">
+              <span className="val-meta-label">Max</span>
+              <span className="val-meta-value">
+                {results.layer_statistics[selectedLayer].max != null
+                  ? `${results.layer_statistics[selectedLayer].max?.toFixed(3)} ${results.layer_statistics[selectedLayer].unit}`
+                  : 'N/A'}
+              </span>
+            </div>
+            <div className="val-meta-item">
+              <span className="val-meta-label">Mean</span>
+              <span className="val-meta-value">
+                {results.layer_statistics[selectedLayer].mean != null
+                  ? `${results.layer_statistics[selectedLayer].mean?.toFixed(3)} ${results.layer_statistics[selectedLayer].unit}`
+                  : 'N/A'}
+              </span>
+            </div>
+            <div className="val-meta-item">
+              <span className="val-meta-label">Valid Pixels</span>
+              <span className="val-meta-value">
+                {results.layer_statistics[selectedLayer].valid_pixels?.toLocaleString() || '0'}
+              </span>
+            </div>
+          </div>
+        )}
+
+        {legend && (
+          <div className="layer-legend-container">
+            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.68rem', fontWeight: 600, color: '#94a3b8' }}>
+              <span>{legend.label || 'Layer'} Legend</span>
+              <span>Unit: {results.layer_statistics[selectedLayer]?.unit || 'N/A'}</span>
+            </div>
+            <div
+              className="legend-bar-gradient"
+              style={{
+                background:
+                  selectedLayer === 'maximum_depth'
+                    ? 'linear-gradient(to right, rgba(224,242,254,0.3), #38bdf8, #0284c7, #1e3a8a)'
+                    : selectedLayer === 'maximum_velocity'
+                    ? 'linear-gradient(to right, rgba(254,243,199,0.3), #f59e0b, #ef4444, #7f1d1d)'
+                    : 'linear-gradient(to right, #ef4444, #f59e0b, #3b82f6, #6366f1)',
+              }}
+            />
+            <div className="legend-labels-row">
+              <span>{legend.min_value?.toFixed(2)} {results.layer_statistics[selectedLayer]?.unit}</span>
+              <span>{legend.max_value?.toFixed(2)} {results.layer_statistics[selectedLayer]?.unit}</span>
+            </div>
+          </div>
+        )}
+
+        {/* Point Probe Query */}
+        <div className="point-probe-card">
+          <span style={{ fontSize: '0.74rem', fontWeight: 600, color: '#38bdf8' }}>
+            🎯 Point Value Probe ({selectedLayer.replace('_', ' ')})
+          </span>
+          <form onSubmit={handleQueryPoint} className="point-probe-inputs">
+            <input
+              type="text"
+              placeholder="Longitude (e.g. 74.65)"
+              value={pointLon}
+              onChange={e => setPointLon(e.target.value)}
+              className="point-probe-input"
+            />
+            <input
+              type="text"
+              placeholder="Latitude (e.g. 16.12)"
+              value={pointLat}
+              onChange={e => setPointLat(e.target.value)}
+              className="point-probe-input"
+            />
+            <button type="submit" className="btn-point-query" disabled={queryingPoint}>
+              {queryingPoint ? 'Querying...' : 'Query Point'}
+            </button>
+          </form>
+
+          {pointError && (
+            <div className="damage-error-box font-mono" style={{ fontSize: '0.68rem' }}>
+              ⛔ {pointError}
+            </div>
+          )}
+
+          {pointResult && (
+            <div className="val-meta-item font-mono" style={{ fontSize: '0.7rem', background: '#0f172a', padding: '0.4rem', borderRadius: '4px' }}>
+              <div>
+                <strong>Value:</strong>{' '}
+                {pointResult.value != null
+                  ? `${pointResult.value.toFixed(4)} ${pointResult.unit}`
+                  : 'NoData (Outside Mesh or Dry)'}
+              </div>
+              <div style={{ fontSize: '0.65rem', color: '#94a3b8', marginTop: '0.2rem' }}>
+                ℹ️ <em>{pointResult.disclaimer}</em>
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Direct GeoTIFF Downloads */}
+        <div style={{ marginTop: '0.4rem' }}>
+          <span style={{ fontSize: '0.72rem', color: '#94a3b8', display: 'block', marginBottom: '0.3rem' }}>
+            📥 Download Raw GeoTIFFs:
+          </span>
+          <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap' }}>
+            {Object.entries(results.layer_files).map(([key, filename]) => (
+              <a
+                key={key}
+                href={`${import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'}/api/dam-projects/${encodeURIComponent(project.project_id)}/anuga/runs/${encodeURIComponent(activeRun.run_id)}/results/${key}/download`}
+                download={filename}
+                className="btn-preflight"
+                style={{ padding: '0.25rem 0.55rem', fontSize: '0.7rem', textDecoration: 'none' }}
+              >
+                💾 {filename}
+              </a>
+            ))}
+          </div>
+        </div>
+      </div>
+    )
+  }
+
   const isCorrupted =
     ('available' in project && !project.available) ||
     ('integrity_status' in project && project.integrity_status === 'integrity_failed') ||
@@ -433,15 +866,27 @@ export const DamProjectAnugaReadiness: React.FC<DamProjectAnugaReadinessProps> =
     ('anuga_package_built' in project && project.anuga_package_built)
   )
 
+  if (focusResultsOnly) {
+    return (
+      <div className="simulation-readiness-container">
+        <div className="readiness-header">
+          <h5>🌊 Hydrodynamic Flood Results & Transient Animation</h5>
+          <span className="legend-tag">ANUGA REFERENCE</span>
+        </div>
+        {renderResultsContent()}
+      </div>
+    )
+  }
+
   return (
     <div className="simulation-readiness-container">
       <div className="readiness-header">
-        <h5>⚡ ANUGA Simulation Readiness & Package</h5>
-        <span className="legend-tag">HYPOTHETICAL UNVERIFIED</span>
+        <h5>⚡ Reference / Prototype Hydrodynamic Engine (ANUGA)</h5>
+        <span className="legend-tag">WORKING REFERENCE</span>
       </div>
 
       <p className="readiness-intro">
-        Assess spatial boundaries, physical water heads, and numerical mesh readiness before generating a reproducible ANUGA package.
+        Assess spatial boundaries, physical water heads, and numerical mesh readiness before generating a reproducible ANUGA reference simulation. Official SIH comparison target is SPH + Delft3D.
       </p>
 
       {/* 5-Tier Simulation Readiness Badges */}
