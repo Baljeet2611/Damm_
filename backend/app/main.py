@@ -19,10 +19,6 @@ from app.schemas import (
     DamageConfigResponse,
     DamageScenarioRequest,
     DamageScenarioResponse,
-    RouteScreeningRequest,
-    RouteScreeningResponse,
-    ExportRouteRequest,
-    ExportRequest,
     ScenarioCreateRequest,
     ScenarioUpdateRequest,
     ScenarioResponse,
@@ -35,10 +31,6 @@ from app.schemas import (
     SPHPackageResponse,
     SPHRunRequest,
     SPHRunResponse,
-    ComparisonReadinessResponse,
-    ComparisonRequest,
-    ComparisonResponse,
-    MethodologyComparisonResponse,
     GEECapabilitiesResponse,
     GEEDatasetInfo,
     GEEExportPlanRequest,
@@ -74,6 +66,10 @@ from app.schemas import (
     ModelComparisonCapabilitiesResponse,
     ModelComparisonRunRequest,
     ModelComparisonRunResponse,
+    ProjectDelft3DPackageResponse,
+    ProjectSPHPackageResponse,
+    Delft3DRunImportRequest,
+    SPHRunImportRequest,
     ExposureCapabilitiesResponse,
     ExposureRunRequest,
     ExposureRunSummary,
@@ -86,6 +82,18 @@ from app.model_comparison_service import (
     get_model_comparison_run,
     get_model_comparison_logs,
     render_model_comparison_tile,
+)
+from app.sph_service import (
+    build_dam_project_sph_package,
+    import_dam_project_sph_run,
+    list_dam_project_sph_runs,
+    get_dam_project_sph_run_detail,
+)
+from app.simulation_service import (
+    build_dam_project_delft3d_package,
+    import_dam_project_delft3d_run,
+    list_dam_project_delft3d_runs,
+    get_dam_project_delft3d_run_detail,
 )
 from app.exposure_service import (
     get_project_exposure_capabilities,
@@ -127,7 +135,6 @@ from app.damage_service import (
     get_default_damage_config,
     compute_damage_scenario,
 )
-from app.route_service import calculate_screening_route
 from app.export_service import handle_export
 from app.scenario_storage import (
     list_scenarios,
@@ -154,11 +161,6 @@ from app.sph_service import (
     list_sph_runs,
     get_sph_run,
     get_sph_logs,
-)
-from app.comparison_service import (
-    check_comparison_readiness,
-    compare_runs,
-    get_methodology_comparison,
 )
 from app.gee_service import (
     check_gee_capabilities,
@@ -732,16 +734,6 @@ def post_damage_estimate(request: DamageScenarioRequest) -> DamageScenarioRespon
 
 # Phase 8: Route Screening Endpoints
 
-@app.post("/api/routes/screening", response_model=RouteScreeningResponse)
-def post_route_screening(request: RouteScreeningRequest) -> RouteScreeningResponse:
-    """
-    Calculate preliminary route screening between start and destination coordinates.
-    Snaps to nearest road network nodes, removes screening-positive segments by default,
-    and returns Dijkstra shortest route geometry with segment count and diagnostic warnings.
-    """
-    return calculate_screening_route(request)
-
-
 # Phase 9: Geospatial Export Endpoints
 
 @app.get("/api/export/{layer}")
@@ -754,53 +746,15 @@ def get_export_layer(
 ) -> Response:
     """
     Export whitelisted spatial layer (assets, roads) as GeoJSON, KML, or ESRI Shapefile (ZIP).
-    Route export is not supported via GET; use POST /api/export/route or POST /api/export.
     Applies exposure filtering (all, screening_positive, not_exposed, not_assessed).
     Never accepts or exposes arbitrary filesystem paths.
     """
-    if layer.lower() == "route":
-        raise HTTPException(
-            status_code=422,
-            detail="Route export is not supported via GET. Use POST /api/export/route or POST /api/export with RouteScreeningRequest parameters.",
-        )
     return handle_export(
         layer=layer,
         format_type=format,
         exposure_filter=exposure_filter,
         hazard_source=hazard_source,
         threshold=threshold,
-    )
-
-
-@app.post("/api/export/route")
-def post_export_route(request: ExportRouteRequest) -> Response:
-    """
-    Export screened route as GeoJSON, KML, or ESRI Shapefile (ZIP) by recomputing
-    the shortest route from the validated RouteScreeningRequest parameters.
-    """
-    return handle_export(
-        layer="route",
-        format_type=request.format,
-        exposure_filter="all",
-        route_request=request.route_request,
-        hazard_source=request.hazard_source or "sample_hidkal",
-        threshold=request.screening_threshold or 0.0,
-    )
-
-
-@app.post("/api/export")
-def post_export_custom(request: ExportRequest) -> Response:
-    """
-    Export spatial layer (assets, roads, route) as GeoJSON, KML, or ESRI Shapefile (ZIP).
-    For route export, route_request parameters must be supplied to recompute route.
-    """
-    return handle_export(
-        layer=request.layer,
-        format_type=request.format,
-        exposure_filter=request.exposure_filter or "all",
-        route_request=request.route_request,
-        hazard_source=request.hazard_source or "sample_hidkal",
-        threshold=request.screening_threshold or 0.0,
     )
 
 
@@ -962,35 +916,6 @@ def get_sph_run_by_id(run_id: str) -> SPHRunResponse:
 def get_sph_run_logs(run_id: str) -> SimulationLogResponse:
     """Retrieve captured stdout and stderr execution logs for an SPH run."""
     return get_sph_logs(run_id)
-
-
-# ==========================================
-# Phase 12: Multi-Engine Comparison Endpoints
-# ==========================================
-
-@app.get("/api/comparison/readiness", response_model=ComparisonReadinessResponse)
-def get_comparison_readiness() -> ComparisonReadinessResponse:
-    """Check readiness of Delft3D FM and PySPH runs for physical hydrodynamic comparison."""
-    return check_comparison_readiness()
-
-
-@app.get("/api/comparison/methodology", response_model=MethodologyComparisonResponse)
-def get_comparison_methodology() -> MethodologyComparisonResponse:
-    """Retrieve structured architectural and physical methodology matrix."""
-    return get_methodology_comparison()
-
-
-@app.post("/api/comparison/compare", response_model=ComparisonResponse)
-def post_compare_runs(request: ComparisonRequest) -> ComparisonResponse:
-    """
-    Execute quantitative spatial comparison between Delft3D and PySPH runs.
-    Returns comparison_unavailable if runs are missing or units unverified.
-    """
-    return compare_runs(
-        delft3d_run_id=request.delft3d_run_id,
-        sph_run_id=request.sph_run_id,
-        reproject_crs=request.reproject_crs or "EPSG:4326",
-    )
 
 
 # ==========================================
@@ -1854,6 +1779,152 @@ def get_dam_project_model_comparison_tile_endpoint(
 ) -> Response:
     png_bytes = render_model_comparison_tile(project_id, comparison_id, layer, z, x, y)
     return Response(content=png_bytes, media_type="image/png")
+
+
+# ==============================================================================
+# Phase 25: Project-Scoped Delft3D and SPH Workflow Endpoints
+# ==============================================================================
+
+@app.post(
+    "/api/dam-projects/{project_id}/delft3d/build-package",
+    response_model=ProjectDelft3DPackageResponse,
+    summary="Build project-specific Delft3D / D-Flow FM package",
+    description="Generates D-Flow FM MDU, boundary conditions, and output contracts for the dam project.",
+)
+def post_dam_project_delft3d_build_package_endpoint(
+    project_id: str,
+) -> ProjectDelft3DPackageResponse:
+    resp, _ = build_dam_project_delft3d_package(project_id)
+    return resp
+
+
+@app.get(
+    "/api/dam-projects/{project_id}/delft3d/download-package",
+    summary="Download project-specific Delft3D / D-Flow FM package zip",
+)
+def get_dam_project_delft3d_download_package_endpoint(
+    project_id: str,
+) -> FileResponse:
+    _, zip_path = build_dam_project_delft3d_package(project_id)
+    return FileResponse(
+        path=str(zip_path),
+        media_type="application/zip",
+        filename=zip_path.name,
+    )
+
+
+@app.post(
+    "/api/dam-projects/{project_id}/delft3d/import-run",
+    summary="Import external Delft3D simulation results",
+    description="Uploads and validates externally computed Delft3D raster outputs (maximum_depth.tif, etc.) into project storage.",
+)
+async def post_dam_project_delft3d_import_run_endpoint(
+    project_id: str,
+    files: List[UploadFile] = File(...),
+    run_label: str = Form("Imported Delft3D Run"),
+    notes: str = Form(""),
+) -> Dict[str, Any]:
+    file_tuples = []
+    for f in files:
+        content = await f.read()
+        file_tuples.append((f.filename or "uploaded_file.tif", content))
+    req = Delft3DRunImportRequest(run_label=run_label, notes=notes)
+    return import_dam_project_delft3d_run(project_id, file_tuples, req)
+
+
+@app.get(
+    "/api/dam-projects/{project_id}/delft3d/runs",
+    summary="List completed/imported Delft3D runs for project",
+)
+def list_dam_project_delft3d_runs_endpoint(
+    project_id: str,
+) -> List[Dict[str, Any]]:
+    return list_dam_project_delft3d_runs(project_id)
+
+
+@app.get(
+    "/api/dam-projects/{project_id}/delft3d/runs/{run_id}",
+    summary="Get details of a Delft3D run for project",
+)
+def get_dam_project_delft3d_run_detail_endpoint(
+    project_id: str,
+    run_id: str,
+) -> Dict[str, Any]:
+    return get_dam_project_delft3d_run_detail(project_id, run_id)
+
+
+@app.post(
+    "/api/dam-projects/{project_id}/sph/build-package",
+    response_model=ProjectSPHPackageResponse,
+    summary="Build project-specific SPH model package",
+    description="Generates PySPH initial condition script, physics config, and rasterization contracts.",
+)
+def post_dam_project_sph_build_package_endpoint(
+    project_id: str,
+) -> ProjectSPHPackageResponse:
+    resp, _ = build_dam_project_sph_package(project_id)
+    return resp
+
+
+@app.get(
+    "/api/dam-projects/{project_id}/sph/download-package",
+    summary="Download project-specific SPH package zip",
+)
+def get_dam_project_sph_download_package_endpoint(
+    project_id: str,
+) -> FileResponse:
+    _, zip_path = build_dam_project_sph_package(project_id)
+    return FileResponse(
+        path=str(zip_path),
+        media_type="application/zip",
+        filename=zip_path.name,
+    )
+
+
+@app.post(
+    "/api/dam-projects/{project_id}/sph/import-run",
+    summary="Import external SPH simulation results",
+    description="Uploads and rasterizes externally computed SPH particle data or rasters into project storage.",
+)
+async def post_dam_project_sph_import_run_endpoint(
+    project_id: str,
+    files: List[UploadFile] = File(...),
+    run_label: str = Form("Imported SPH Run"),
+    notes: str = Form(""),
+    target_resolution_m: float = Form(10.0),
+) -> Dict[str, Any]:
+    file_tuples = []
+    for f in files:
+        content = await f.read()
+        file_tuples.append((f.filename or "uploaded_file.tif", content))
+    from app.schemas import SPHParticleInterpolationParams
+    req = SPHRunImportRequest(
+        run_label=run_label,
+        notes=notes,
+        particle_params=SPHParticleInterpolationParams(target_resolution_m=target_resolution_m),
+    )
+    return import_dam_project_sph_run(project_id, file_tuples, req)
+
+
+@app.get(
+    "/api/dam-projects/{project_id}/sph/runs",
+    summary="List completed/imported SPH runs for project",
+)
+def list_dam_project_sph_runs_endpoint(
+    project_id: str,
+) -> List[Dict[str, Any]]:
+    return list_dam_project_sph_runs(project_id)
+
+
+@app.get(
+    "/api/dam-projects/{project_id}/sph/runs/{run_id}",
+    summary="Get details of an SPH run for project",
+)
+def get_dam_project_sph_run_detail_endpoint(
+    project_id: str,
+    run_id: str,
+) -> Dict[str, Any]:
+    return get_dam_project_sph_run_detail(project_id, run_id)
 
 
 # ==============================================================================

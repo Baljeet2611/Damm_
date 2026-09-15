@@ -24,11 +24,11 @@ export type ProductStage =
   | 'overview'
   | 'setup'
   | 'simulation'
-  | 'satellite'
+  | 'results'
   | 'comparison'
+  | 'satellite'
   | 'exposure'
-  | 'decision'
-  | 'provenance'
+  | 'export'
 
 interface DamOnboardingPanelProps {
   onDisplayProjectDem?: (project: DamProjectSummary | DamProjectDetailResponse) => void
@@ -41,8 +41,48 @@ export const DamOnboardingPanel: React.FC<DamOnboardingPanelProps> = ({
   onDisplayHazardLayer,
   onDisplayTimestepLayer,
 }) => {
-  // Navigation stage state (User-Facing Stages)
+  // Navigation stage state (8-Step User Journey)
   const [currentStage, setCurrentStage] = useState<ProductStage>('overview')
+
+  // Export Stage State
+  const [exportLayer, setExportLayer] = useState<'assets' | 'roads'>('assets')
+  const [exportFormat, setExportFormat] = useState<'geojson' | 'kml' | 'shp'>('shp')
+  const [exportFilter, setExportFilter] = useState<'all' | 'screening_positive' | 'not_exposed' | 'not_assessed'>('all')
+  const [exportLoading, setExportLoading] = useState<boolean>(false)
+  const [exportSuccessMsg, setExportSuccessMsg] = useState<string | null>(null)
+  const [exportError, setExportError] = useState<string | null>(null)
+
+  const apiBaseUrl = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'
+
+  const handleDownloadExport = async () => {
+    setExportLoading(true)
+    setExportError(null)
+    setExportSuccessMsg(null)
+    try {
+      const url = `${apiBaseUrl}/api/export/${exportLayer}?format=${exportFormat}&exposure_filter=${exportFilter}&hazard_source=sample_hidkal`
+      const res = await fetch(url)
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}))
+        throw new Error(err.detail || `Export failed with HTTP ${res.status}`)
+      }
+      const blob = await res.blob()
+      const ext = exportFormat === 'shp' ? 'zip' : exportFormat
+      const filename = `${exportLayer}_export_${exportFilter}.${ext}`
+      const downloadUrl = window.URL.createObjectURL(blob)
+      const link = document.createElement('a')
+      link.href = downloadUrl
+      link.download = filename
+      document.body.appendChild(link)
+      link.click()
+      document.body.removeChild(link)
+      window.URL.revokeObjectURL(downloadUrl)
+      setExportSuccessMsg(`Successfully generated and downloaded ${filename}`)
+    } catch (err: any) {
+      setExportError(err.message || 'Failed to download export package.')
+    } finally {
+      setExportLoading(false)
+    }
+  }
 
   // File states
   const [demFile, setDemFile] = useState<File | null>(null)
@@ -95,10 +135,18 @@ export const DamOnboardingPanel: React.FC<DamOnboardingPanelProps> = ({
   const [projectsList, setProjectsList] = useState<DamProjectSummary[]>([])
   const [loadingProjects, setLoadingProjects] = useState<boolean>(false)
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null)
-  const [projectReadinessData, setProjectReadinessData] = useState<Record<string, DamProjectReadinessResponse>>({})
-  const [loadingReadinessId, setLoadingReadinessId] = useState<string | null>(null)
+  const [_projectReadinessData, setProjectReadinessData] = useState<Record<string, DamProjectReadinessResponse>>({})
   const [loadingDemo, setLoadingDemo] = useState<boolean>(false)
   const [demoLoadError, setDemoLoadError] = useState<string | null>(null)
+
+  const handleToggleReadiness = async (projectId: string) => {
+    try {
+      const readiness = await fetchDamProjectReadiness(projectId)
+      setProjectReadinessData((prev) => ({ ...prev, [projectId]: readiness }))
+    } catch (err) {
+      console.error('Failed to load readiness:', err)
+    }
+  }
 
   const loadProjects = useCallback(async () => {
     try {
@@ -306,51 +354,6 @@ export const DamOnboardingPanel: React.FC<DamOnboardingPanelProps> = ({
     }
   }
 
-  const handleToggleReadiness = async (projectId: string) => {
-    if (!projectReadinessData[projectId]) {
-      try {
-        setLoadingReadinessId(projectId)
-        const readiness = await fetchDamProjectReadiness(projectId)
-        setProjectReadinessData((prev) => ({ ...prev, [projectId]: readiness }))
-      } catch (err) {
-        console.error('Failed to load readiness:', err)
-      } finally {
-        setLoadingReadinessId(null)
-      }
-    }
-  }
-
-  const handleDownloadDecisionReport = () => {
-    if (!activeProject) return
-    const reportData = {
-      project_id: activeProject.project_id,
-      project_name: activeProject.project_name,
-      dam_name: activeProject.dam_name,
-      scientific_status: activeProject.scientific_status || 'unverified_reference',
-      generated_at: new Date().toISOString(),
-      governing_advisory: 'Advisory decision-support screening metrics only. Not certified engineering loss conclusions.',
-      evacuation_corridors: {
-        priority_1_immediate: 'Within 0-15 min flood wave zone (Immediate evacuation of low-lying floodway)',
-        priority_2_urgent: 'Within 15-60 min arrival zone (Clear downstream staging areas and secondary bridges)',
-        priority_3_warning: 'Within 1-3 hour wave propagation envelope (Activate regional detours)',
-      },
-      critical_facilities_alert: 'Hospitals, substations, and emergency response hubs flagged for threshold elevation review.',
-      vulnerability_curve_provenance: {
-        reference: 'Huizinga et al., 2017, EUR 28552 EN',
-        status: 'unverified_reference',
-      },
-    }
-    const blob = new Blob([JSON.stringify(reportData, null, 2)], { type: 'application/json' })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = `decision_support_briefing_${activeProject.project_id}.json`
-    document.body.appendChild(a)
-    a.click()
-    document.body.removeChild(a)
-    URL.revokeObjectURL(url)
-  }
-
   return (
     <div className="hud-card onboarding-card">
       <div className="hud-card-header">
@@ -358,63 +361,63 @@ export const DamOnboardingPanel: React.FC<DamOnboardingPanelProps> = ({
         <span className="legend-tag">SIH 26161 • DECISION SUPPORT</span>
       </div>
 
-      {/* User-Facing Product Stage Navigation */}
+      {/* 8-Step User Journey Navigation */}
       <div className="product-stage-nav" role="tablist" aria-label="Workflow Stages">
         <button
           className={`product-stage-btn ${currentStage === 'overview' ? 'active' : ''}`}
           onClick={() => setCurrentStage('overview')}
-          title="System health HUD and registered study overview"
+          title="Project overview, system health, and registered studies"
         >
-          <span>🌐</span> Overview
+          <span>🌐</span> 1. Project Input
         </button>
         <button
           className={`product-stage-btn ${currentStage === 'setup' ? 'active' : ''}`}
           onClick={() => setCurrentStage('setup')}
-          title="Ingest DEM GeoTIFF and define dam parameters"
+          title="Ingest DEM GeoTIFF and configure dam geometry"
         >
-          <span>🏗️</span> Study Setup
+          <span>📐</span> 2. Terrain & Geometry
         </button>
         <button
           className={`product-stage-btn ${currentStage === 'simulation' ? 'active' : ''}`}
           onClick={() => setCurrentStage('simulation')}
-          title="Readiness checklist, ANUGA simulation package, and hydrodynamic runner"
+          title="Hydrodynamic solver readiness and simulation execution"
         >
-          <span>⚡</span> Simulation
+          <span>⚡</span> 3. Simulation
         </button>
         <button
-          className={`product-stage-btn ${currentStage === 'satellite' ? 'active' : ''}`}
-          onClick={() => setCurrentStage('satellite')}
-          title="Sentinel-1 SAR Earth Observation & flood footprint comparison"
+          className={`product-stage-btn ${currentStage === 'results' ? 'active' : ''}`}
+          onClick={() => setCurrentStage('results')}
+          title="Hazard depth, velocity, arrival time maps & transient flood animation"
         >
-          <span>🛰️</span> Satellite Evidence
+          <span>🌊</span> 4. Flood Results
         </button>
         <button
           className={`product-stage-btn ${currentStage === 'comparison' ? 'active' : ''}`}
           onClick={() => setCurrentStage('comparison')}
-          title="Multi-engine spatial hydrodynamic comparison"
+          title="Official SPH vs Delft3D inter-model spatial agreement"
         >
-          <span>⚖️</span> Model Comparison
+          <span>⚖️</span> 5. SPH vs Delft3D
+        </button>
+        <button
+          className={`product-stage-btn ${currentStage === 'satellite' ? 'active' : ''}`}
+          onClick={() => setCurrentStage('satellite')}
+          title="Sentinel-1 SAR Earth Observation & candidate water change"
+        >
+          <span>🛰️</span> 6. Satellite Evidence
         </button>
         <button
           className={`product-stage-btn ${currentStage === 'exposure' ? 'active' : ''}`}
           onClick={() => setCurrentStage('exposure')}
-          title="Population, building, road, and infrastructure vulnerability"
+          title="Population, buildings, roads, and infrastructure exposure"
         >
-          <span>👥</span> Exposure & Impact
+          <span>👥</span> 7. Exposure & Damage
         </button>
         <button
-          className={`product-stage-btn ${currentStage === 'decision' ? 'active' : ''}`}
-          onClick={() => setCurrentStage('decision')}
-          title="Evacuation corridors, warning timelines, and decision guidance"
+          className={`product-stage-btn ${currentStage === 'export' ? 'active' : ''}`}
+          onClick={() => setCurrentStage('export')}
+          title="Export Shapefile, KML, and GeoJSON GIS datasets"
         >
-          <span>🎯</span> Decision Support
-        </button>
-        <button
-          className={`product-stage-btn ${currentStage === 'provenance' ? 'active' : ''}`}
-          onClick={() => setCurrentStage('provenance')}
-          title="Cryptographic integrity, curve citations, and scientific assumptions"
-        >
-          <span>📜</span> Technical / Provenance
+          <span>💾</span> 8. Export
         </button>
       </div>
 
@@ -607,21 +610,11 @@ export const DamOnboardingPanel: React.FC<DamOnboardingPanelProps> = ({
                           className="btn-project-action"
                           onClick={() => {
                             setSelectedProjectId(p.project_id)
-                            setCurrentStage('decision')
+                            setCurrentStage('export')
                           }}
                           disabled={isIntegrityFailed}
                         >
-                          🎯 Decision
-                        </button>
-                        <button
-                          className="btn-project-action"
-                          onClick={() => {
-                            setSelectedProjectId(p.project_id)
-                            setCurrentStage('provenance')
-                          }}
-                          disabled={isIntegrityFailed}
-                        >
-                          📜 Provenance
+                          📦 Export
                         </button>
                       </div>
                     </div>
@@ -1081,7 +1074,7 @@ export const DamOnboardingPanel: React.FC<DamOnboardingPanelProps> = ({
         </div>
       )}
 
-      {/* STAGE 3: SIMULATION */}
+      {/* STAGE 3: HYDRODYNAMIC SIMULATION */}
       {currentStage === 'simulation' && (
         <div className="onboarding-body">
           {!activeProject ? (
@@ -1089,19 +1082,19 @@ export const DamOnboardingPanel: React.FC<DamOnboardingPanelProps> = ({
               <span style={{ fontSize: '2rem' }}>⚡</span>
               <span className="stage-empty-state-title">No Dam Study Selected</span>
               <p className="stage-empty-state-desc">
-                Select a registered dam study from the dropdown above or ingest a new study in Study Setup to build ANUGA hydrodynamic simulation packages.
+                Select a registered dam study from the dropdown above or ingest a new study in Terrain & Geometry to execute hydrodynamic models.
               </p>
               <button className="btn-fit" onClick={() => setCurrentStage('setup')}>
-                🏗️ Go to Study Setup
+                🏗️ Go to Terrain & Geometry
               </button>
             </div>
           ) : (
             <div>
-              {/* Pre-Simulation Readiness Assessment */}
+              {/* Solver Suite Capability Summary */}
               <div className="readiness-card-container" style={{ marginBottom: '0.85rem', padding: '0.75rem', background: 'rgba(15, 23, 42, 0.85)', borderRadius: '6px', border: '1px solid rgba(56, 189, 248, 0.3)' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
                   <h5 style={{ margin: 0, fontSize: '0.82rem', color: '#38bdf8' }}>
-                    🎯 Pre-Simulation Readiness Assessment
+                    🏛️ Multi-Engine Hydrodynamic Solver Status
                   </h5>
                   <button
                     className="btn-fit"
@@ -1112,51 +1105,20 @@ export const DamOnboardingPanel: React.FC<DamOnboardingPanelProps> = ({
                   </button>
                 </div>
 
-                {loadingReadinessId === activeProject.project_id ? (
-                  <div className="probe-loading"><span className="spinner" /> Evaluating readiness checklist...</div>
-                ) : projectReadinessData[activeProject.project_id] ? (
-                  (() => {
-                    const readiness = projectReadinessData[activeProject.project_id]
-                    return (
-                      <div>
-                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.5rem', marginBottom: '0.6rem', fontSize: '0.75rem' }}>
-                          <div style={{ padding: '0.4rem', borderRadius: '4px', background: readiness.ready_for_screening ? 'rgba(34, 197, 94, 0.15)' : 'rgba(239, 68, 68, 0.15)' }}>
-                            <strong>Screening Status:</strong><br />
-                            {readiness.ready_for_screening ? '✅ Ready for Screening' : '❌ Ingestion Incomplete'}
-                          </div>
-                          <div style={{ padding: '0.4rem', borderRadius: '4px', background: readiness.ready_for_anuga_simulation ? 'rgba(34, 197, 94, 0.15)' : 'rgba(234, 88, 12, 0.15)' }}>
-                            <strong>ANUGA Hydrodynamic Run:</strong><br />
-                            {readiness.ready_for_anuga_simulation ? '✅ Fully Ready for Simulation' : '⚠️ Missing Boundaries / Preflight'}
-                          </div>
-                        </div>
-
-                        {readiness.missing_for_anuga.length > 0 && (
-                          <div style={{ marginBottom: '0.5rem' }}>
-                            <span className="note-title text-warning" style={{ fontSize: '0.72rem' }}>Required for Full 2D Hydrodynamic Simulation:</span>
-                            <ul className="val-warnings-list font-mono" style={{ margin: '0.2rem 0', paddingLeft: '1.2rem', fontSize: '0.72rem' }}>
-                              {readiness.missing_for_anuga.map((item, idx) => (
-                                <li key={idx}>{item}</li>
-                              ))}
-                            </ul>
-                          </div>
-                        )}
-
-                        <div style={{ fontSize: '0.68rem', color: '#94a3b8', fontStyle: 'italic' }}>
-                          ⚠️ {readiness.disclaimer}
-                        </div>
-                      </div>
-                    )
-                  })()
-                ) : (
-                  <div>
-                    <button
-                      className="btn-fit"
-                      onClick={() => handleToggleReadiness(activeProject.project_id)}
-                    >
-                      📋 Load Readiness Assessment
-                    </button>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '0.4rem', fontSize: '0.72rem' }}>
+                  <div style={{ padding: '0.4rem', borderRadius: '4px', background: 'rgba(56, 189, 248, 0.1)', borderLeft: '3px solid #38bdf8' }}>
+                    <strong>SPH (PySPH):</strong><br />
+                    <span style={{ color: '#38bdf8' }}>Target Engine</span> • Package / Import Ready
                   </div>
-                )}
+                  <div style={{ padding: '0.4rem', borderRadius: '4px', background: 'rgba(59, 130, 246, 0.1)', borderLeft: '3px solid #3b82f6' }}>
+                    <strong>Delft3D (D-Flow FM):</strong><br />
+                    <span style={{ color: '#60a5fa' }}>Target Engine</span> • Package / Import Ready
+                  </div>
+                  <div style={{ padding: '0.4rem', borderRadius: '4px', background: 'rgba(34, 197, 94, 0.1)', borderLeft: '3px solid #22c55e' }}>
+                    <strong>ANUGA (2D SWE):</strong><br />
+                    <span style={{ color: '#4ade80' }}>Reference Engine</span> • Executable Locally
+                  </div>
+                </div>
               </div>
 
               {/* ANUGA Package & Execution Component */}
@@ -1165,30 +1127,43 @@ export const DamOnboardingPanel: React.FC<DamOnboardingPanelProps> = ({
                 onPackageBuilt={loadProjects}
                 onDisplayHazardLayer={onDisplayHazardLayer}
                 onDisplayTimestepLayer={onDisplayTimestepLayer}
+                onNavigateToSimulation={() => setCurrentStage('simulation')}
               />
             </div>
           )}
         </div>
       )}
 
-      {/* STAGE 4: SATELLITE EVIDENCE */}
-      {currentStage === 'satellite' && (
+      {/* STAGE 4: FLOOD RESULTS & ANIMATION */}
+      {currentStage === 'results' && (
         <div className="onboarding-body">
           {!activeProject ? (
             <div className="stage-empty-state">
-              <span style={{ fontSize: '2rem' }}>🛰️</span>
+              <span style={{ fontSize: '2rem' }}>🌊</span>
               <span className="stage-empty-state-title">No Dam Study Selected</span>
               <p className="stage-empty-state-desc">
-                Select a registered dam study from the dropdown above to inspect Sentinel-1 SAR Earth Observation evidence and flood inundation cross-validation.
+                Select a registered dam study from the dropdown above to inspect simulated maximum depth, velocity, arrival time maps, and transient flood animations.
               </p>
+              <button className="btn-fit" onClick={() => setCurrentStage('overview')}>
+                🌐 Go to Project Overview
+              </button>
             </div>
           ) : (
-            <EarthObservationPanel project={activeProject} />
+            <div>
+              <DamProjectAnugaReadiness
+                project={activeProject}
+                onPackageBuilt={loadProjects}
+                onDisplayHazardLayer={onDisplayHazardLayer}
+                onDisplayTimestepLayer={onDisplayTimestepLayer}
+                focusResultsOnly={true}
+                onNavigateToSimulation={() => setCurrentStage('simulation')}
+              />
+            </div>
           )}
         </div>
       )}
 
-      {/* STAGE 5: MODEL COMPARISON */}
+      {/* STAGE 5: SPH VS DELFT3D MODEL COMPARISON */}
       {currentStage === 'comparison' && (
         <div className="onboarding-body">
           {!activeProject ? (
@@ -1196,7 +1171,7 @@ export const DamOnboardingPanel: React.FC<DamOnboardingPanelProps> = ({
               <span style={{ fontSize: '2rem' }}>⚖️</span>
               <span className="stage-empty-state-title">No Dam Study Selected</span>
               <p className="stage-empty-state-desc">
-                Select a registered dam study to compare 2D hydrodynamic simulation engines (ANUGA, Delft3D FM, PySPH).
+                Select a registered dam study to compare SPH and Delft3D hydrodynamic simulation outputs.
               </p>
             </div>
           ) : (
@@ -1213,7 +1188,24 @@ export const DamOnboardingPanel: React.FC<DamOnboardingPanelProps> = ({
         </div>
       )}
 
-      {/* STAGE 6: EXPOSURE & IMPACT */}
+      {/* STAGE 6: SATELLITE EVIDENCE */}
+      {currentStage === 'satellite' && (
+        <div className="onboarding-body">
+          {!activeProject ? (
+            <div className="stage-empty-state">
+              <span style={{ fontSize: '2rem' }}>🛰️</span>
+              <span className="stage-empty-state-title">No Dam Study Selected</span>
+              <p className="stage-empty-state-desc">
+                Select a registered dam study from the dropdown above to inspect Sentinel-1 SAR Earth Observation evidence and flood inundation cross-validation.
+              </p>
+            </div>
+          ) : (
+            <EarthObservationPanel project={activeProject} />
+          )}
+        </div>
+      )}
+
+      {/* STAGE 7: EXPOSURE & DAMAGE */}
       {currentStage === 'exposure' && (
         <div className="onboarding-body">
           {!activeProject ? (
@@ -1238,213 +1230,138 @@ export const DamOnboardingPanel: React.FC<DamOnboardingPanelProps> = ({
         </div>
       )}
 
-      {/* STAGE 7: DECISION SUPPORT */}
-      {currentStage === 'decision' && (
+      {/* STAGE 8: GEOSPATIAL EXPORT */}
+      {currentStage === 'export' && (
         <div className="onboarding-body">
-          {!activeProject ? (
-            <div className="stage-empty-state">
-              <span style={{ fontSize: '2rem' }}>🎯</span>
-              <span className="stage-empty-state-title">No Dam Study Selected</span>
-              <p className="stage-empty-state-desc">
-                Select a registered dam study to view emergency decision support metrics, warning timelines, and prioritized evacuation corridors.
-              </p>
+          <div className="hud-card export-card">
+            <div className="hud-card-header">
+              <h4 className="onboarding-sub-title">💾 Geospatial Data Export (Multi-Format)</h4>
+              <span className="legend-tag">GIS-READY</span>
             </div>
-          ) : (
-            <div>
-              <div className="hud-card-header">
-                <h4 className="onboarding-sub-title">🎯 Emergency Decision Support Dashboard</h4>
+
+            <div className="export-body">
+              {/* Export Layer Selector */}
+              <div className="export-section">
+                <label className="export-field-label">1. Select Target Spatial Layer</label>
+                <div className="export-options-grid">
+                  <button
+                    type="button"
+                    className={`export-select-btn ${exportLayer === 'assets' ? 'active' : ''}`}
+                    onClick={() => setExportLayer('assets')}
+                  >
+                    <span className="export-btn-icon">🏛️</span>
+                    <div className="export-btn-text">
+                      <span className="export-btn-title">Infrastructure Assets</span>
+                      <span className="export-btn-sub">Buildings, Hospitals, Settlements (513)</span>
+                    </div>
+                  </button>
+
+                  <button
+                    type="button"
+                    className={`export-select-btn ${exportLayer === 'roads' ? 'active' : ''}`}
+                    onClick={() => setExportLayer('roads')}
+                  >
+                    <span className="export-btn-icon">🛣️</span>
+                    <div className="export-btn-text">
+                      <span className="export-btn-title">Road Network Graph</span>
+                      <span className="export-btn-sub">8,047 road network segments</span>
+                    </div>
+                  </button>
+                </div>
+              </div>
+
+              {/* Exposure Status Filter */}
+              <div className="export-section">
+                <label className="export-field-label">2. Exposure Status Filter</label>
+                <div className="filter-options-grid">
+                  {[
+                    { id: 'all', label: 'All Features', desc: 'Complete dataset' },
+                    { id: 'screening_positive', label: 'Screening-positive Only', desc: 'Depth > 0 in flood raster' },
+                    { id: 'not_exposed', label: 'Not Exposed Only', desc: 'Assessed with zero depth' },
+                    { id: 'not_assessed', label: 'Not Assessed Only', desc: 'Outside domain extent' },
+                  ].map((item) => (
+                    <button
+                      key={item.id}
+                      type="button"
+                      className={`filter-select-btn ${exportFilter === item.id ? 'active' : ''}`}
+                      onClick={() => setExportFilter(item.id as any)}
+                    >
+                      <span className="filter-btn-title">{item.label}</span>
+                      <span className="filter-btn-sub">{item.desc}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Format Selector */}
+              <div className="export-section">
+                <label className="export-field-label">3. Select Export Format</label>
+                <div className="format-options-grid">
+                  <button
+                    type="button"
+                    className={`format-select-btn ${exportFormat === 'geojson' ? 'active' : ''}`}
+                    onClick={() => setExportFormat('geojson')}
+                  >
+                    <span className="format-title">GeoJSON</span>
+                    <span className="format-ext">.geojson</span>
+                    <span className="format-desc">Standard Web GIS FeatureCollection</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    className={`format-select-btn ${exportFormat === 'kml' ? 'active' : ''}`}
+                    onClick={() => setExportFormat('kml')}
+                  >
+                    <span className="format-title">Google Earth KML</span>
+                    <span className="format-ext">.kml</span>
+                    <span className="format-desc">Styled placemarks with attribute metadata</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    className={`format-select-btn ${exportFormat === 'shp' ? 'active' : ''}`}
+                    onClick={() => setExportFormat('shp')}
+                  >
+                    <span className="format-title">ESRI Shapefile ZIP</span>
+                    <span className="format-ext">.zip</span>
+                    <span className="format-desc">Multi-geometry partition + README_METADATA.txt</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Download Trigger Button */}
+              <div className="calculate-action-row" style={{ marginTop: '0.75rem' }}>
                 <button
-                  className="btn-fit"
-                  onClick={handleDownloadDecisionReport}
-                  title="Download structured JSON decision-support briefing"
+                  type="button"
+                  className="btn-calculate"
+                  disabled={exportLoading}
+                  onClick={handleDownloadExport}
                 >
-                  📥 Download Briefing
+                  {exportLoading ? (
+                    <>
+                      <span className="spinner"></span> Generating Package...
+                    </>
+                  ) : (
+                    `💾 Download ${exportLayer.toUpperCase()} (${exportFormat.toUpperCase()})`
+                  )}
                 </button>
               </div>
 
-              {/* KPI Cards */}
-              <div className="decision-support-grid">
-                <div className="decision-kpi-card">
-                  <span className="decision-kpi-title">Immediate Risk Zone (0-15m)</span>
-                  <span className="decision-kpi-value text-danger">Wavefront Peak</span>
-                  <span className="decision-kpi-sub">Priority 1 Evacuation Zone</span>
-                </div>
-                <div className="decision-kpi-card">
-                  <span className="decision-kpi-title">Warning Lead Window</span>
-                  <span className="decision-kpi-value font-mono">15 - 60 min</span>
-                  <span className="decision-kpi-sub">Staging Area Clearance</span>
-                </div>
-                <div className="decision-kpi-card">
-                  <span className="decision-kpi-title">Critical Facilities Alert</span>
-                  <span className="decision-kpi-value" style={{ color: '#f59e0b' }}>Screening Active</span>
-                  <span className="decision-kpi-sub">Hospitals, Substations, Bridges</span>
-                </div>
-              </div>
+              {exportSuccessMsg && <div className="export-success-box" style={{ marginTop: '0.5rem' }}>✅ {exportSuccessMsg}</div>}
+              {exportError && <div className="damage-error-box" style={{ marginTop: '0.5rem' }}>⛔ {exportError}</div>}
 
-              {/* Warning Timeline Card */}
-              <div className="provenance-card" style={{ marginBottom: '0.85rem' }}>
-                <h5 style={{ margin: 0, fontSize: '0.8rem', color: '#38bdf8' }}>
-                  ⏱️ Flood Wave Arrival Timeline Guidance
-                </h5>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.3rem' }}>
-                  <div className="timeline-row">
-                    <div>
-                      <strong>0 to 15 Minutes</strong> (Immediate Dam Vicinity)
-                      <div style={{ color: '#94a3b8', fontSize: '0.68rem' }}>Direct breach wave. Critical velocity {'>'} 2.0 m/s.</div>
-                    </div>
-                    <span className="timeline-badge urgent">IMMEDIATE ESCAPE</span>
-                  </div>
-                  <div className="timeline-row">
-                    <div>
-                      <strong>15 to 60 Minutes</strong> (Downstream River Valley)
-                      <div style={{ color: '#94a3b8', fontSize: '0.68rem' }}>Wave propagation into agricultural flats and bridge crossings.</div>
-                    </div>
-                    <span className="timeline-badge warning">URGENT DETOUR</span>
-                  </div>
-                  <div className="timeline-row">
-                    <div>
-                      <strong>1 to 3 Hours</strong> (Secondary Basin Settled Areas)
-                      <div style={{ color: '#94a3b8', fontSize: '0.68rem' }}>Slow inundation rise. Evacuate low-lying structures to staging points.</div>
-                    </div>
-                    <span className="timeline-badge advisory">ORDERED DETOUR</span>
-                  </div>
-                  <div className="timeline-row">
-                    <div>
-                      <strong>{'>'} 3 Hours</strong> (Distal Floodplain & Backwater)
-                      <div style={{ color: '#94a3b8', fontSize: '0.68rem' }}>Monitoring zone. Prepare emergency resource staging.</div>
-                    </div>
-                    <span className="timeline-badge" style={{ background: 'rgba(100, 116, 139, 0.2)', color: '#94a3b8' }}>
-                      MONITORING
-                    </span>
-                  </div>
-                </div>
-              </div>
-
-              {/* Advisory Disclaimer */}
-              <div className="damage-notes-card">
-                <span className="note-title">⚠️ Decision-Support Advisory Notice</span>
-                <p className="note-text" style={{ fontSize: '0.72rem', color: '#94a3b8' }}>
-                  This dashboard is a spatial screening and contingency planning tool based on uncalibrated hydrodynamic simulations. It does not replace official meteorological warnings, certified reservoir operations rules, or emergency management directives.
-                </p>
-              </div>
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* STAGE 8: TECHNICAL / PROVENANCE */}
-      {currentStage === 'provenance' && (
-        <div className="onboarding-body">
-          {!activeProject ? (
-            <div className="stage-empty-state">
-              <span style={{ fontSize: '2rem' }}>📜</span>
-              <span className="stage-empty-state-title">No Dam Study Selected</span>
-              <p className="stage-empty-state-desc">
-                Select a registered dam study to inspect cryptographic SHA-256 manifest hashes, vulnerability curve sources, and modeling limitations.
-              </p>
-            </div>
-          ) : (
-            <div>
-              {/* Manifest Integrity */}
-              <div className="provenance-card" style={{ marginBottom: '0.85rem' }}>
-                <h5 style={{ margin: 0, fontSize: '0.8rem', color: '#38bdf8' }}>
-                  🔒 Cryptographic Manifest Verification
-                </h5>
-                <div className="val-metadata-grid font-mono" style={{ fontSize: '0.72rem' }}>
-                  <div className="val-meta-item">
-                    <span className="val-meta-label">Project ID</span>
-                    <span className="val-meta-value">{activeProject.project_id}</span>
-                  </div>
-                  <div className="val-meta-item">
-                    <span className="val-meta-label">Integrity Status</span>
-                    <span className="val-meta-value">
-                      {activeProject.integrity_status === 'ok' ? '✅ SHA-256 Verified' : '⚠️ Hash Unchecked'}
-                    </span>
-                  </div>
-                  <div className="val-meta-item" style={{ gridColumn: 'span 2' }}>
-                    <span className="val-meta-label">Manifest SHA-256 Digest</span>
-                    <span className="val-meta-value" style={{ wordBreak: 'break-all' }}>
-                      {activeProject.manifest_sha256 || 'SHA256:4f8e... (Computed at ingestion)'}
-                    </span>
-                  </div>
-                </div>
-              </div>
-
-              {/* Vulnerability Curve Provenance Table */}
-              <div className="provenance-card" style={{ marginBottom: '0.85rem' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                  <h5 style={{ margin: 0, fontSize: '0.8rem', color: '#38bdf8' }}>
-                    📚 Vulnerability Curve Provenance & Attribution
-                  </h5>
-                  <span className="provenance-tag unverified">unverified_reference</span>
-                </div>
-                <p style={{ fontSize: '0.72rem', color: '#94a3b8', margin: 0 }}>
-                  Depth-damage functions implemented for asset screening are referenced from published global empirical datasets, but are <strong>not calibrated for local Indian construction typologies</strong>.
-                </p>
-                <table className="provenance-table">
-                  <thead>
-                    <tr>
-                      <th>Asset Class</th>
-                      <th>Hazard Variable</th>
-                      <th>Region / Reference</th>
-                      <th>Status</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    <tr>
-                      <td>Residential</td>
-                      <td>Maximum Depth (m)</td>
-                      <td>Huizinga et al., 2017 (EUR 28552 EN)</td>
-                      <td><span className="provenance-tag unverified">Unverified Reference</span></td>
-                    </tr>
-                    <tr>
-                      <td>Commercial</td>
-                      <td>Maximum Depth (m)</td>
-                      <td>Huizinga et al., 2017 (EUR 28552 EN)</td>
-                      <td><span className="provenance-tag unverified">Unverified Reference</span></td>
-                    </tr>
-                    <tr>
-                      <td>Industrial</td>
-                      <td>Maximum Depth (m)</td>
-                      <td>Huizinga et al., 2017 (EUR 28552 EN)</td>
-                      <td><span className="provenance-tag unverified">Unverified Reference</span></td>
-                    </tr>
-                    <tr>
-                      <td>Agricultural</td>
-                      <td>Depth & Duration</td>
-                      <td>Global JRC Multi-Hazard Synthesis</td>
-                      <td><span className="provenance-tag unverified">Unverified Reference</span></td>
-                    </tr>
-                    <tr>
-                      <td>Road Network</td>
-                      <td>Velocity × Depth (m²/s)</td>
-                      <td>Advisory Stability Criterion (&gt;0.5 m²/s)</td>
-                      <td><span className="provenance-tag unverified">Advisory Screening</span></td>
-                    </tr>
-                  </tbody>
-                </table>
-              </div>
-
-              {/* Scientific Limitations & Governing Assumptions */}
-              <div className="damage-notes-card">
-                <span className="note-title">⚖️ Scientific Limitations & Governing Assumptions</span>
-                <ul className="val-assumptions-list" style={{ fontSize: '0.72rem', color: '#94a3b8' }}>
-                  <li>
-                    <strong>Hydrodynamic Equations:</strong> 2D Shallow Water Equations (SWE) assume hydrostatic pressure distribution and depth-averaged velocity profiles. Vertical acceleration and non-hydrostatic wavefront dynamics are neglected.
-                  </li>
-                  <li>
-                    <strong>Breach Parameterization:</strong> Dam breach geometry and failure time are user-prescribed linear formations, not coupled geotechnical piping or erosion simulations.
-                  </li>
-                  <li>
-                    <strong>Roughness Assumptions:</strong> Manning's roughness coefficient (n) is regionally assigned and uncalibrated against gauged hydrographs.
-                  </li>
-                  <li>
-                    <strong>Elevation Sampling:</strong> Terrain elevations are sourced from satellite DEMs without sub-meter LiDAR bare-earth filtering. Bridges and culverts may act as artificial blockages.
-                  </li>
+              {/* Package Metadata Summary */}
+              <div className="export-info-card" style={{ marginTop: '0.75rem' }}>
+                <span className="note-title">ℹ️ Export Specifications</span>
+                <ul className="export-specs-list font-mono" style={{ fontSize: '0.72rem', color: '#94a3b8' }}>
+                  <li><strong>CRS:</strong> WGS84 Geographic Coordinates (<code>EPSG:4326</code>)</li>
+                  <li><strong>Shapefile Bundles:</strong> Zipped archive includes complete <code>.shp</code>, <code>.shx</code>, <code>.dbf</code>, <code>.prj</code>, <code>.cpg</code> sets.</li>
+                  <li><strong>Mixed Geometries:</strong> Automatically split into separated <code>_points.shp</code>, <code>_lines.shp</code>, and <code>_polygons.shp</code>.</li>
+                  <li><strong>Audit Metadata:</strong> Every ZIP package includes a <code>README_METADATA.txt</code> containing column mappings and screening disclaimers.</li>
                 </ul>
               </div>
             </div>
-          )}
+          </div>
         </div>
       )}
     </div>

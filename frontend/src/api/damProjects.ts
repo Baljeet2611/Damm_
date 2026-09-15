@@ -27,6 +27,8 @@ import type {
   ModelComparisonCapabilitiesResponse,
   ModelComparisonRunRequest,
   ModelComparisonRunResponse,
+  ProjectDelft3DPackageResponse,
+  ProjectSPHPackageResponse,
   ExposureCapabilitiesResponse,
   ExposureRunRequest,
   ExposureRunSummary,
@@ -817,6 +819,84 @@ export function getModelComparisonTileUrl(
   layer: string,
 ): string {
   return `${API_BASE}/api/dam-projects/${encodeURIComponent(projectId)}/model-comparison/runs/${encodeURIComponent(comparisonId)}/tiles/${encodeURIComponent(layer)}/{z}/{x}/{y}.png`
+}
+
+// Phase 25: Project Delft3D & SPH API Functions
+
+export async function buildDamProjectDelft3DPackage(projectId: string): Promise<ProjectDelft3DPackageResponse> {
+  const res = await fetch(`${API_BASE}/api/dam-projects/${encodeURIComponent(projectId)}/delft3d/build-package`, {
+    method: 'POST',
+  })
+  if (!res.ok) throw new Error(`Failed to build Delft3D package: HTTP ${res.status}`)
+  return res.json()
+}
+
+export function getDamProjectDelft3DPackageDownloadUrl(projectId: string): string {
+  return `${API_BASE}/api/dam-projects/${encodeURIComponent(projectId)}/delft3d/download-package`
+}
+
+export async function importDamProjectDelft3DRun(projectId: string, formData: FormData): Promise<any> {
+  const res = await fetch(`${API_BASE}/api/dam-projects/${encodeURIComponent(projectId)}/delft3d/import-run`, {
+    method: 'POST',
+    body: formData,
+  })
+  if (!res.ok) {
+    const errBody = await res.json().catch(() => null)
+    if (errBody && errBody.detail) throw new Error(typeof errBody.detail === 'string' ? errBody.detail : JSON.stringify(errBody.detail))
+    throw new Error(`Failed to import Delft3D run: HTTP ${res.status}`)
+  }
+  return res.json()
+}
+
+export async function fetchDamProjectDelft3DRuns(projectId: string): Promise<any[]> {
+  const res = await fetch(`${API_BASE}/api/dam-projects/${encodeURIComponent(projectId)}/delft3d/runs`)
+  if (!res.ok) throw new Error(`Failed to list Delft3D runs: HTTP ${res.status}`)
+  return res.json()
+}
+
+export async function buildDamProjectSPHPackage(projectId: string): Promise<ProjectSPHPackageResponse> {
+  const res = await fetch(`${API_BASE}/api/dam-projects/${encodeURIComponent(projectId)}/sph/build-package`, {
+    method: 'POST',
+  })
+  if (!res.ok) throw new Error(`Failed to build SPH package: HTTP ${res.status}`)
+  return res.json()
+}
+
+export function getDamProjectSPHPackageDownloadUrl(projectId: string): string {
+  return `${API_BASE}/api/dam-projects/${encodeURIComponent(projectId)}/sph/download-package`
+}
+
+export async function importDamProjectSPHRun(projectId: string, formData: FormData): Promise<any> {
+  const res = await fetch(`${API_BASE}/api/dam-projects/${encodeURIComponent(projectId)}/sph/import-run`, {
+    method: 'POST',
+    body: formData,
+  })
+  if (!res.ok) {
+    const errBody = await res.json().catch(() => null)
+    if (errBody && errBody.detail) throw new Error(typeof errBody.detail === 'string' ? errBody.detail : JSON.stringify(errBody.detail))
+    throw new Error(`Failed to import SPH run: HTTP ${res.status}`)
+  }
+  return res.json()
+}
+
+export async function fetchDamProjectSPHRuns(projectId: string): Promise<any[]> {
+  const res = await fetch(`${API_BASE}/api/dam-projects/${encodeURIComponent(projectId)}/sph/runs`)
+  if (!res.ok) throw new Error(`Failed to list SPH runs: HTTP ${res.status}`)
+  return res.json()
+}
+
+export async function runDamProjectSPHBenchmark(projectId: string): Promise<any> {
+  const res = await fetch(`${API_BASE}/api/runs/sph`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ custom_notes: `Benchmark run for dam project ${projectId}` }),
+  })
+  if (!res.ok) {
+    const errBody = await res.json().catch(() => null)
+    if (errBody && errBody.detail) throw new Error(typeof errBody.detail === 'string' ? errBody.detail : JSON.stringify(errBody.detail))
+    throw new Error(`Failed to run SPH benchmark: HTTP ${res.status}`)
+  }
+  return res.json()
 }
 
 // Phase 22: Exposure & Vulnerability API Functions

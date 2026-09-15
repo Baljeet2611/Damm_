@@ -1185,10 +1185,60 @@ class ModelComparisonCapabilitiesResponse(BaseModel):
     message: str
 
 
+class SPHParticleInterpolationParams(BaseModel):
+    particle_spacing_m: Optional[float] = Field(default=None, ge=0.001, le=100.0)
+    smoothing_length_m: Optional[float] = Field(default=None, ge=0.001, le=200.0)
+    target_resolution_m: float = Field(default=10.0, ge=1.0, le=100.0)
+    interpolation_method: Literal["idw", "sph_cubic_spline", "sph_wendland_c2", "nearest"] = "idw"
+    support_radius_factor: float = Field(default=2.0, ge=1.0, le=5.0)
+    power_parameter: float = Field(default=2.0, ge=1.0, le=4.0)
+
+
+class SPHRunImportRequest(BaseModel):
+    run_label: Optional[str] = "Imported SPH Run"
+    notes: Optional[str] = ""
+    target_crs: Optional[str] = "EPSG:32643"
+    particle_params: Optional[SPHParticleInterpolationParams] = None
+    scientific_status: str = "imported_external_run"
+
+
+class Delft3DRunImportRequest(BaseModel):
+    run_label: Optional[str] = "Imported Delft3D Run"
+    notes: Optional[str] = ""
+    target_crs: Optional[str] = None
+    scientific_status: str = "imported_external_run"
+
+
+class ProjectDelft3DPackageResponse(BaseModel):
+    project_id: str
+    package_filename: str
+    package_size_bytes: int
+    created_at: str
+    manifest_checksum: str
+    download_url: str
+    dflowfm_available: bool
+    execution_enabled: bool
+    notes: List[str]
+
+
+class ProjectSPHPackageResponse(BaseModel):
+    project_id: str
+    package_filename: str
+    package_size_bytes: int
+    created_at: str
+    manifest_checksum: str
+    download_url: str
+    pysph_available: bool
+    execution_enabled: bool
+    notes: List[str]
+
+
 class HydrodynamicOutputContract(BaseModel):
     engine: str = Field(..., description="Solver engine name, e.g. anuga, delft3d_fm, pysph")
     engine_version: Optional[str] = None
     source_run_id: str
+    run_id: Optional[str] = None
+    project_id: Optional[str] = None
     run_timestamp: Optional[str] = None
     simulation_duration_s: Optional[float] = None
     native_crs: str
@@ -1202,10 +1252,12 @@ class HydrodynamicOutputContract(BaseModel):
     arrival_time_available: bool = False
     inundation_extent_available: bool = False
     arrival_time_definition: Optional[str] = None
+    source_output_files: List[str] = []
     source_file_hashes: Dict[str, str] = {}
     layer_paths: Dict[str, str] = {}
     provenance: Dict[str, Any] = {}
     scientific_status: str = "hypothetical_unverified"
+    solver_execution_status: str = "completed"
 
 
 class ToleranceBandCoverage(BaseModel):

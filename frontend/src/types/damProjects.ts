@@ -635,8 +635,34 @@ export interface ModelComparisonCapabilitiesResponse {
   project_id: string
   engines: Record<string, ModelComparisonEngineCapability>
   ready_for_comparison: boolean
-  runs_available: Record<string, any[]>
-  disclaimer: string
+  completed_runs_by_engine?: Record<string, any[]>
+  runs_available?: Record<string, any[]>
+  disclaimer?: string
+  message?: string
+}
+
+export interface ProjectDelft3DPackageResponse {
+  project_id: string
+  package_filename: string
+  package_size_bytes: number
+  created_at: string
+  manifest_checksum: string
+  download_url: string
+  dflowfm_available: boolean
+  execution_enabled: boolean
+  notes: string[]
+}
+
+export interface ProjectSPHPackageResponse {
+  project_id: string
+  package_filename: string
+  package_size_bytes: number
+  created_at: string
+  manifest_checksum: string
+  download_url: string
+  pysph_available: boolean
+  execution_enabled: boolean
+  notes: string[]
 }
 
 export interface ToleranceBandCoverage {

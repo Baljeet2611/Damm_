@@ -149,25 +149,6 @@ interface DamageScenarioResult {
   warnings: string[]
 }
 
-// Phase 8: Route Screening Interface
-interface RouteScreeningResult {
-  route_found: boolean
-  geojson: any | null
-  total_distance_meters: number | null
-  total_distance_km: number | null
-  segment_count: number | null
-  start_coords: [number, number]
-  end_coords: [number, number]
-  snapped_start_coords: [number, number] | null
-  snapped_end_coords: [number, number] | null
-  start_snap_distance_meters: number | null
-  end_snap_distance_meters: number | null
-  excluded_edges_count: number
-  avoid_screening_positive: boolean
-  disclaimer: string
-  methodology: string
-  warnings: string[]
-}
 
 // Phase 10 & 11: Scenario Management & Simulation Interfaces
 interface ScenarioAssumption {
@@ -379,10 +360,6 @@ function App() {
   const markerRef = useRef<Marker | null>(null)
   const popupRef = useRef<Popup | null>(null)
 
-  // Start / Destination Markers
-  const startMarkerRef = useRef<Marker | null>(null)
-  const endMarkerRef = useRef<Marker | null>(null)
-
   const [backendOnline, setBackendOnline] = useState<boolean | null>(null)
   const [datasets, setDatasets] = useState<DatasetInfo[]>([])
   const [selectedLayer, setSelectedLayer] = useState<LayerId>('depth')
@@ -404,7 +381,7 @@ function App() {
   const [showRoads, setShowRoads] = useState<boolean>(true)
   const [exposureSummary, setExposureSummary] = useState<ExposureSummary | null>(null)
   const [summaryLoading, setSummaryLoading] = useState<boolean>(false)
-  const [activeTab, setActiveTab] = useState<'layers' | 'exposure' | 'damage' | 'route' | 'export' | 'scenarios' | 'onboarding'>('layers')
+  const [activeTab, setActiveTab] = useState<'layers' | 'exposure' | 'damage' | 'export' | 'scenarios' | 'onboarding'>('onboarding')
 
   // Phase 10 & 11: Scenario Management & Simulation State
   const [capabilities, setCapabilities] = useState<SimulationCapabilities | null>(null)
@@ -491,24 +468,6 @@ function App() {
   const [damageLoading, setDamageLoading] = useState<boolean>(false)
   const [damageError, setDamageError] = useState<string | null>(null)
 
-  // Phase 8: Route Screening State
-  const [startLon, setStartLon] = useState<number>(74.7085)
-  const [startLat, setStartLat] = useState<number>(16.2052)
-  const [endLon, setEndLon] = useState<number>(74.7289)
-  const [endLat, setEndLat] = useState<number>(16.2415)
-  const [avoidScreeningPositive, setAvoidScreeningPositive] = useState<boolean>(true)
-  const [maxSnapDistance, setMaxSnapDistance] = useState<number>(5000)
-  const [routePickMode, setRoutePickMode] = useState<'start' | 'dest' | null>(null)
-  const [routeResult, setRouteResult] = useState<RouteScreeningResult | null>(null)
-  const [routeLoading, setRouteLoading] = useState<boolean>(false)
-  const [routeError, setRouteError] = useState<string | null>(null)
-
-  // Ref to track routePickMode inside map click callbacks
-  const routePickModeRef = useRef<'start' | 'dest' | null>(null)
-  useEffect(() => {
-    routePickModeRef.current = routePickMode
-  }, [routePickMode])
-
   // Ref to track opacity without triggering unnecessary raster layer recreation
   const opacityRef = useRef<number>(opacity)
   useEffect(() => {
@@ -516,7 +475,7 @@ function App() {
   }, [opacity])
 
   // Phase 9: Geospatial Export State
-  const [exportLayer, setExportLayer] = useState<'assets' | 'roads' | 'route'>('assets')
+  const [exportLayer, setExportLayer] = useState<'assets' | 'roads'>('assets')
   const [exportFilter, setExportFilter] = useState<'all' | 'screening_positive' | 'not_exposed' | 'not_assessed'>('all')
   const [exportFormat, setExportFormat] = useState<'geojson' | 'kml' | 'shp'>('geojson')
   const [exportLoading, setExportLoading] = useState<boolean>(false)
@@ -535,7 +494,6 @@ function App() {
     setHazardSource(newSource)
     setLegend(null)
     setDamageResult(null)
-    setRouteResult(null)
     setProbe(null)
     setExposureSummary(null)
   }
@@ -766,7 +724,6 @@ function App() {
 
   // Helper for vector click popup creation
   const handleVectorFeatureClick = useCallback((e: maplibregl.MapMouseEvent & { features?: any[] }) => {
-    if (routePickModeRef.current) return // Requirement 8: Skip popup if in route pick mode
     if (!e.features || e.features.length === 0 || !mapRef.current) return
 
     const feat = e.features[0]
@@ -884,10 +841,10 @@ function App() {
 
       map.on('click', layerId, handleVectorFeatureClick)
       map.on('mouseenter', layerId, () => {
-        if (!routePickModeRef.current) map.getCanvas().style.cursor = 'pointer'
+        map.getCanvas().style.cursor = 'pointer'
       })
       map.on('mouseleave', layerId, () => {
-        if (!routePickModeRef.current) map.getCanvas().style.cursor = ''
+        map.getCanvas().style.cursor = ''
       })
     }
   }, [apiBaseUrl, showRoads, hazardSource, mapLoaded, handleVectorFeatureClick])
@@ -1014,10 +971,10 @@ function App() {
     }
 
     const onMouseEnter = () => {
-      if (!routePickModeRef.current) map.getCanvas().style.cursor = 'pointer'
+      map.getCanvas().style.cursor = 'pointer'
     }
     const onMouseLeave = () => {
-      if (!routePickModeRef.current) map.getCanvas().style.cursor = ''
+      map.getCanvas().style.cursor = ''
     }
 
     // Attach click and hover handlers
@@ -1036,94 +993,6 @@ function App() {
     }
   }, [apiBaseUrl, showAssets, hazardSource, mapLoaded, handleVectorFeatureClick])
 
-  // Update Start & Destination Markers on Map
-  useEffect(() => {
-    const map = mapRef.current
-    if (!map || !mapLoaded) return
-
-    // Start Marker
-    if (!startMarkerRef.current) {
-      const el = document.createElement('div')
-      el.className = 'route-pin-marker pin-start'
-      el.innerHTML = '<span class="pin-icon">📍</span><span class="pin-badge">Start</span>'
-      startMarkerRef.current = new maplibregl.Marker({ element: el })
-        .setLngLat([startLon, startLat])
-        .addTo(map)
-    } else {
-      startMarkerRef.current.setLngLat([startLon, startLat])
-    }
-
-    // Destination Marker
-    if (!endMarkerRef.current) {
-      const el = document.createElement('div')
-      el.className = 'route-pin-marker pin-dest'
-      el.innerHTML = '<span class="pin-icon">🎯</span><span class="pin-badge">Dest</span>'
-      endMarkerRef.current = new maplibregl.Marker({ element: el })
-        .setLngLat([endLon, endLat])
-        .addTo(map)
-    } else {
-      endMarkerRef.current.setLngLat([endLon, endLat])
-    }
-  }, [startLon, startLat, endLon, endLat, mapLoaded])
-
-  // Render Screened Route Line on Map
-  useEffect(() => {
-    const map = mapRef.current
-    if (!map || !mapLoaded) return
-
-    const sourceId = 'screened-route-source'
-    const casingLayerId = 'screened-route-casing'
-    const lineLayerId = 'screened-route-line'
-
-    if (!routeResult || !routeResult.route_found || !routeResult.geojson) {
-      if (map.getLayer(lineLayerId)) map.removeLayer(lineLayerId)
-      if (map.getLayer(casingLayerId)) map.removeLayer(casingLayerId)
-      if (map.getSource(sourceId)) map.removeSource(sourceId)
-      return
-    }
-
-    const geojsonData = {
-      type: 'FeatureCollection',
-      features: [routeResult.geojson],
-    }
-
-    if (!map.getSource(sourceId)) {
-      map.addSource(sourceId, {
-        type: 'geojson',
-        data: geojsonData,
-      })
-    } else {
-      const src = map.getSource(sourceId) as maplibregl.GeoJSONSource
-      src.setData(geojsonData as any)
-    }
-
-    if (!map.getLayer(casingLayerId)) {
-      map.addLayer({
-        id: casingLayerId,
-        type: 'line',
-        source: sourceId,
-        paint: {
-          'line-color': '#0284c7',
-          'line-width': 7,
-          'line-opacity': 0.85,
-        },
-      })
-    }
-
-    if (!map.getLayer(lineLayerId)) {
-      map.addLayer({
-        id: lineLayerId,
-        type: 'line',
-        source: sourceId,
-        paint: {
-          'line-color': '#00f0ff',
-          'line-width': 3.8,
-          'line-opacity': 1.0,
-        },
-      })
-    }
-  }, [routeResult, mapLoaded])
-
   // Fit map to Hidkal bounds
   const fitToHidkal = useCallback(() => {
     if (!mapRef.current) return
@@ -1136,7 +1005,7 @@ function App() {
     )
   }, [])
 
-  // Handle Map Click - Point Inspection Probe & Route Point Picking (Requirement 8)
+  // Handle Map Click - Point Inspection Probe
   useEffect(() => {
     const map = mapRef.current
     if (!map) return
@@ -1145,20 +1014,6 @@ function App() {
       const { lng, lat } = e.lngLat
       const queryLon = Number(lng.toFixed(5))
       const queryLat = Number(lat.toFixed(5))
-
-      // Requirement 8: If picking route start or destination, set coords and do not trigger probe/popup
-      if (routePickModeRef.current === 'start') {
-        setStartLon(queryLon)
-        setStartLat(queryLat)
-        setRoutePickMode(null)
-        return
-      }
-      if (routePickModeRef.current === 'dest') {
-        setEndLon(queryLon)
-        setEndLat(queryLat)
-        setRoutePickMode(null)
-        return
-      }
 
       // If a vector feature was clicked, don't overwrite with blank probe
       const vectorFeatures = map.queryRenderedFeatures(e.point, {
@@ -1310,48 +1165,6 @@ function App() {
     setDepthCurve(depthCurve.filter((_, i) => i !== index))
   }
 
-  // Execute Route Screening Calculation
-  const handleCalculateRoute = () => {
-    setRouteLoading(true)
-    setRouteError(null)
-
-    const payload = {
-      hazard_source: hazardSource,
-      start_lon: startLon,
-      start_lat: startLat,
-      end_lon: endLon,
-      end_lat: endLat,
-      avoid_screening_positive: avoidScreeningPositive,
-      max_snap_distance_meters: maxSnapDistance,
-    }
-
-    fetch(`${apiBaseUrl}/api/routes/screening`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    })
-      .then(async (res) => {
-        if (!res.ok) {
-          const errData = await res.json().catch(() => ({}))
-          throw new Error(errData.detail || `Routing error (HTTP ${res.status})`)
-        }
-        return res.json() as Promise<RouteScreeningResult>
-      })
-      .then((data) => {
-        setRouteResult(data)
-        setRouteLoading(false)
-      })
-      .catch((err) => {
-        setRouteError(err.message || 'Route screening failed.')
-        setRouteLoading(false)
-      })
-  }
-
-  const handleClearRoute = () => {
-    setRouteResult(null)
-    setRouteError(null)
-  }
-
   // Execute Geospatial Export Download
   const handleDownloadExport = async () => {
     setExportLoading(true)
@@ -1359,37 +1172,8 @@ function App() {
     setExportSuccessMsg(null)
 
     try {
-      let url = ''
-      let options: RequestInit = {}
-
-      if (exportLayer === 'route') {
-        if (!routeResult || !routeResult.route_found) {
-          throw new Error('Please calculate a valid screening route in the Route tab first.')
-        }
-        url = `${apiBaseUrl}/api/export/route`
-        options = {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            format: exportFormat,
-            hazard_source: hazardSource,
-            route_request: {
-              hazard_source: hazardSource,
-              start_lon: startLon,
-              start_lat: startLat,
-              end_lon: endLon,
-              end_lat: endLat,
-              avoid_screening_positive: avoidScreeningPositive,
-              max_snap_distance_meters: maxSnapDistance,
-            },
-          }),
-        }
-      } else {
-        url = `${apiBaseUrl}/api/export/${exportLayer}?format=${exportFormat}&exposure_filter=${exportFilter}&hazard_source=${hazardSource}`
-        options = { method: 'GET' }
-      }
-
-      const res = await fetch(url, options)
+      const url = `${apiBaseUrl}/api/export/${exportLayer}?format=${exportFormat}&exposure_filter=${exportFilter}&hazard_source=${hazardSource}`
+      const res = await fetch(url, { method: 'GET' })
       if (!res.ok) {
         const errData = await res.json().catch(() => ({}))
         throw new Error(errData.detail || `Export failed with HTTP ${res.status}`)
@@ -1938,16 +1722,6 @@ function App() {
           />
         )}
 
-        {/* Route Picking Mode Indicator Banner */}
-        {routePickMode && (
-          <div className="pick-mode-banner">
-            <span className="pick-mode-icon">📍</span>
-            <span>
-              Click on the map to place <strong>{routePickMode === 'start' ? 'Start Point (Green)' : 'Destination Point (Purple)'}</strong>
-            </span>
-            <button className="btn-cancel-pick" onClick={() => setRoutePickMode(null)}>✕ Cancel</button>
-          </div>
-        )}
 
         {/* Non-blocking Basemap Offline Banner */}
         {basemapOffline && (
@@ -2150,12 +1924,6 @@ function App() {
                 onClick={() => setActiveTab('damage')}
               >
                 💰 Damage
-              </button>
-              <button
-                className={`hud-tab-btn ${activeTab === 'route' ? 'active' : ''}`}
-                onClick={() => setActiveTab('route')}
-              >
-                🛣️ Route
               </button>
               <button
                 className={`hud-tab-btn ${activeTab === 'export' ? 'active' : ''}`}
@@ -2807,236 +2575,7 @@ function App() {
               </div>
             )}
 
-            {/* TAB 4: Route Screening (Phase 8) */}
-            {activeTab === 'route' && (
-              <div className="hud-card route-card">
-                <div className="hud-card-header">
-                  <h3>Road Network Route Screening</h3>
-                  <button className="btn-fit" onClick={handleClearRoute} title="Clear calculated route">
-                    ✕ Clear
-                  </button>
-                </div>
-
-                <div className="route-body">
-                  {/* Prominent Mandatory Disclaimer Banner */}
-                  <div className="route-disclaimer-banner">
-                    <span className="disclaimer-icon">⚠️</span>
-                    <p className="disclaimer-text">
-                      <strong>Preliminary screening route only.</strong> Road closures, structural bridge integrity, carrying capacity, and live traffic are not validated. Not an official emergency evacuation route. Screening against{' '}
-                      {hazardSource === 'anuga_hidkal_refined'
-                        ? 'hypothetical ANUGA refined model inundation (threshold ≥ 0.10m)'
-                        : hazardSource === 'anuga_hidkal_pilot'
-                        ? 'hypothetical ANUGA pilot inundation (threshold ≥ 0.10m)'
-                        : 'sample depth raster'}.
-                    </p>
-                  </div>
-
-                  {/* Waypoint Coordinates Card */}
-                  <div className="route-waypoints-section">
-                    <h4 className="config-section-title">📍 Origin & Destination Points</h4>
-
-                    {/* Start Waypoint */}
-                    <div className="waypoint-box waypoint-start">
-                      <div className="waypoint-header">
-                        <span className="waypoint-badge badge-start">📍 Start Point</span>
-                        <button
-                          className={`btn-pick-map ${routePickMode === 'start' ? 'active-pick' : ''}`}
-                          onClick={() => setRoutePickMode(routePickMode === 'start' ? null : 'start')}
-                        >
-                          {routePickMode === 'start' ? '🎯 Click Map...' : '📍 Set on Map'}
-                        </button>
-                      </div>
-                      <div className="coord-inputs-grid">
-                        <div className="coord-field">
-                          <label>Longitude (°E)</label>
-                          <input
-                            type="number"
-                            step="0.0001"
-                            value={startLon}
-                            onChange={(e) => setStartLon(parseFloat(e.target.value) || 0)}
-                            className="config-input font-mono"
-                          />
-                        </div>
-                        <div className="coord-field">
-                          <label>Latitude (°N)</label>
-                          <input
-                            type="number"
-                            step="0.0001"
-                            value={startLat}
-                            onChange={(e) => setStartLat(parseFloat(e.target.value) || 0)}
-                            className="config-input font-mono"
-                          />
-                        </div>
-                      </div>
-                    </div>
-
-                    {/* Destination Waypoint */}
-                    <div className="waypoint-box waypoint-dest">
-                      <div className="waypoint-header">
-                        <span className="waypoint-badge badge-dest">🎯 Destination Point</span>
-                        <button
-                          className={`btn-pick-map ${routePickMode === 'dest' ? 'active-pick' : ''}`}
-                          onClick={() => setRoutePickMode(routePickMode === 'dest' ? null : 'dest')}
-                        >
-                          {routePickMode === 'dest' ? '🎯 Click Map...' : '📍 Set on Map'}
-                        </button>
-                      </div>
-                      <div className="coord-inputs-grid">
-                        <div className="coord-field">
-                          <label>Longitude (°E)</label>
-                          <input
-                            type="number"
-                            step="0.0001"
-                            value={endLon}
-                            onChange={(e) => setEndLon(parseFloat(e.target.value) || 0)}
-                            className="config-input font-mono"
-                          />
-                        </div>
-                        <div className="coord-field">
-                          <label>Latitude (°N)</label>
-                          <input
-                            type="number"
-                            step="0.0001"
-                            value={endLat}
-                            onChange={(e) => setEndLat(parseFloat(e.target.value) || 0)}
-                            className="config-input font-mono"
-                          />
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Routing Options */}
-                  <div className="route-options-section">
-                    <label className="toggle-checkbox-row route-option-checkbox">
-                      <input
-                        type="checkbox"
-                        checked={avoidScreeningPositive}
-                        onChange={(e) => setAvoidScreeningPositive(e.target.checked)}
-                      />
-                      <div className="toggle-label-content">
-                        <span className="toggle-title">🚫 Avoid screening-positive (depth &gt; 0 at sample) roads</span>
-                        <span className="toggle-desc">Excludes road edges with depth &gt; 0 in sample raster</span>
-                      </div>
-                    </label>
-
-                    <div className="config-field">
-                      <label>Max Snap Distance to Road Network (meters)</label>
-                      <input
-                        type="number"
-                        min="100"
-                        max="20000"
-                        step="500"
-                        value={maxSnapDistance}
-                        onChange={(e) => setMaxSnapDistance(Math.max(100, parseFloat(e.target.value) || 5000))}
-                        className="config-input font-mono"
-                      />
-                    </div>
-                  </div>
-
-                  {/* Calculate Action Button */}
-                  <div className="calculate-action-row">
-                    <button
-                      className="btn-calculate"
-                      disabled={routeLoading}
-                      onClick={handleCalculateRoute}
-                    >
-                      {routeLoading ? (
-                        <>
-                          <span className="spinner"></span> Computing Screening Route...
-                        </>
-                      ) : (
-                        '🛣️ Screen Shortest Traversable Route'
-                      )}
-                    </button>
-                  </div>
-
-                  {routeError && <div className="damage-error-box">{routeError}</div>}
-
-                  {/* Route Screening Results Summary */}
-                  {routeResult && (
-                    <div className="route-results-section">
-                      <div className="hud-card-header">
-                        <h4 className="results-title">
-                          {routeResult.route_found ? '✅ Route Screened Successfully' : '⚠️ No Traversable Route Found'}
-                        </h4>
-                        <span className={`status-badge ${routeResult.route_found ? 'status-ok' : 'status-fail'}`}>
-                          {routeResult.route_found ? 'Traversable' : 'Blocked'}
-                        </span>
-                      </div>
-
-                      {routeResult.route_found ? (
-                        <>
-                          {/* Route KPI Stat Cards */}
-                          <div className="route-kpi-grid">
-                            <div className="route-kpi-card">
-                              <span className="kpi-title">Total Distance</span>
-                              <div className="kpi-value-row">
-                                <span className="kpi-num text-cyan">{routeResult.total_distance_km}</span>
-                                <span className="kpi-total">km</span>
-                              </div>
-                              <span className="kpi-sub">
-                                ({routeResult.total_distance_meters?.toLocaleString()} m)
-                              </span>
-                            </div>
-
-                            <div className="route-kpi-card">
-                              <span className="kpi-title">Road Segments</span>
-                              <div className="kpi-value-row">
-                                <span className="kpi-num">{routeResult.segment_count}</span>
-                                <span className="kpi-total">edges</span>
-                              </div>
-                              <span className="kpi-sub">
-                                {routeResult.excluded_edges_count} screening-positive (depth &gt; 0 at sample) excluded
-                              </span>
-                            </div>
-                          </div>
-
-                          {/* Node Snapping Breakdown */}
-                          <div className="breakdown-section">
-                            <h5 className="sub-title">Node Snapping Diagnostics</h5>
-                            <div className="snap-diagnostics-box">
-                              <div className="snap-row">
-                                <span className="snap-label">Start Point Snap:</span>
-                                <span className="snap-val font-mono">{routeResult.start_snap_distance_meters} m</span>
-                              </div>
-                              <div className="snap-row">
-                                <span className="snap-label">Destination Snap:</span>
-                                <span className="snap-val font-mono">{routeResult.end_snap_distance_meters} m</span>
-                              </div>
-                              <div className="snap-row">
-                                <span className="snap-label">Excluded Edges (depth &gt; 0 at sample):</span>
-                                <span className="snap-val font-mono text-danger">{routeResult.excluded_edges_count} segments</span>
-                              </div>
-                            </div>
-                          </div>
-                        </>
-                      ) : (
-                        <div className="route-not-found-box">
-                          <p>
-                            No clear road path could connect the snapped start and destination nodes without traversing screening-positive (depth &gt; 0 at sample) road segments. Try unchecking <em>"Avoid screening-positive roads"</em> to inspect shortest geometric connection.
-                          </p>
-                        </div>
-                      )}
-
-                      {/* Warnings and Methodology */}
-                      {routeResult.warnings && routeResult.warnings.length > 0 && (
-                        <div className="damage-notes-card">
-                          <span className="note-title">⚠️ Route Warnings & Notes</span>
-                          <ul className="warnings-list">
-                            {routeResult.warnings.map((w, idx) => (
-                              <li key={idx}>{w}</li>
-                            ))}
-                          </ul>
-                        </div>
-                      )}
-                    </div>
-                  )}
-                </div>
-              </div>
-            )}
-
-            {/* TAB 5: Geospatial Exports (Phase 9) */}
+            {/* TAB 4: Geospatial Exports (Phase 9) */}
             {activeTab === 'export' && (
               <div className="hud-card export-card">
                 <div className="hud-card-header">
@@ -3070,58 +2609,34 @@ function App() {
                           <span className="export-btn-sub">8,047 road network segments</span>
                         </div>
                       </button>
-
-                      <button
-                        className={`export-select-btn ${exportLayer === 'route' ? 'active' : ''}`}
-                        onClick={() => setExportLayer('route')}
-                      >
-                        <span className="export-btn-icon">🚗</span>
-                        <div className="export-btn-text">
-                          <span className="export-btn-title">Screened Route</span>
-                          <span className="export-btn-sub">
-                            {routeResult?.route_found ? `${routeResult.total_distance_km} km calculated route` : 'Requires calculated route'}
-                          </span>
-                        </div>
-                      </button>
                     </div>
                   </div>
 
-                  {/* Route Status Callout if Route Layer Selected */}
-                  {exportLayer === 'route' && (!routeResult || !routeResult.route_found) && (
-                    <div className="export-route-warning">
-                      <span>⚠️ No calculated route found. Please calculate a route in the <strong>Route</strong> tab before exporting.</span>
+                  {/* Exposure Status Filter */}
+                  <div className="export-section">
+                    <label className="export-field-label">2. Exposure Status Filter</label>
+                    <div className="filter-options-grid">
+                      {[
+                        { id: 'all', label: 'All Features', desc: 'Complete dataset' },
+                        { id: 'screening_positive', label: 'Screening-positive Only', desc: 'Depth > 0 in sample raster' },
+                        { id: 'not_exposed', label: 'Not Exposed at Sample Only', desc: 'Assessed with zero depth' },
+                        { id: 'not_assessed', label: 'Not Assessed Only', desc: 'Outside domain extent' },
+                      ].map((item) => (
+                        <button
+                          key={item.id}
+                          className={`filter-select-btn ${exportFilter === item.id ? 'active' : ''}`}
+                          onClick={() => setExportFilter(item.id as any)}
+                        >
+                          <span className="filter-btn-title">{item.label}</span>
+                          <span className="filter-btn-sub">{item.desc}</span>
+                        </button>
+                      ))}
                     </div>
-                  )}
-
-                  {/* Exposure Status Filter (only for assets and roads) */}
-                  {exportLayer !== 'route' && (
-                    <div className="export-section">
-                      <label className="export-field-label">2. Exposure Status Filter</label>
-                      <div className="filter-options-grid">
-                        {[
-                          { id: 'all', label: 'All Features', desc: 'Complete dataset' },
-                          { id: 'screening_positive', label: 'Screening-positive Only', desc: 'Depth > 0 in sample raster' },
-                          { id: 'not_exposed', label: 'Not Exposed at Sample Only', desc: 'Assessed with zero depth' },
-                          { id: 'not_assessed', label: 'Not Assessed Only', desc: 'Outside domain extent' },
-                        ].map((item) => (
-                          <button
-                            key={item.id}
-                            className={`filter-select-btn ${exportFilter === item.id ? 'active' : ''}`}
-                            onClick={() => setExportFilter(item.id as any)}
-                          >
-                            <span className="filter-btn-title">{item.label}</span>
-                            <span className="filter-btn-sub">{item.desc}</span>
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-                  )}
+                  </div>
 
                   {/* Format Selector */}
                   <div className="export-section">
-                    <label className="export-field-label">
-                      {exportLayer === 'route' ? '2. Select Export Format' : '3. Select Export Format'}
-                    </label>
+                    <label className="export-field-label">3. Select Export Format</label>
                     <div className="format-options-grid">
                       <button
                         className={`format-select-btn ${exportFormat === 'geojson' ? 'active' : ''}`}
@@ -3155,8 +2670,8 @@ function App() {
                   {/* Download Trigger Button */}
                   <div className="calculate-action-row">
                     <button
-                      className={`btn-calculate ${(exportLayer === 'route' && (!routeResult || !routeResult.route_found)) ? 'disabled' : ''}`}
-                      disabled={exportLoading || (exportLayer === 'route' && (!routeResult || !routeResult.route_found))}
+                      className="btn-calculate"
+                      disabled={exportLoading}
                       onClick={handleDownloadExport}
                     >
                       {exportLoading ? (
@@ -3671,7 +3186,7 @@ conda activate sih-pysph
                             <p><strong>2. Server Simulation Gating:</strong></p>
                             <pre className="code-snippet">
 ENABLE_PYSPH_EXECUTION=true{'\n'}
-PYSPH_PYTHON_PATH=C:\Users\anuru\miniforge3\envs\sih-pysph\python.exe
+PYSPH_PYTHON_PATH=/opt/conda/envs/sih-pysph/bin/python (or C:\path\to\envs\sih-pysph\python.exe)
                             </pre>
                             <p><strong>3. Fundamental Scale Separation Disclaimer:</strong></p>
                             <p className="guide-note">

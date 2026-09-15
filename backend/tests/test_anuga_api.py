@@ -309,54 +309,6 @@ def test_damage_scenario_with_anuga_refined_source():
     not HIDKAL_PILOT_PRESENT,
     reason="Requires external Hidkal ANUGA pilot raster bundle; asset not present on disk."
 )
-def test_route_screening_with_anuga_pilot_source():
-    """Verify route screening with hazard_source='anuga_hidkal_pilot'."""
-    payload = {
-        "hazard_source": "anuga_hidkal_pilot",
-        "screening_threshold": 0.10,
-        "start_lon": 74.65,
-        "start_lat": 16.25,
-        "end_lon": 74.75,
-        "end_lat": 16.28,
-        "avoid_screening_positive": True,
-        "max_snap_distance_meters": 5000.0,
-    }
-
-    resp = client.post("/api/routes/screening", json=payload)
-    assert resp.status_code == 200
-    res = resp.json()
-    assert res["hazard_source"] == "anuga_hidkal_pilot"
-    assert res["screening_threshold"] == 0.10
-
-
-@pytest.mark.skipif(
-    not HIDKAL_REFINED_PRESENT,
-    reason="Requires external Hidkal ANUGA refined raster bundle; asset not present on disk."
-)
-def test_route_screening_with_anuga_refined_source():
-    """Verify route screening with hazard_source='anuga_hidkal_refined'."""
-    payload = {
-        "hazard_source": "anuga_hidkal_refined",
-        "screening_threshold": 0.10,
-        "start_lon": 74.65,
-        "start_lat": 16.25,
-        "end_lon": 74.75,
-        "end_lat": 16.28,
-        "avoid_screening_positive": True,
-        "max_snap_distance_meters": 5000.0,
-    }
-
-    resp = client.post("/api/routes/screening", json=payload)
-    assert resp.status_code == 200
-    res = resp.json()
-    assert res["hazard_source"] == "anuga_hidkal_refined"
-    assert res["screening_threshold"] == 0.10
-
-
-@pytest.mark.skipif(
-    not HIDKAL_PILOT_PRESENT,
-    reason="Requires external Hidkal ANUGA pilot raster bundle; asset not present on disk."
-)
 def test_export_with_anuga_pilot_source():
     """Verify export endpoints support hazard_source='anuga_hidkal_pilot'."""
     resp = client.get("/api/export/assets?hazard_source=anuga_hidkal_pilot&threshold=0.10&format=geojson")

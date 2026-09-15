@@ -9,12 +9,10 @@ import geopandas as gpd
 from fastapi import HTTPException
 from fastapi.responses import Response
 
-from app.schemas import RouteScreeningRequest
 from app.vector_service import get_exposure_assets, get_exposure_roads
-from app.route_service import calculate_screening_route
 
 GET_WHITELISTED_LAYERS = {"assets", "roads"}
-ALL_WHITELISTED_LAYERS = {"assets", "roads", "route"}
+ALL_WHITELISTED_LAYERS = {"assets", "roads"}
 SUPPORTED_FORMATS = {"geojson", "kml", "shp"}
 SUPPORTED_FILTERS = {"all", "screening_positive", "not_exposed", "not_assessed"}
 
@@ -46,14 +44,10 @@ def filter_geojson_features(
 def get_layer_feature_collection(
     layer: str,
     exposure_filter: str = "all",
-    route_request: Optional[RouteScreeningRequest] = None,
     hazard_source: str = "sample_hidkal",
     threshold: float = 0.0,
 ) -> Dict[str, Any]:
-    """
-    Retrieve and filter GeoJSON FeatureCollection for the requested layer.
-    For route export, recomputes route from a validated RouteScreeningRequest.
-    """
+    """Retrieve and filter GeoJSON FeatureCollection for the requested layer."""
     if layer not in ALL_WHITELISTED_LAYERS:
         raise HTTPException(
             status_code=422,
@@ -75,19 +69,6 @@ def get_layer_feature_collection(
     elif layer == "roads":
         raw = get_exposure_roads(hazard_source=h_src, threshold=t_val)
         return filter_geojson_features(raw, exposure_filter)
-    elif layer == "route":
-        if not route_request:
-            raise HTTPException(
-                status_code=422,
-                detail="A valid RouteScreeningRequest must be provided to recompute and export the route layer.",
-            )
-        route_response = calculate_screening_route(route_request)
-        if not route_response.route_found or not route_response.geojson:
-            raise HTTPException(
-                status_code=422,
-                detail="No valid route could be found with the provided screening parameters to export.",
-            )
-        return {"type": "FeatureCollection", "features": [route_response.geojson]}
 
     raise HTTPException(status_code=400, detail="Unknown layer request")
 
@@ -342,7 +323,6 @@ def handle_export(
     layer: str,
     format_type: str = "geojson",
     exposure_filter: str = "all",
-    route_request: Optional[RouteScreeningRequest] = None,
     hazard_source: str = "sample_hidkal",
     threshold: float = 0.0,
 ) -> Response:
@@ -357,7 +337,6 @@ def handle_export(
     geojson_data = get_layer_feature_collection(
         layer=layer,
         exposure_filter=exposure_filter,
-        route_request=route_request,
         hazard_source=hazard_source,
         threshold=threshold,
     )

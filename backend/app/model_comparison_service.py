@@ -163,29 +163,63 @@ def get_project_engine_capabilities(project_id: str) -> ModelComparisonCapabilit
     )
 
     # 2. Delft3D / D-Flow FM Audit
-    from app.simulation_service import detect_capabilities as detect_d3d_capabilities, list_simulation_runs
+    from app.simulation_service import detect_capabilities as detect_d3d_capabilities, list_simulation_runs, get_dam_project_delft3d_dir
 
     d3d_caps = detect_d3d_capabilities()
-    # Check general simulation runs
-    d3d_all_runs = list_simulation_runs()
     d3d_project_runs: List[Dict[str, Any]] = []
     comparable_d3d_count = 0
 
-    for r in d3d_all_runs:
-        r_dir = Path(r.get("run_dir", ""))
-        has_depth = (r_dir / "depth.tif").is_file() or (r_dir / "max_depth.tif").is_file()
-        has_vel = (r_dir / "velocity.tif").is_file() or (r_dir / "max_velocity.tif").is_file()
-        is_comp = r.get("status") == "completed" and has_depth
-        if is_comp:
-            comparable_d3d_count += 1
-        d3d_project_runs.append({
-            "run_id": r.get("run_id"),
-            "status": r.get("status"),
-            "scenario_name": r.get("scenario_name"),
-            "has_maximum_depth": has_depth,
-            "has_maximum_velocity": has_vel,
-            "comparable": is_comp,
-        })
+    # Check project-specific delft3d runs directory first
+    d3d_runs_dir = p_dir / "delft3d" / "runs"
+    if d3d_runs_dir.is_dir():
+        for r_sub in sorted(d3d_runs_dir.iterdir(), reverse=True):
+            if not r_sub.is_dir():
+                continue
+            r_json = r_sub / "run.json"
+            if r_json.is_file():
+                try:
+                    r_data = json.loads(r_json.read_text(encoding="utf-8"))
+                    has_depth = (r_sub / "maximum_depth.tif").is_file() or (r_sub / "depth.tif").is_file()
+                    has_vel = (r_sub / "maximum_velocity.tif").is_file() or (r_sub / "velocity.tif").is_file()
+                    has_arr = (r_sub / "arrival_time.tif").is_file() or (r_sub / "arrival.tif").is_file()
+                    is_comp = r_data.get("status") == "completed" and has_depth
+                    if is_comp:
+                        comparable_d3d_count += 1
+                    d3d_project_runs.append({
+                        "run_id": r_data.get("run_id", r_sub.name),
+                        "status": r_data.get("status", "completed"),
+                        "solver_execution_status": r_data.get("solver_execution_status", "imported"),
+                        "scientific_status": r_data.get("scientific_status", "imported_external_run"),
+                        "scenario_name": r_data.get("run_label", r_data.get("scenario_name", "Delft3D Run")),
+                        "has_maximum_depth": has_depth,
+                        "has_maximum_velocity": has_vel,
+                        "has_arrival_time": has_arr,
+                        "comparable": is_comp,
+                    })
+                except Exception:
+                    pass
+
+    # Fallback to general simulation runs
+    if not d3d_project_runs:
+        for r in list_simulation_runs():
+            r_dir = Path(r.get("run_dir", ""))
+            has_depth = (r_dir / "depth.tif").is_file() or (r_dir / "max_depth.tif").is_file() or (r_dir / "maximum_depth.tif").is_file()
+            has_vel = (r_dir / "velocity.tif").is_file() or (r_dir / "max_velocity.tif").is_file() or (r_dir / "maximum_velocity.tif").is_file()
+            has_arr = (r_dir / "arrival_time.tif").is_file() or (r_dir / "arrival.tif").is_file()
+            is_comp = r.get("status") == "completed" and has_depth
+            if is_comp:
+                comparable_d3d_count += 1
+            d3d_project_runs.append({
+                "run_id": r.get("run_id"),
+                "status": r.get("status"),
+                "solver_execution_status": "completed",
+                "scientific_status": "hypothetical_unverified",
+                "scenario_name": r.get("scenario_name"),
+                "has_maximum_depth": has_depth,
+                "has_maximum_velocity": has_vel,
+                "has_arrival_time": has_arr,
+                "comparable": is_comp,
+            })
 
     d3d_cap = ModelComparisonEngineCapability(
         environment_available=d3d_caps.hydromt_available,
@@ -195,33 +229,69 @@ def get_project_engine_capabilities(project_id: str) -> ModelComparisonCapabilit
         available_for_comparison=comparable_d3d_count > 0,
         version=getattr(d3d_caps, "dflowfm_version", None) or ("available" if d3d_caps.dflowfm_available else "unavailable"),
         reason=None if comparable_d3d_count > 0 else (
-            "No completed Delft3D FM runs with validated raster outputs exist in storage."
+            "No completed or imported Delft3D FM runs with validated raster outputs exist in project storage."
         ),
     )
 
     # 3. PySPH Audit
-    from app.sph_service import detect_sph_capabilities, list_sph_runs
+    from app.sph_service import detect_sph_capabilities, list_sph_runs, get_dam_project_sph_dir
 
     sph_caps = detect_sph_capabilities()
-    sph_all_runs = list_sph_runs()
     sph_project_runs: List[Dict[str, Any]] = []
     comparable_sph_count = 0
 
-    for r in sph_all_runs:
-        r_id = r.get("run_id", "")
-        has_depth = r.get("has_depth_raster", False)
-        has_vel = r.get("has_velocity_raster", False)
-        is_comp = r.get("status") == "completed" and has_depth
-        if is_comp:
-            comparable_sph_count += 1
-        sph_project_runs.append({
-            "run_id": r_id,
-            "status": r.get("status"),
-            "scenario_name": r.get("scenario_name"),
-            "has_maximum_depth": has_depth,
-            "has_maximum_velocity": has_vel,
-            "comparable": is_comp,
-        })
+    # Check project-specific sph runs directory first
+    sph_runs_dir = p_dir / "sph" / "runs"
+    if sph_runs_dir.is_dir():
+        for r_sub in sorted(sph_runs_dir.iterdir(), reverse=True):
+            if not r_sub.is_dir():
+                continue
+            r_json = r_sub / "run.json"
+            if r_json.is_file():
+                try:
+                    r_data = json.loads(r_json.read_text(encoding="utf-8"))
+                    has_depth = (r_sub / "maximum_depth.tif").is_file() or (r_sub / "depth.tif").is_file()
+                    has_vel = (r_sub / "maximum_velocity.tif").is_file() or (r_sub / "velocity.tif").is_file()
+                    has_arr = (r_sub / "arrival_time.tif").is_file() or (r_sub / "arrival.tif").is_file()
+                    is_comp = r_data.get("status") == "completed" and has_depth
+                    if is_comp:
+                        comparable_sph_count += 1
+                    sph_project_runs.append({
+                        "run_id": r_data.get("run_id", r_sub.name),
+                        "status": r_data.get("status", "completed"),
+                        "solver_execution_status": r_data.get("solver_execution_status", "imported"),
+                        "scientific_status": r_data.get("scientific_status", "imported_external_run"),
+                        "scenario_name": r_data.get("run_label", r_data.get("scenario_name", "SPH Run")),
+                        "has_maximum_depth": has_depth,
+                        "has_maximum_velocity": has_vel,
+                        "has_arrival_time": has_arr,
+                        "comparable": is_comp,
+                    })
+                except Exception:
+                    pass
+
+    # Fallback to general sph runs
+    if not sph_project_runs:
+        for r in list_sph_runs():
+            r_id = r.run_id if hasattr(r, "run_id") else r.get("run_id", "")
+            r_dir = Path(r.get("run_dir", "")) if isinstance(r, dict) else Path(get_runtime_dir() / "sph_runs" / r_id)
+            has_depth = (r_dir / "maximum_depth.tif").is_file() or (r_dir / "depth.tif").is_file() or (r_dir / "output_depth.tif").is_file()
+            has_vel = (r_dir / "maximum_velocity.tif").is_file() or (r_dir / "velocity.tif").is_file() or (r_dir / "output_velocity.tif").is_file()
+            has_arr = (r_dir / "arrival_time.tif").is_file() or (r_dir / "arrival.tif").is_file()
+            is_comp = (r.status if hasattr(r, "status") else r.get("status")) == "completed" and has_depth
+            if is_comp:
+                comparable_sph_count += 1
+            sph_project_runs.append({
+                "run_id": r_id,
+                "status": r.status if hasattr(r, "status") else r.get("status"),
+                "solver_execution_status": "benchmark_demo",
+                "scientific_status": "benchmark_demo",
+                "scenario_name": r.scenario_name if hasattr(r, "scenario_name") else r.get("scenario_name"),
+                "has_maximum_depth": has_depth,
+                "has_maximum_velocity": has_vel,
+                "has_arrival_time": has_arr,
+                "comparable": is_comp,
+            })
 
     sph_cap = ModelComparisonEngineCapability(
         environment_available=sph_caps.pysph_available,
@@ -231,7 +301,7 @@ def get_project_engine_capabilities(project_id: str) -> ModelComparisonCapabilit
         available_for_comparison=comparable_sph_count > 0,
         version=sph_caps.pysph_version,
         reason=None if comparable_sph_count > 0 else (
-            "No completed PySPH runs with rasterized Eulerian depth outputs exist in storage."
+            "No completed or imported PySPH runs with rasterized Eulerian depth outputs exist in project storage."
         ),
     )
 
@@ -252,7 +322,7 @@ def get_project_engine_capabilities(project_id: str) -> ModelComparisonCapabilit
         },
         ready_for_comparison=ready,
         message="At least two comparable hydrodynamic simulation runs are available." if ready else (
-            "Insufficient comparable runs. Please execute or postprocess at least two hydrodynamic model runs."
+            "Insufficient comparable runs. Please execute or import at least two hydrodynamic model runs."
         ),
     )
 
@@ -281,6 +351,8 @@ def normalize_engine_output(
             engine=engine,
             engine_version="fixture-v1",
             source_run_id=clean_rid,
+            run_id=clean_rid,
+            project_id=valid_pid,
             run_timestamp=datetime.now(timezone.utc).isoformat(),
             simulation_duration_s=3600.0,
             native_crs="EPSG:32643",
@@ -294,14 +366,17 @@ def normalize_engine_output(
             arrival_time_available=True,
             inundation_extent_available=True,
             arrival_time_definition="depth >= 0.05m",
+            source_output_files=["maximum_depth.tif", "maximum_velocity.tif", "arrival_time.tif"],
             source_file_hashes={"maximum_depth": "fixture_hash_depth"},
             layer_paths={},
             provenance={"fixture": True},
             scientific_status="synthetic_test_fixture",
+            solver_execution_status="completed",
         )
         return contract, layer_paths
 
-    if engine == "anuga":
+    norm_engine = engine.lower().strip()
+    if norm_engine in ["anuga"]:
         run_dir = p_dir / "anuga" / "runs" / clean_rid
         if not run_dir.is_dir():
             raise HTTPException(status_code=404, detail=f"ANUGA run '{clean_rid}' not found in project storage")
@@ -317,12 +392,10 @@ def normalize_engine_output(
         if run_data.get("status") != "completed":
             raise HTTPException(status_code=422, detail=f"ANUGA run '{clean_rid}' status is not 'completed'")
 
-        # Find postprocessing outputs
         results_dir = run_dir / "results"
         if not results_dir.is_dir():
             raise HTTPException(status_code=422, detail=f"ANUGA run '{clean_rid}' has no postprocessed results")
 
-        # Pick latest processing dir
         proc_dirs = [d for d in results_dir.iterdir() if d.is_dir()]
         if not proc_dirs:
             raise HTTPException(status_code=422, detail=f"No results directory found in ANUGA run '{clean_rid}'")
@@ -351,7 +424,6 @@ def normalize_engine_output(
             bounds_tup = (src.bounds.left, src.bounds.bottom, src.bounds.right, src.bounds.top)
             nodata_val = float(src.nodata if src.nodata is not None else -9999.0)
 
-        # Read arrival threshold from manifest if available
         arr_def = "depth >= 0.05m"
         manifest_file = latest_proc / "postprocessing_manifest.json"
         if manifest_file.is_file():
@@ -366,8 +438,10 @@ def normalize_engine_output(
 
         contract = HydrodynamicOutputContract(
             engine="anuga",
-            engine_version=run_data.get("anuga_version", "unknown"),
+            engine_version=run_data.get("anuga_version", "ANUGA SWE Reference"),
             source_run_id=clean_rid,
+            run_id=clean_rid,
+            project_id=valid_pid,
             run_timestamp=run_data.get("created_at"),
             simulation_duration_s=run_data.get("parameters", {}).get("simulation_duration_s"),
             native_crs=native_crs_str,
@@ -381,29 +455,57 @@ def normalize_engine_output(
             arrival_time_available="arrival_time" in layer_paths,
             inundation_extent_available=True,
             arrival_time_definition=arr_def if "arrival_time" in layer_paths else None,
+            source_output_files=list(layer_paths.keys()),
             source_file_hashes=source_hashes,
             layer_paths={k: str(v) for k, v in layer_paths.items()},
             provenance={"run_dir": str(run_dir)},
-            scientific_status=run_data.get("scientific_status", "hypothetical_unverified"),
+            scientific_status=run_data.get("scientific_status", "unverified_reference"),
+            solver_execution_status=run_data.get("status", "completed"),
         )
         return contract, layer_paths
 
-    elif engine == "delft3d_fm":
+    elif norm_engine in ["delft3d_fm", "delft3d"]:
         from app.simulation_service import get_runs_dir
-        run_dir = get_runs_dir() / clean_rid
+        # Check project runs dir first
+        p_run_dir = p_dir / "delft3d" / "runs" / clean_rid
+        g_run_dir = get_runs_dir() / clean_rid
+        run_dir = p_run_dir if p_run_dir.is_dir() else g_run_dir
         if not run_dir.is_dir():
             raise HTTPException(status_code=404, detail=f"Delft3D run '{clean_rid}' not found")
-        depth_tif = run_dir / "depth.tif" if (run_dir / "depth.tif").is_file() else (run_dir / "max_depth.tif")
+
+        run_json = run_dir / "run.json"
+        run_data = {}
+        if run_json.is_file():
+            try:
+                run_data = json.loads(run_json.read_text(encoding="utf-8"))
+            except Exception:
+                pass
+
+        depth_tif = (
+            (run_dir / "maximum_depth.tif") if (run_dir / "maximum_depth.tif").is_file()
+            else ((run_dir / "depth.tif") if (run_dir / "depth.tif").is_file() else (run_dir / "max_depth.tif"))
+        )
         if not depth_tif.is_file():
             raise HTTPException(status_code=422, detail=f"Delft3D run '{clean_rid}' lacks depth raster output")
 
         layer_paths["maximum_depth"] = depth_tif
         source_hashes["maximum_depth"] = compute_file_sha256(depth_tif) or ""
 
-        vel_tif = run_dir / "velocity.tif" if (run_dir / "velocity.tif").is_file() else (run_dir / "max_velocity.tif")
+        vel_tif = (
+            (run_dir / "maximum_velocity.tif") if (run_dir / "maximum_velocity.tif").is_file()
+            else ((run_dir / "velocity.tif") if (run_dir / "velocity.tif").is_file() else (run_dir / "max_velocity.tif"))
+        )
         if vel_tif.is_file():
             layer_paths["maximum_velocity"] = vel_tif
             source_hashes["maximum_velocity"] = compute_file_sha256(vel_tif) or ""
+
+        arr_tif = (
+            (run_dir / "arrival_time.tif") if (run_dir / "arrival_time.tif").is_file()
+            else ((run_dir / "arrival.tif") if (run_dir / "arrival.tif").is_file() else (run_dir / "max_arrival.tif"))
+        )
+        if arr_tif.is_file():
+            layer_paths["arrival_time"] = arr_tif
+            source_hashes["arrival_time"] = compute_file_sha256(arr_tif) or ""
 
         with rasterio.open(depth_tif) as src:
             native_crs_str = str(src.crs or "EPSG:4326")
@@ -413,8 +515,12 @@ def normalize_engine_output(
 
         contract = HydrodynamicOutputContract(
             engine="delft3d_fm",
-            engine_version="D-Flow FM 2D SWE",
+            engine_version=run_data.get("engine_version", "Delft3D Flexible Mesh"),
             source_run_id=clean_rid,
+            run_id=clean_rid,
+            project_id=valid_pid,
+            run_timestamp=run_data.get("created_at"),
+            simulation_duration_s=run_data.get("simulation_duration_s"),
             native_crs=native_crs_str,
             native_resolution_m=round(res_x, 4),
             analysis_crs=str(target_metric_crs or native_crs_str),
@@ -423,31 +529,59 @@ def normalize_engine_output(
             nodata_value=nodata_val,
             maximum_depth_available=True,
             maximum_velocity_available="maximum_velocity" in layer_paths,
-            arrival_time_available=False,
+            arrival_time_available="arrival_time" in layer_paths,
             inundation_extent_available=True,
+            arrival_time_definition="depth >= 0.05m" if "arrival_time" in layer_paths else None,
+            source_output_files=list(layer_paths.keys()),
             source_file_hashes=source_hashes,
             layer_paths={k: str(v) for k, v in layer_paths.items()},
-            provenance={"run_dir": str(run_dir)},
-            scientific_status="hypothetical_unverified",
+            provenance={"run_dir": str(run_dir), "source_files": run_data.get("source_files", [])},
+            scientific_status=run_data.get("scientific_status", "imported_external_run"),
+            solver_execution_status=run_data.get("solver_execution_status", "completed"),
         )
         return contract, layer_paths
 
-    elif engine == "pysph":
+    elif norm_engine in ["pysph", "sph"]:
         from app.sph_service import get_sph_runs_dir
-        run_dir = get_sph_runs_dir() / clean_rid
+        p_run_dir = p_dir / "sph" / "runs" / clean_rid
+        g_run_dir = get_sph_runs_dir() / clean_rid
+        run_dir = p_run_dir if p_run_dir.is_dir() else g_run_dir
         if not run_dir.is_dir():
             raise HTTPException(status_code=404, detail=f"PySPH run '{clean_rid}' not found")
-        depth_tif = run_dir / "depth.tif" if (run_dir / "depth.tif").is_file() else (run_dir / "output_depth.tif")
+
+        run_json = run_dir / "run.json"
+        run_data = {}
+        if run_json.is_file():
+            try:
+                run_data = json.loads(run_json.read_text(encoding="utf-8"))
+            except Exception:
+                pass
+
+        depth_tif = (
+            (run_dir / "maximum_depth.tif") if (run_dir / "maximum_depth.tif").is_file()
+            else ((run_dir / "depth.tif") if (run_dir / "depth.tif").is_file() else (run_dir / "output_depth.tif"))
+        )
         if not depth_tif.is_file():
             raise HTTPException(status_code=422, detail=f"PySPH run '{clean_rid}' lacks rasterized depth output")
 
         layer_paths["maximum_depth"] = depth_tif
         source_hashes["maximum_depth"] = compute_file_sha256(depth_tif) or ""
 
-        vel_tif = run_dir / "velocity.tif" if (run_dir / "velocity.tif").is_file() else (run_dir / "output_velocity.tif")
+        vel_tif = (
+            (run_dir / "maximum_velocity.tif") if (run_dir / "maximum_velocity.tif").is_file()
+            else ((run_dir / "velocity.tif") if (run_dir / "velocity.tif").is_file() else (run_dir / "output_velocity.tif"))
+        )
         if vel_tif.is_file():
             layer_paths["maximum_velocity"] = vel_tif
             source_hashes["maximum_velocity"] = compute_file_sha256(vel_tif) or ""
+
+        arr_tif = (
+            (run_dir / "arrival_time.tif") if (run_dir / "arrival_time.tif").is_file()
+            else ((run_dir / "arrival.tif") if (run_dir / "arrival.tif").is_file() else (run_dir / "output_arrival.tif"))
+        )
+        if arr_tif.is_file():
+            layer_paths["arrival_time"] = arr_tif
+            source_hashes["arrival_time"] = compute_file_sha256(arr_tif) or ""
 
         with rasterio.open(depth_tif) as src:
             native_crs_str = str(src.crs or "EPSG:4326")
@@ -457,8 +591,12 @@ def normalize_engine_output(
 
         contract = HydrodynamicOutputContract(
             engine="pysph",
-            engine_version="PySPH Lagrangian",
+            engine_version=run_data.get("engine_version", "PySPH Lagrangian"),
             source_run_id=clean_rid,
+            run_id=clean_rid,
+            project_id=valid_pid,
+            run_timestamp=run_data.get("created_at"),
+            simulation_duration_s=run_data.get("simulation_duration_s"),
             native_crs=native_crs_str,
             native_resolution_m=round(res_x, 4),
             analysis_crs=str(target_metric_crs or native_crs_str),
@@ -467,17 +605,21 @@ def normalize_engine_output(
             nodata_value=nodata_val,
             maximum_depth_available=True,
             maximum_velocity_available="maximum_velocity" in layer_paths,
-            arrival_time_available=False,
+            arrival_time_available="arrival_time" in layer_paths,
             inundation_extent_available=True,
+            arrival_time_definition="depth >= 0.05m" if "arrival_time" in layer_paths else None,
+            source_output_files=list(layer_paths.keys()),
             source_file_hashes=source_hashes,
             layer_paths={k: str(v) for k, v in layer_paths.items()},
-            provenance={"run_dir": str(run_dir)},
-            scientific_status="hypothetical_unverified",
+            provenance={"run_dir": str(run_dir), "particle_params": run_data.get("provenance", {}).get("particle_params")},
+            scientific_status=run_data.get("scientific_status", "imported_external_run"),
+            solver_execution_status=run_data.get("solver_execution_status", "completed"),
         )
         return contract, layer_paths
 
     else:
         raise HTTPException(status_code=400, detail=f"Unsupported hydrodynamic engine: '{engine}'")
+
 
 
 def align_rasters_to_common_metric_grid(
