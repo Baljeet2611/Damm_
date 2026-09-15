@@ -132,6 +132,7 @@ export interface DamProjectSummary {
   onboarding_validation_passed: boolean
   scientifically_verified: boolean
   manifest_sha256: string
+  provenance?: string | Record<string, any> | null
   notes: string[]
 }
 
@@ -188,6 +189,7 @@ export interface DamProjectDetailResponse {
   scientifically_verified: boolean
   anuga_package_built?: boolean
   anuga_package_sha256?: string | null
+  provenance?: string | Record<string, any> | null
   warnings: string[]
 }
 
@@ -315,6 +317,48 @@ export interface SimulationInputsUpdateRequest {
   downstream_outlet_geometry?: Record<string, any> | null
   accept_heuristic_inputs?: boolean
   custom_notes?: string | null
+}
+
+export interface DemoInputsRequest {
+  corridor_length_m?: number
+  corridor_width_m?: number
+  dam_axis_length_m?: number
+  reservoir_extent_m?: number
+  dam_height_m?: number
+  freeboard_m?: number
+  manning_n?: number
+  simulation_duration_s?: number
+  accept_hypothetical?: boolean
+}
+
+export interface DemoInputsGeometryItem {
+  name: string
+  geometry_type: string
+  feature_count: number
+  crs: string
+  is_valid: boolean
+  contained_in_dem: boolean
+  summary: string
+}
+
+export interface DemoInputsResponse {
+  project_id: string
+  project_name: string
+  dam_name?: string | null
+  provenance: 'HYPOTHETICAL_UNVERIFIED'
+  scientifically_verified: boolean
+  dam_point_elevation: number
+  dam_crest_elevation: number
+  reservoir_level: number
+  dam_height: number
+  breach_invert_elevation: number
+  freeboard_m: number
+  manning_roughness: number
+  simulation_duration_s: number
+  geometry_crs: string
+  geometries: Record<string, DemoInputsGeometryItem>
+  readiness: DamProjectReadinessResponse
+  disclaimer: string
 }
 
 export interface DamProjectAnugaRunRequest {
@@ -918,6 +962,3 @@ export interface SystemHealthSummaryResponse {
   timestamp: string
   subsystems: SubsystemHealth[]
 }
-
-
-

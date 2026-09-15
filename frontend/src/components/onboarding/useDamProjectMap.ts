@@ -6,7 +6,10 @@ import {
   getDamProjectDamAxisGeometry,
   getDamProjectReservoirGeometry,
   getDamProjectBreachGeometry,
+  getDamProjectModelDomainGeometry,
+  getDamProjectOutletGeometry,
   getDamProjectAnugaLayerTileUrl,
+  getDamProjectAnugaTimestepTileUrl,
   fetchDamProjectDamMarkerGeometry,
 } from '../../api/damProjects'
 
@@ -31,8 +34,11 @@ export function useDamProjectMap(mapRef: React.MutableRefObject<MapLibreMap | nu
     // Remove layers
     const layerIds = [
       'custom-dam-axis-layer',
+      'custom-outlet-line-layer',
       'custom-reservoir-line-layer',
       'custom-reservoir-fill-layer',
+      'custom-model-domain-line-layer',
+      'custom-model-domain-fill-layer',
       'custom-anuga-hazard-layer',
       'custom-dem-tiles-layer',
     ]
@@ -45,7 +51,9 @@ export function useDamProjectMap(mapRef: React.MutableRefObject<MapLibreMap | nu
     // Remove sources
     const sourceIds = [
       'custom-dam-axis-source',
+      'custom-outlet-source',
       'custom-reservoir-source',
+      'custom-model-domain-source',
       'custom-anuga-hazard-source',
       'custom-dem-tiles-source',
     ]
@@ -90,7 +98,41 @@ export function useDamProjectMap(mapRef: React.MutableRefObject<MapLibreMap | nu
         firstVectorLayer
       )
 
-      // 2. Fetch and add Reservoir Boundary Geometry if present
+      // 2. Fetch and add Computational Model Domain Geometry if present
+      try {
+        const domainGeo = await getDamProjectModelDomainGeometry(projectId)
+        if (domainGeo && domainGeo.features && domainGeo.features.length > 0) {
+          map.addSource('custom-model-domain-source', {
+            type: 'geojson',
+            data: domainGeo,
+          })
+
+          map.addLayer({
+            id: 'custom-model-domain-fill-layer',
+            type: 'fill',
+            source: 'custom-model-domain-source',
+            paint: {
+              'fill-color': '#8b5cf6',
+              'fill-opacity': 0.08,
+            },
+          })
+
+          map.addLayer({
+            id: 'custom-model-domain-line-layer',
+            type: 'line',
+            source: 'custom-model-domain-source',
+            paint: {
+              'line-color': '#a78bfa',
+              'line-width': 2,
+              'line-dasharray': [3, 2],
+            },
+          })
+        }
+      } catch {
+        // Model domain optional
+      }
+
+      // 3. Fetch and add Reservoir Boundary Geometry if present
       try {
         const reservoirGeo = await getDamProjectReservoirGeometry(projectId)
         if (reservoirGeo && reservoirGeo.features && reservoirGeo.features.length > 0) {
@@ -124,7 +166,31 @@ export function useDamProjectMap(mapRef: React.MutableRefObject<MapLibreMap | nu
         // Reservoir is optional; proceed
       }
 
-      // 3. Fetch and add Dam Axis Geometry
+      // 4. Fetch and add Downstream Outlet Boundary Geometry if present
+      try {
+        const outletGeo = await getDamProjectOutletGeometry(projectId)
+        if (outletGeo && outletGeo.features && outletGeo.features.length > 0) {
+          map.addSource('custom-outlet-source', {
+            type: 'geojson',
+            data: outletGeo,
+          })
+
+          map.addLayer({
+            id: 'custom-outlet-line-layer',
+            type: 'line',
+            source: 'custom-outlet-source',
+            paint: {
+              'line-color': '#10b981',
+              'line-width': 3.5,
+              'line-dasharray': [3, 2],
+            },
+          })
+        }
+      } catch {
+        // Outlet is optional; proceed
+      }
+
+      // 5. Fetch and add Dam Axis Geometry
       try {
         const damAxisGeo = await getDamProjectDamAxisGeometry(projectId)
         if (damAxisGeo && damAxisGeo.features && damAxisGeo.features.length > 0) {
@@ -326,10 +392,54 @@ export function useDamProjectMap(mapRef: React.MutableRefObject<MapLibreMap | nu
     [mapRef, removeDamProjectAnugaHazardRaster]
   )
 
+  const displayDamProjectAnugaTimestepRaster = useCallback(
+    (projectId: string, runId: string, stepIdx: number, processingId?: string) => {
+      const map = mapRef.current
+      if (!map) return
+
+      const tileUrl = getDamProjectAnugaTimestepTileUrl(projectId, runId, stepIdx, processingId)
+
+      const existingSource = map.getSource('custom-anuga-hazard-source') as any
+      if (existingSource && typeof existingSource.setTiles === 'function') {
+        existingSource.setTiles([tileUrl])
+        return
+      }
+
+      removeDamProjectAnugaHazardRaster()
+
+      map.addSource('custom-anuga-hazard-source', {
+        type: 'raster',
+        tiles: [tileUrl],
+        tileSize: 256,
+      })
+
+      const beforeLayer = map.getLayer('custom-dam-axis-layer')
+        ? 'custom-dam-axis-layer'
+        : map.getLayer('roads-line')
+        ? 'roads-line'
+        : undefined
+
+      map.addLayer(
+        {
+          id: 'custom-anuga-hazard-layer',
+          type: 'raster',
+          source: 'custom-anuga-hazard-source',
+          paint: {
+            'raster-opacity': 0.85,
+            'raster-fade-duration': 0,
+          },
+        },
+        beforeLayer
+      )
+    },
+    [mapRef, removeDamProjectAnugaHazardRaster]
+  )
+
   return {
     displayDamProjectOnMap,
     clearDamProjectMap,
     displayDamProjectAnugaHazardRaster,
+    displayDamProjectAnugaTimestepRaster,
     removeDamProjectAnugaHazardRaster,
   }
 }

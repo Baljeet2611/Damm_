@@ -234,7 +234,7 @@ def postprocess_dam_project_anuga_run(
         raise HTTPException(status_code=500, detail=f"Failed to read run manifest: {str(e)}")
 
     status = run_data.get("status")
-    if status != "completed" or not run_data.get("simulation_executed") or run_data.get("exit_code") != 0:
+    if status not in ("completed", "postprocessing") or run_data.get("exit_code") != 0:
         raise HTTPException(
             status_code=400,
             detail={
@@ -334,6 +334,19 @@ def postprocess_dam_project_anuga_run(
         # Mesh bounding box
         x_min, x_max = float(np.min(xs)), float(np.max(xs))
         y_min, y_max = float(np.min(ys)), float(np.max(ys))
+
+        # Ensure projected CRS matches metric coordinate scale
+        if x_min > 360.0 or y_min > 360.0 or abs(x_min) > 180.0:
+            if proj_crs == "EPSG:4326" or not proj_crs or not proj_crs.upper().startswith("EPSG:32"):
+                dem_meta = p_data.get("raster_derived_metadata", {})
+                bounds = dem_meta.get("bounds", {})
+                if bounds and bounds.get("left") is not None and bounds.get("right") is not None:
+                    cent_lon = (float(bounds["left"]) + float(bounds["right"])) / 2.0
+                    cent_lat = (float(bounds["bottom"]) + float(bounds["top"])) / 2.0
+                    utm_zone = int((cent_lon + 180) / 6) + 1
+                    proj_crs = f"EPSG:{32600 + utm_zone if cent_lat >= 0 else 32700 + utm_zone}"
+                else:
+                    proj_crs = "EPSG:32643"
 
         # Calculate characteristic mesh edge length
         v0, v1, v2 = volumes[:, 0], volumes[:, 1], volumes[:, 2]
@@ -810,6 +823,217 @@ def get_dam_project_anuga_layer_tile(
             style_key = "depth" if layer == "maximum_depth" else ("velocity" if layer == "maximum_velocity" else "arrival")
             style_def = DATASET_STYLES.get(style_key, DATASET_STYLES["depth"])
             rgba_bytes = apply_colormap_and_transparency(arr, valid_mask, style_def)
+            return rgba_bytes
+
+    except Exception:
+        return EMPTY_TILE_PNG
+
+
+_TIMESTEP_TILE_CACHE: Dict[Tuple[str, str, int, int, int, int], bytes] = {}
+_TIMESTEP_CACHE_MAX_SIZE = 2048
+
+
+def get_dam_project_anuga_timestep_metadata(
+    project_id: str,
+    run_id: str,
+    processing_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Retrieve metadata and available temporal frames for an ANUGA simulation SWW run."""
+    verify_project_integrity(project_id)
+    valid_pid = validate_project_uuid(project_id)
+    valid_rid = validate_run_uuid(run_id)
+
+    run_dir = get_dam_projects_dir() / valid_pid / "runs" / valid_rid
+    sww_files = list((run_dir / "workspace" / "output").glob("*.sww"))
+    if not sww_files:
+        raise HTTPException(status_code=404, detail="SWW simulation output file not found in run workspace.")
+    sww_path = sww_files[0]
+
+    try:
+        with netcdf_file(str(sww_path), "r", mmap=False) as ds:
+            times = [float(t) for t in ds.variables["time"][:]]
+            n_times = len(times)
+            dt = float(times[1] - times[0]) if n_times > 1 else 0.0
+            duration = float(times[-1]) if n_times > 0 else 0.0
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to read SWW timesteps: {str(e)}")
+
+    # Get max depth from results if available for legend scale
+    meta = None
+    try:
+        meta = get_dam_project_anuga_layer_metadata(project_id, run_id, "maximum_depth", processing_id)
+    except Exception:
+        pass
+
+    return {
+        "project_id": valid_pid,
+        "run_id": valid_rid,
+        "total_timesteps": n_times,
+        "duration_seconds": duration,
+        "interval_seconds": dt,
+        "times": times,
+        "valid_min": 0.0,
+        "valid_max": meta.valid_max if meta and meta.valid_max is not None else 20.1594,
+        "unit": "meters",
+    }
+
+
+def ensure_dam_project_anuga_timestep_geotiff(
+    project_id: str,
+    run_id: str,
+    step_idx: int,
+    processing_id: Optional[str] = None,
+) -> Path:
+    """Ensure a GeoTIFF raster for a specific discrete timestep depth frame exists, generating on demand."""
+    verify_project_integrity(project_id)
+    valid_pid = validate_project_uuid(project_id)
+    valid_rid = validate_run_uuid(run_id)
+
+    proc_dir, _ = resolve_processing_dir(project_id, run_id, processing_id)
+    timesteps_dir = proc_dir / "timesteps"
+    timesteps_dir.mkdir(parents=True, exist_ok=True)
+
+    target_tif = timesteps_dir / f"depth_step_{step_idx:03d}.tif"
+    if target_tif.is_file() and target_tif.stat().st_size > 512:
+        return target_tif
+
+    # Find SWW file
+    run_dir = get_dam_projects_dir() / valid_pid / "runs" / valid_rid
+    sww_files = list((run_dir / "workspace" / "output").glob("*.sww"))
+    if not sww_files:
+        raise HTTPException(status_code=404, detail="SWW simulation output file not found in run workspace.")
+    sww_path = sww_files[0]
+
+    # Read base reference raster (maximum_depth.tif) for transform, resolution and CRS
+    base_depth_tif = proc_dir / "maximum_depth.tif"
+    if not base_depth_tif.is_file():
+        raise HTTPException(status_code=404, detail="Postprocessed base hazard rasters not found. Please postprocess first.")
+
+    with rasterio.open(base_depth_tif) as ref_src:
+        width = ref_src.width
+        height = ref_src.height
+        transform = ref_src.transform
+        crs_obj = ref_src.crs
+
+    try:
+        with netcdf_file(str(sww_path), "r", mmap=False) as ds:
+            times = ds.variables["time"][:]
+            n_times = len(times)
+            if step_idx < 0 or step_idx >= n_times:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Invalid timestep step_idx {step_idx}. Must be between 0 and {n_times - 1}.",
+                )
+
+            xs = np.array(ds.variables["x"][:], dtype=np.float64) + float(getattr(ds, "xllcorner", 0.0))
+            ys = np.array(ds.variables["y"][:], dtype=np.float64) + float(getattr(ds, "yllcorner", 0.0))
+            volumes = np.array(ds.variables["volumes"][:], dtype=np.int32)
+            elev_raw = np.array(ds.variables["elevation"][:], dtype=np.float64)
+            init_elev_pts = elev_raw[0] if len(elev_raw.shape) == 2 else elev_raw
+
+            triangulation = Triangulation(xs, ys, triangles=volumes)
+            interp_elev = LinearTriInterpolator(triangulation, init_elev_pts)
+
+            # Reconstruct pixel center coordinates from affine transform
+            res_x = transform.a
+            res_y = -transform.e
+            x_min = transform.c
+            y_max = transform.f
+
+            grid_x = x_min + (np.arange(width) + 0.5) * res_x
+            grid_y = y_max - (np.arange(height) + 0.5) * res_y
+            grid_X, grid_Y = np.meshgrid(grid_x, grid_y)
+
+            masked_init_elev = interp_elev(grid_X, grid_Y)
+            grid_mesh_mask = ~masked_init_elev.mask
+            static_grid_elev = masked_init_elev.data
+
+            # Read stage for requested timestep
+            stage_slice = np.array(ds.variables["stage"][step_idx, :], dtype=np.float64)
+            interp_s = LinearTriInterpolator(triangulation, stage_slice)
+            g_s = interp_s(grid_X, grid_Y).data
+
+            if len(elev_raw.shape) == 2 and elev_raw.shape[0] == n_times and n_times > 1:
+                e_slice = np.array(elev_raw[step_idx, :], dtype=np.float64)
+                interp_e = LinearTriInterpolator(triangulation, e_slice)
+                g_e = interp_e(grid_X, grid_Y).data
+            else:
+                g_e = static_grid_elev
+
+            d_t = np.where(grid_mesh_mask, np.maximum(g_s - g_e, 0.0), -9999.0).astype(np.float32)
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to interpolate SWW timestep {step_idx}: {str(e)}")
+
+    # Write target GeoTIFF
+    with rasterio.open(
+        target_tif,
+        "w",
+        driver="GTiff",
+        height=height,
+        width=width,
+        count=1,
+        dtype=rasterio.float32,
+        crs=crs_obj,
+        transform=transform,
+        nodata=-9999.0,
+        compress="deflate",
+    ) as dst:
+        dst.write(d_t, 1)
+
+    return target_tif
+
+
+def get_dam_project_anuga_timestep_tile(
+    project_id: str,
+    run_id: str,
+    step_idx: int,
+    z: int,
+    x: int,
+    y: int,
+    processing_id: Optional[str] = None,
+) -> bytes:
+    """Render a dynamic Web Mercator PNG tile for a discrete simulation timestep depth frame."""
+    verify_project_integrity(project_id)
+    valid_pid = validate_project_uuid(project_id)
+    valid_rid = validate_run_uuid(run_id)
+
+    cache_key = (valid_pid, valid_rid, step_idx, z, x, y)
+    if cache_key in _TIMESTEP_TILE_CACHE:
+        return _TIMESTEP_TILE_CACHE[cache_key]
+
+    # Ensure geotiff exists first (validates project, run, and step_idx)
+    tif_path = ensure_dam_project_anuga_timestep_geotiff(
+        project_id=valid_pid,
+        run_id=valid_rid,
+        step_idx=step_idx,
+        processing_id=processing_id,
+    )
+
+    try:
+        with Reader(str(tif_path)) as reader:
+            img = reader.tile(x, y, z)
+            arr = img.data[0].astype(np.float32)
+            nodata_val = reader.dataset.nodata
+
+            valid_mask = np.isfinite(arr)
+            if nodata_val is not None:
+                valid_mask &= (arr != nodata_val)
+            valid_mask &= (arr > -9000.0)
+            valid_mask &= (arr > 0.005)  # dry cells transparent
+
+            if not np.any(valid_mask):
+                if len(_TIMESTEP_TILE_CACHE) < _TIMESTEP_CACHE_MAX_SIZE:
+                    _TIMESTEP_TILE_CACHE[cache_key] = EMPTY_TILE_PNG
+                return EMPTY_TILE_PNG
+
+            style_def = DATASET_STYLES.get("depth", DATASET_STYLES["depth"])
+            rgba_bytes = apply_colormap_and_transparency(arr, valid_mask, style_def)
+
+            if len(_TIMESTEP_TILE_CACHE) < _TIMESTEP_CACHE_MAX_SIZE:
+                _TIMESTEP_TILE_CACHE[cache_key] = rgba_bytes
             return rgba_bytes
 
     except Exception:

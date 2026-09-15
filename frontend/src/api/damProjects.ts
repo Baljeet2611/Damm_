@@ -15,6 +15,8 @@ import type {
   HeuristicAssistRequest,
   HeuristicAssistResponse,
   SimulationInputsUpdateRequest,
+  DemoInputsRequest,
+  DemoInputsResponse,
   DamProjectAnugaOutputsResponse,
   ProjectAOIResponse,
   EarthObservationRunRequest,
@@ -372,6 +374,47 @@ export function getDamProjectAnugaLayerTileUrl(
   return `${API_BASE}/api/dam-projects/${encodeURIComponent(projectId)}/anuga/runs/${encodeURIComponent(runId)}/results/${encodeURIComponent(layer)}/tiles/{z}/{x}/{y}.png`
 }
 
+export function getDamProjectAnugaTimestepTileUrl(
+  projectId: string,
+  runId: string,
+  stepIdx: number,
+  processingId?: string,
+): string {
+  let url = `${API_BASE}/api/dam-projects/${encodeURIComponent(projectId)}/anuga/runs/${encodeURIComponent(runId)}/timesteps/${encodeURIComponent(stepIdx)}/tiles/{z}/{x}/{y}.png`
+  if (processingId) {
+    url += `?processing_id=${encodeURIComponent(processingId)}`
+  }
+  return url
+}
+
+export interface DamProjectAnugaTimestepsInfo {
+  project_id: string
+  run_id: string
+  total_timesteps: number
+  duration_seconds: number
+  interval_seconds: number
+  times: number[]
+  valid_min: number
+  valid_max: number
+  unit: string
+}
+
+export async function fetchDamProjectAnugaTimestepsInfo(
+  projectId: string,
+  runId: string,
+  processingId?: string,
+): Promise<DamProjectAnugaTimestepsInfo> {
+  let url = `${API_BASE}/api/dam-projects/${encodeURIComponent(projectId)}/anuga/runs/${encodeURIComponent(runId)}/timesteps/info`
+  if (processingId) {
+    url += `?processing_id=${encodeURIComponent(processingId)}`
+  }
+  const res = await fetch(url)
+  if (!res.ok) {
+    throw new Error(`Failed to fetch ANUGA timesteps info: HTTP ${res.status}`)
+  }
+  return res.json()
+}
+
 export async function fetchDamProjectReadiness(
   projectId: string,
 ): Promise<DamProjectReadinessResponse> {
@@ -465,6 +508,41 @@ export async function saveProjectSimulationInputs(
       if (errBody.detail.message) throw new Error(errBody.detail.message)
     }
     throw new Error(`Saving simulation inputs failed: HTTP ${res.status}`)
+  }
+  return res.json()
+}
+
+export async function prepareDamProjectDemoInputs(
+  projectId: string,
+  req: DemoInputsRequest = {},
+): Promise<DemoInputsResponse> {
+  const res = await fetch(`${API_BASE}/api/dam-projects/${encodeURIComponent(projectId)}/demo-inputs`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(req),
+  })
+  if (!res.ok) {
+    const errBody = await res.json().catch(() => null)
+    if (errBody && errBody.detail) {
+      if (typeof errBody.detail === 'string') throw new Error(errBody.detail)
+      if (errBody.detail.message) throw new Error(errBody.detail.message)
+    }
+    throw new Error(`Preparing demo inputs failed: HTTP ${res.status}`)
+  }
+  return res.json()
+}
+
+export async function loadHidkalDemoProject(): Promise<DamProjectDetailResponse> {
+  const res = await fetch(`${API_BASE}/api/dam-projects/load-hidkal-demo`, {
+    method: 'POST',
+  })
+  if (!res.ok) {
+    const errBody = await res.json().catch(() => null)
+    if (errBody && errBody.detail) {
+      if (typeof errBody.detail === 'string') throw new Error(errBody.detail)
+      if (errBody.detail.message) throw new Error(errBody.detail.message)
+    }
+    throw new Error(`Loading Hidkal demo project failed: HTTP ${res.status}`)
   }
   return res.json()
 }
@@ -807,5 +885,3 @@ export async function getSystemHealthSummary(): Promise<SystemHealthSummaryRespo
   if (!res.ok) throw new Error(`Failed to get system health summary: HTTP ${res.status}`)
   return res.json()
 }
-
-

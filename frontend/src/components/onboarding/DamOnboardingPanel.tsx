@@ -11,6 +11,7 @@ import {
   saveDamProject,
   listDamProjects,
   fetchDamProjectReadiness,
+  loadHidkalDemoProject,
 } from '../../api/damProjects'
 import { DamProjectAnugaReadiness } from './DamProjectAnugaReadiness'
 import { EarthObservationPanel } from './EarthObservationPanel'
@@ -32,11 +33,13 @@ export type ProductStage =
 interface DamOnboardingPanelProps {
   onDisplayProjectDem?: (project: DamProjectSummary | DamProjectDetailResponse) => void
   onDisplayHazardLayer?: (projectId: string, runId: string, layer: string, processingId?: string) => void
+  onDisplayTimestepLayer?: (projectId: string, runId: string, stepIdx: number, processingId?: string) => void
 }
 
 export const DamOnboardingPanel: React.FC<DamOnboardingPanelProps> = ({
   onDisplayProjectDem,
   onDisplayHazardLayer,
+  onDisplayTimestepLayer,
 }) => {
   // Navigation stage state (User-Facing Stages)
   const [currentStage, setCurrentStage] = useState<ProductStage>('overview')
@@ -94,6 +97,8 @@ export const DamOnboardingPanel: React.FC<DamOnboardingPanelProps> = ({
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null)
   const [projectReadinessData, setProjectReadinessData] = useState<Record<string, DamProjectReadinessResponse>>({})
   const [loadingReadinessId, setLoadingReadinessId] = useState<string | null>(null)
+  const [loadingDemo, setLoadingDemo] = useState<boolean>(false)
+  const [demoLoadError, setDemoLoadError] = useState<string | null>(null)
 
   const loadProjects = useCallback(async () => {
     try {
@@ -110,6 +115,24 @@ export const DamOnboardingPanel: React.FC<DamOnboardingPanelProps> = ({
     }
   }, [])
 
+  const handleLoadHidkalDemo = async () => {
+    setLoadingDemo(true)
+    setDemoLoadError(null)
+    try {
+      const demoProj = await loadHidkalDemoProject()
+      await loadProjects()
+      setSelectedProjectId(demoProj.project_id)
+      if (onDisplayProjectDem) {
+        onDisplayProjectDem(demoProj)
+      }
+      setCurrentStage('simulation')
+    } catch (err: any) {
+      setDemoLoadError(err.message || 'Failed to load Hidkal demo project.')
+    } finally {
+      setLoadingDemo(false)
+    }
+  }
+
   useEffect(() => {
     // oxlint-disable-next-line react/set-state-in-effect
     loadProjects()
@@ -117,10 +140,58 @@ export const DamOnboardingPanel: React.FC<DamOnboardingPanelProps> = ({
 
   const activeProject = projectsList.find((p) => p.project_id === selectedProjectId) || (projectsList.length > 0 ? projectsList[0] : null)
 
+  const CORE_VALIDATION_FIELDS: (keyof OnboardingFormValues)[] = [
+    'projectName',
+    'damName',
+    'latitude',
+    'longitude',
+  ]
+
   const handleInputChange = (field: keyof OnboardingFormValues, value: string) => {
     setFormValues((prev) => ({ ...prev, [field]: value }))
+    setSaveError(null)
+    // Invalidate validation result only when core geometric/identity fields change
+    if (CORE_VALIDATION_FIELDS.includes(field)) {
+      setValidationResult(null)
+    }
+    // Per requirements: Do NOT reset acknowledgeUnverified on input or optional field changes.
+    // Only reset after successful project registration or explicit form reset.
+  }
+
+  const handleResetForm = () => {
+    setDemFile(null)
+    setDamAxisFile(null)
+    setReservoirFile(null)
+    setModelDomainFile(null)
+    setDownstreamOutletFile(null)
+    setFormValues({
+      projectName: 'New Dam Study',
+      damName: 'Sample Dam',
+      latitude: '16.215',
+      longitude: '74.632',
+      damHeight: '',
+      crestElevation: '',
+      poolElevation: '',
+      manningN: '0.035',
+      verticalUnit: '',
+      verticalDatum: '',
+      reservoirLevel: '',
+      breachWidth: '200',
+      breachCenterX: '',
+      breachCenterY: '',
+      breachFormationTimeHr: '1.0',
+      manningRoughness: '0.035',
+      damCrestElevation: '',
+      breachInvertElevation: '',
+      targetMeshResolutionM: '50',
+      simulationDurationS: '3600',
+      outputIntervalS: '60',
+      geometryCrs: 'EPSG:4326',
+    })
     setValidationResult(null)
+    setValidationError(null)
     setAcknowledgeUnverified(false)
+    setSavedProject(null)
     setSaveError(null)
   }
 
@@ -158,6 +229,9 @@ export const DamOnboardingPanel: React.FC<DamOnboardingPanelProps> = ({
       if (formValues.simulationDurationS) fd.append('simulation_duration_s', formValues.simulationDurationS)
       if (formValues.outputIntervalS) fd.append('output_interval_s', formValues.outputIntervalS)
       if (formValues.geometryCrs) fd.append('geometry_crs', formValues.geometryCrs)
+
+      // Exact backend required field name: acknowledge_unverified_metadata
+      fd.append('acknowledge_unverified_metadata', acknowledgeUnverified ? 'true' : 'false')
     }
 
     return fd
@@ -205,16 +279,27 @@ export const DamOnboardingPanel: React.FC<DamOnboardingPanelProps> = ({
     const fd = buildFormData(true)
     if (!fd) return
 
+    // Temporary console logging to verify acknowledgment state and payload
+    console.log('[Study Setup Registration] Acknowledgment state before submit:', acknowledgeUnverified)
+    console.log(
+      '[Study Setup Registration] Final registration payload entries:',
+      Array.from(fd.entries()).map(([k, v]) => [k, v instanceof File ? `File(${v.name}, ${v.size}B)` : v])
+    )
+
     setSaving(true)
     setSaveError(null)
 
     try {
       const saved = await saveDamProject(fd)
+      console.log('[Study Setup Registration] Backend response:', saved)
       setSavedProject(saved)
       setSelectedProjectId(saved.project_id)
+      // Only reset acknowledgment state after successful project registration
+      setAcknowledgeUnverified(false)
       await loadProjects()
       await handleToggleReadiness(saved.project_id)
     } catch (err: any) {
+      console.error('[Study Setup Registration] Backend error:', err)
       setSaveError(err.message || 'Failed to save project.')
     } finally {
       setSaving(false)
@@ -356,9 +441,20 @@ export const DamOnboardingPanel: React.FC<DamOnboardingPanelProps> = ({
           </div>
           {activeProject && (
             <div style={{ display: 'flex', gap: '0.4rem', alignItems: 'center' }}>
-              <span className="saved-project-badge badge-unverified">
-                {activeProject.scientific_status || 'UNVERIFIED'}
-              </span>
+              {(activeProject.provenance === 'HYPOTHETICAL_UNVERIFIED' || activeProject.project_name.toLowerCase().includes('demo') || activeProject.project_name.toLowerCase().includes('hypothetical')) ? (
+                <>
+                  <span className="saved-project-badge" style={{ background: '#7c3aed', color: '#fff' }} title="Not for engineering or operational decision-making.">
+                    🧪 HYPOTHETICAL DEMO
+                  </span>
+                  <span className="saved-project-badge badge-unverified" title="Not for engineering or operational decision-making.">
+                    NOT FOR OPERATIONAL USE
+                  </span>
+                </>
+              ) : (
+                <span className="saved-project-badge badge-unverified">
+                  {activeProject.scientific_status || 'UNVERIFIED'}
+                </span>
+              )}
               <button
                 className="btn-fit"
                 style={{ fontSize: '0.7rem', padding: '0.2rem 0.45rem' }}
@@ -382,7 +478,16 @@ export const DamOnboardingPanel: React.FC<DamOnboardingPanelProps> = ({
           <div className="onboarding-section" style={{ marginTop: '0.5rem' }}>
             <div className="hud-card-header">
               <h4 className="onboarding-sub-title">Registered Dam Studies ({projectsList.length})</h4>
-              <div style={{ display: 'flex', gap: '0.4rem' }}>
+              <div style={{ display: 'flex', gap: '0.4rem', alignItems: 'center' }}>
+                <button
+                  className="btn-fit"
+                  style={{ background: '#2563eb', color: '#fff', border: 'none', fontWeight: 600 }}
+                  onClick={handleLoadHidkalDemo}
+                  disabled={loadingDemo}
+                  title="Load pre-configured Hidkal Dam hypothetical demo configuration"
+                >
+                  {loadingDemo ? <><span className="spinner" /> Loading Demo...</> : '🧪 Load Hidkal Demo'}
+                </button>
                 <button className="btn-fit" onClick={() => setCurrentStage('setup')}>
                   ➕ Ingest New Study
                 </button>
@@ -391,6 +496,12 @@ export const DamOnboardingPanel: React.FC<DamOnboardingPanelProps> = ({
                 </button>
               </div>
             </div>
+
+            {demoLoadError && (
+              <div className="damage-error-box font-mono" style={{ margin: '0.5rem 0', fontSize: '0.75rem' }}>
+                ⛔ {demoLoadError}
+              </div>
+            )}
 
             {loadingProjects ? (
               <div className="probe-loading">
@@ -401,11 +512,21 @@ export const DamOnboardingPanel: React.FC<DamOnboardingPanelProps> = ({
                 <span style={{ fontSize: '2rem' }}>📁</span>
                 <span className="stage-empty-state-title">No Custom Dam Studies Registered</span>
                 <p className="stage-empty-state-desc">
-                  Ingest a local or regional terrain DEM GeoTIFF to define dam coordinates, parameterize structural attributes, and unlock the hydrodynamic simulation pipeline.
+                  Load our verified Hidkal Dam demonstration study with real SRTM DEM bounds, derived computational domain, reservoir polygon, dam crest axis, and conservative elevations, or ingest your own terrain GeoTIFF.
                 </p>
-                <button className="btn-save-dam" onClick={() => setCurrentStage('setup')} style={{ maxWidth: '240px' }}>
-                  🚀 Ingest Your First Dam Study
-                </button>
+                <div style={{ display: 'flex', gap: '0.6rem', justifyContent: 'center' }}>
+                  <button
+                    className="btn-save-dam"
+                    onClick={handleLoadHidkalDemo}
+                    disabled={loadingDemo}
+                    style={{ maxWidth: '260px', background: '#2563eb' }}
+                  >
+                    {loadingDemo ? <><span className="spinner" /> Loading Demo...</> : '🧪 Load Hidkal Demo Study'}
+                  </button>
+                  <button className="btn-fit" onClick={() => setCurrentStage('setup')} style={{ padding: '0.5rem 1rem' }}>
+                    🚀 Ingest Custom DEM
+                  </button>
+                </div>
               </div>
             ) : (
               <div className="saved-projects-list">
@@ -515,6 +636,50 @@ export const DamOnboardingPanel: React.FC<DamOnboardingPanelProps> = ({
       {/* STAGE 2: STUDY SETUP */}
       {currentStage === 'setup' && (
         <div className="onboarding-body">
+          {/* Quick Demo Pre-population Card */}
+          <div className="preflight-report-card" style={{ marginBottom: '1rem', background: '#0f172a', border: '1px solid #3b82f6' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.4rem' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                <strong style={{ fontSize: '0.85rem' }}>🧪 Fast Demonstration: Hidkal Dam Study</strong>
+                <span className="legend-tag" style={{ background: '#7c3aed', color: '#fff', fontSize: '0.65rem' }}>
+                  HYPOTHETICAL DEMO CONFIGURATION
+                </span>
+              </div>
+            </div>
+
+            <p style={{ fontSize: '0.74rem', color: '#94a3b8', margin: '0 0 0.6rem 0' }}>
+              Instantly loads real Hidkal SRTM DEM bounds, derived computational domain polygon, upstream reservoir boundary, dam crest axis, and conservative elevations for pipeline demonstration.
+            </p>
+
+            <div className="val-disclaimer-box font-mono" style={{ fontSize: '0.7rem', margin: '0 0 0.6rem 0', borderColor: '#f59e0b', color: '#fbbf24' }}>
+              ⚠️ <strong>Disclaimer:</strong> Hypothetical demonstration input — not for engineering or operational decision-making.
+            </div>
+
+            <button
+              type="button"
+              className="btn-preflight"
+              onClick={handleLoadHidkalDemo}
+              disabled={loadingDemo}
+              style={{
+                background: '#2563eb',
+                color: '#fff',
+                padding: '0.45rem 0.9rem',
+                fontSize: '0.78rem',
+                fontWeight: 600,
+                borderRadius: '4px',
+                cursor: loadingDemo ? 'not-allowed' : 'pointer',
+              }}
+            >
+              {loadingDemo ? <><span className="spinner" /> Loading Demonstration Study...</> : '⚡ Load Hidkal Demonstration Configuration'}
+            </button>
+
+            {demoLoadError && (
+              <div className="damage-error-box font-mono" style={{ marginTop: '0.5rem', fontSize: '0.75rem' }}>
+                ⛔ {demoLoadError}
+              </div>
+            )}
+          </div>
+
           {/* Step 1: Core Dataset & Dam Point */}
           <div className="onboarding-section">
             <h4 className="onboarding-sub-title">1. Essential Data (DEM & Dam Location)</h4>
@@ -719,14 +884,25 @@ export const DamOnboardingPanel: React.FC<DamOnboardingPanelProps> = ({
             )}
           </div>
 
-          {/* Validation Trigger */}
-          <div className="onboarding-actions-row">
+          {/* Validation Trigger & Reset Row */}
+          <div className="onboarding-actions-row" style={{ display: 'flex', gap: '0.6rem', alignItems: 'center' }}>
             <button
+              id="btn-validate-dam-dataset"
               className="btn-validate-dam"
               onClick={handleValidate}
               disabled={validating || !demFile || !formValues.projectName.trim()}
             >
               {validating ? <><span className="spinner" /> Validating Ingestion...</> : '🔍 1. Validate Dataset & Location'}
+            </button>
+            <button
+              type="button"
+              id="btn-reset-dam-form"
+              className="btn-fit"
+              onClick={handleResetForm}
+              style={{ background: '#334155', color: '#cbd5e1', padding: '0.55rem 0.9rem' }}
+              title="Reset all inputs, files, and validation state"
+            >
+              🔄 Reset Form
             </button>
           </div>
 
@@ -846,9 +1022,10 @@ export const DamOnboardingPanel: React.FC<DamOnboardingPanelProps> = ({
               {/* Step 4: Acknowledge and Save */}
               {validationResult.onboarding_validation_passed && (
                 <div style={{ marginTop: '0.75rem', display: 'flex', flexDirection: 'column', gap: '0.6rem' }}>
-                  <label className="ack-label">
+                  <label className="ack-label" htmlFor="ack-unverified-metadata">
                     <input
                       type="checkbox"
+                      id="ack-unverified-metadata"
                       checked={acknowledgeUnverified}
                       onChange={(e) => setAcknowledgeUnverified(e.target.checked)}
                       className="ack-checkbox"
@@ -859,12 +1036,19 @@ export const DamOnboardingPanel: React.FC<DamOnboardingPanelProps> = ({
                   </label>
 
                   <button
+                    id="btn-register-save-project"
                     className="btn-save-dam"
                     onClick={handleSave}
-                    disabled={saving || !acknowledgeUnverified}
+                    disabled={saving || !validationResult.onboarding_validation_passed || !acknowledgeUnverified}
+                    title={!acknowledgeUnverified ? 'Check the acknowledgment above to enable registration' : 'Register and save this dam study'}
                   >
                     {saving ? <><span className="spinner" /> Persisting Dam Project...</> : '💾 2. Register & Save Project'}
                   </button>
+                  {!acknowledgeUnverified && (
+                    <span style={{ fontSize: '0.75rem', color: '#f59e0b' }}>
+                      ⚠️ Check acknowledgment above to enable registration.
+                    </span>
+                  )}
                 </div>
               )}
             </div>
@@ -980,6 +1164,7 @@ export const DamOnboardingPanel: React.FC<DamOnboardingPanelProps> = ({
                 project={activeProject}
                 onPackageBuilt={loadProjects}
                 onDisplayHazardLayer={onDisplayHazardLayer}
+                onDisplayTimestepLayer={onDisplayTimestepLayer}
               />
             </div>
           )}

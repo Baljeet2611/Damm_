@@ -67,6 +67,9 @@ from app.schemas import (
     HeuristicAssistRequest,
     HeuristicAssistResponse,
     SimulationInputsUpdateRequest,
+    DemoInputsRequest,
+    DemoInputsResponse,
+    DemoInputsGeometryItem,
     DamProjectAnugaOutputsResponse,
 )
 from app.raster_service import EMPTY_TILE_PNG, apply_colormap_and_transparency, DATASET_STYLES
@@ -2601,6 +2604,7 @@ try:
     import rasterio
     import matplotlib.path as mpath
     from scipy.interpolate import RegularGridInterpolator
+    import pyproj
 except ImportError as e:
     logger.error(f"Missing required spatial dependency: {e}")
     sys.exit(1)
@@ -2687,7 +2691,25 @@ def run():
     logger.info(f"Simulation Duration: {duration_s} s, Output Interval: {interval_s} s")
     logger.info(f"Reservoir Level: {reservoir_level} m, Breach Invert: {breach_invert} m, Crest: {dam_crest} m")
 
-    # 3. Load Domain Geometry
+    # 3. Inspect DEM CRS & Setup Metric Coordinate Transformation
+    with rasterio.open(dem_path) as src:
+        dem_crs = src.crs
+        dem_bounds = src.bounds
+        is_geo = (dem_crs and dem_crs.is_geographic) or (-180.0 <= dem_bounds.left <= 180.0 and -90.0 <= dem_bounds.bottom <= 90.0)
+        if is_geo:
+            cent_lon = 0.5 * (dem_bounds.left + dem_bounds.right)
+            cent_lat = 0.5 * (dem_bounds.bottom + dem_bounds.top)
+            utm_zone = int((cent_lon + 180) / 6) + 1
+            utm_epsg = f"EPSG:{32600 + utm_zone if cent_lat >= 0 else 32700 + utm_zone}"
+            logger.info(f"Geographic DEM detected. Projecting ANUGA mesh to metric UTM coordinate system {utm_epsg}...")
+            to_utm = pyproj.Transformer.from_crs("EPSG:4326", utm_epsg, always_xy=True)
+            from_utm = pyproj.Transformer.from_crs(utm_epsg, "EPSG:4326", always_xy=True)
+        else:
+            utm_epsg = dem_crs.to_string() if dem_crs else "EPSG:32643"
+            to_utm = None
+            from_utm = None
+
+    # 4. Load Domain Geometry & Project to UTM
     with open(domain_path, "r", encoding="utf-8") as f:
         dom_data = json.load(f)
     dom_raw_coords = extract_coords_from_geojson(dom_data)
@@ -2696,11 +2718,13 @@ def run():
     else:
         poly_coords = dom_raw_coords
 
-    # Remove duplicated closing vertex for ANUGA mesh creation
     if len(poly_coords) > 2 and poly_coords[0] == poly_coords[-1]:
         poly_coords = poly_coords[:-1]
 
-    # 4. Load Downstream Outlet Geometry & Classify Boundary Segments
+    if to_utm is not None:
+        poly_coords = [list(to_utm.transform(x, y)) for x, y in poly_coords]
+
+    # 5. Load Downstream Outlet Geometry & Classify Boundary Segments
     with open(outlet_path, "r", encoding="utf-8") as f:
         out_data = json.load(f)
     out_coords = extract_coords_from_geojson(out_data)
@@ -2708,6 +2732,9 @@ def run():
         out_pts = out_coords[0]
     else:
         out_pts = out_coords
+
+    if to_utm is not None:
+        out_pts = [list(to_utm.transform(x, y)) for x, y in out_pts]
 
     n_segs = len(poly_coords)
     boundary_tags = {"wall": [], "outlet": []}
@@ -2717,23 +2744,22 @@ def run():
         p2 = np.array(poly_coords[(seg_idx + 1) % n_segs], dtype=np.float64)
         mid_pt = 0.5 * (p1 + p2)
         d_out = point_to_polyline_distance(np.array([mid_pt[0]]), np.array([mid_pt[1]]), out_pts)[0]
-        if d_out < max(target_res_m, 50.0):
+        if d_out < max(target_res_m * 1.5, 75.0):
             boundary_tags["outlet"].append(seg_idx)
         else:
             boundary_tags["wall"].append(seg_idx)
 
-    # Clean empty tag keys
     tag_dict = {k: v for k, v in boundary_tags.items() if len(v) > 0}
     if not tag_dict:
         tag_dict = {"exterior": list(range(n_segs))}
 
-    # 5. Create ANUGA Domain
-    max_triangle_area = max(0.5 * (target_res_m ** 2), 100.0)
+    # 6. Create ANUGA Domain
+    max_triangle_area = max(0.5 * (target_res_m ** 2), 50.0)
     output_dir = SCRIPT_DIR / "output"
     output_dir.mkdir(parents=True, exist_ok=True)
     scenario_name = f"dam_break_{cfg.get('project_id', 'sim')}"
 
-    logger.info("Generating 2D unstructured triangular mesh...")
+    logger.info(f"Generating 2D unstructured triangular mesh (max triangle area = {max_triangle_area} m2)...")
     domain = anuga.create_domain_from_regions(
         bounding_polygon=poly_coords,
         boundary_tags=tag_dict,
@@ -2745,7 +2771,7 @@ def run():
     domain.set_name(scenario_name)
     domain.set_datadir(str(output_dir))
 
-    # 6. Read DEM Raster & Build Interpolator
+    # 7. Read DEM Raster & Build Interpolator
     logger.info("Reading DEM raster and initializing spatial interpolator...")
     with rasterio.open(dem_path) as src:
         dem_data = src.read(1).astype(np.float64)
@@ -2759,8 +2785,7 @@ def run():
             dem_data = np.flipud(dem_data)
         dem_interp = RegularGridInterpolator((ys, xs), dem_data, bounds_error=False, fill_value=np.nanmin(dem_data))
 
-    # 7. Build Explicit Dam Crest Ridge & Breach Gap on Working Terrain
-    # Original dem.tif is preserved unchanged.
+    # 8. Build Explicit Dam Crest Ridge & Breach Gap on Working Terrain
     logger.info("Burning explicit dam crest and instantaneous breach gap into working terrain...")
     with open(dam_axis_path, "r", encoding="utf-8") as f:
         axis_data = json.load(f)
@@ -2770,11 +2795,17 @@ def run():
     else:
         axis_pts = axis_coords
 
-    dam_buffer_width = max(target_res_m, 15.0)
-    bx = float(breach_center[0]) if breach_center else 0.0
-    by = float(breach_center[1]) if breach_center else 0.0
+    if to_utm is not None:
+        axis_pts = [list(to_utm.transform(x, y)) for x, y in axis_pts]
 
-    # Get coordinate origin offset from ANUGA domain geo_reference
+    dam_buffer_width = max(target_res_m, 25.0)
+    bx_raw = float(breach_center[0]) if breach_center else 0.0
+    by_raw = float(breach_center[1]) if breach_center else 0.0
+    if to_utm is not None and breach_center:
+        bx, by = to_utm.transform(bx_raw, by_raw)
+    else:
+        bx, by = bx_raw, by_raw
+
     try:
         x_orig = float(domain.geo_reference.get_xllcorner())
         y_orig = float(domain.geo_reference.get_yllcorner())
@@ -2785,8 +2816,11 @@ def run():
     def elevation_func(x, y):
         x_flat = np.asarray(x).ravel() + x_orig
         y_flat = np.asarray(y).ravel() + y_orig
-        pts_yx = np.column_stack([y_flat, x_flat])
-        dem_z = dem_interp(pts_yx)
+        if from_utm is not None:
+            lons, lats = from_utm.transform(x_flat, y_flat)
+            dem_z = dem_interp(np.column_stack([lats, lons]))
+        else:
+            dem_z = dem_interp(np.column_stack([y_flat, x_flat]))
 
         dist_to_axis = point_to_polyline_distance(x_flat, y_flat, axis_pts)
         dist_to_breach = np.hypot(x_flat - bx, y_flat - by)
@@ -2803,10 +2837,10 @@ def run():
 
     domain.set_quantity('elevation', function=elevation_func)
 
-    # 8. Set Friction (Manning's n)
+    # 9. Set Friction (Manning's n)
     domain.set_quantity('friction', manning_n)
 
-    # 9. Set Initial Water Stage (Reservoir Boundary)
+    # 10. Set Initial Water Stage (Reservoir Boundary)
     with open(reservoir_path, "r", encoding="utf-8") as f:
         res_data = json.load(f)
     res_raw = extract_coords_from_geojson(res_data)
@@ -2814,6 +2848,10 @@ def run():
         res_coords = res_raw[0]
     else:
         res_coords = res_raw
+
+    if to_utm is not None:
+        res_coords = [list(to_utm.transform(x, y)) for x, y in res_coords]
+
     res_path = mpath.Path(res_coords)
 
     logger.info("Setting initial reservoir stage inside reservoir boundary polygon...")
@@ -3249,7 +3287,7 @@ _ANUGA_VERSION_CACHE: Dict[str, Tuple[bool, str, str, Optional[str]]] = {}
 
 def get_custom_anuga_capabilities() -> DamProjectAnugaCapabilitiesResponse:
     """Retrieve capability status for custom ANUGA hydrodynamic simulation runs.
-    
+
     Mandatory Phase 23 Separation:
     - Discovery of ANUGA environment is independent of execution permission.
     - Execution is strictly gated by ENABLE_CUSTOM_ANUGA_EXECUTION.
@@ -3602,6 +3640,9 @@ def _execute_anuga_run_worker(
         elif exit_code == 0 and sww_valid:
             # Transition to postprocessing state before marking completed
             data["status"] = "postprocessing"
+            data["exit_code"] = 0
+            data["simulation_executed"] = True
+            data["runtime_seconds"] = runtime_s
             data["output_files"] = output_hashes
             run_json.write_text(json.dumps(data, indent=2), encoding="utf-8")
             try:
@@ -4256,6 +4297,452 @@ def save_project_simulation_inputs(
     return get_dam_project(valid_id)
 
 
+def prepare_dam_project_demo_inputs(
+    project_id: str,
+    request: Optional[DemoInputsRequest] = None,
+) -> DemoInputsResponse:
+    """
+    Synthesize, strictly validate, and persist conservative hypothetical demo geometries and hydraulic inputs
+    for an onboarded dam project to satisfy ANUGA simulation readiness.
+
+    Adheres strictly to safety constraints:
+    - GeoJSON coordinate order [longitude, latitude]
+    - Model domain strictly derived from DEM geographic bounds and 100% inside the raster
+    - Dam crest LineString inside DEM & model domain, touching reservoir
+    - Reservoir polygon inside DEM & model domain, with no self-intersection
+    - Downstream outlet touching model domain exterior boundary
+    - Physically consistent hydraulic elevations (crest > pool > invert >= 0)
+    - All labeled provenance='HYPOTHETICAL_UNVERIFIED', scientifically_verified=False
+    """
+    verify_project_integrity(project_id)
+    valid_id = validate_project_uuid(project_id)
+    proj_dir = get_dam_projects_dir() / valid_id
+    proj_json = proj_dir / "project.json"
+
+    if not proj_json.is_file():
+        raise HTTPException(status_code=404, detail=f"Dam project '{valid_id}' not found.")
+
+    p_data = json.loads(proj_json.read_text(encoding="utf-8"))
+    dem_file = proj_dir / "dem.tif"
+    if not dem_file.is_file():
+        raise HTTPException(status_code=400, detail="DEM raster is missing for this project.")
+
+    with rasterio.open(dem_file) as ds:
+        left, bottom, right, top = ds.bounds
+        dem_box = box(left, bottom, right, top)
+        H, W = ds.height, ds.width
+
+    dam_pt = p_data.get("dam_point") or {}
+    user_meta = p_data.get("user_provided_metadata") or {}
+    lon = dam_pt.get("longitude") or user_meta.get("longitude")
+    lat = dam_pt.get("latitude") or user_meta.get("latitude")
+
+    if lon is None or lat is None:
+        raise HTTPException(
+            status_code=422,
+            detail="Dam point coordinates (latitude, longitude) must be defined to prepare demo inputs.",
+        )
+    lon = float(lon)
+    lat = float(lat)
+
+    if not (-180.0 <= lon <= 180.0 and -90.0 <= lat <= 90.0):
+        raise HTTPException(
+            status_code=422,
+            detail=f"Dam coordinates (lon={lon}, lat={lat}) are outside valid geographic degree boundaries.",
+        )
+
+    if not (left <= lon <= right and bottom <= lat <= top):
+        raise HTTPException(
+            status_code=422,
+            detail=f"Dam coordinates ({lat:.5f}N, {lon:.5f}E) lie outside DEM raster bounds.",
+        )
+
+    # 1. Sample baseline elevation at dam point and estimate downstream gradient
+    with rasterio.open(dem_file) as ds:
+        row, col = ds.index(lon, lat)
+        row = max(0, min(H - 1, row))
+        col = max(0, min(W - 1, col))
+        raw_val = float(ds.read(1, window=Window(col, row, 1, 1))[0, 0])
+        if np.isnan(raw_val) or raw_val <= -9000:
+            r_meta = p_data.get("raster_metadata", {})
+            local_elev = float(r_meta.get("mean_elevation") or r_meta.get("min_elevation") or 600.0)
+        else:
+            local_elev = round(raw_val, 2)
+
+        # Gradient aspect analysis for downstream vector direction
+        r_prev = max(0, row - 1)
+        r_next = min(H - 1, row + 1)
+        c_prev = max(0, col - 1)
+        c_next = min(W - 1, col + 1)
+        z_r_prev = float(ds.read(1, window=Window(col, r_prev, 1, 1))[0, 0])
+        z_r_next = float(ds.read(1, window=Window(col, r_next, 1, 1))[0, 0])
+        z_c_prev = float(ds.read(1, window=Window(c_prev, row, 1, 1))[0, 0])
+        z_c_next = float(ds.read(1, window=Window(c_next, row, 1, 1))[0, 0])
+
+        dx_m = abs(ds.transform[0]) * 111320.0 * math.cos(math.radians(lat))
+        dy_m = abs(ds.transform[4]) * 110540.0
+        grad_x = (z_c_next - z_c_prev) / (2.0 * dx_m) if c_next > c_prev and dx_m > 0 else 0.0
+        grad_y = (z_r_next - z_r_prev) / (2.0 * dy_m) if r_next > r_prev and dy_m > 0 else 0.0
+
+        down_x = -grad_x
+        down_y = grad_y
+        mag = math.sqrt(down_x ** 2 + down_y ** 2)
+        if mag < 1e-6:
+            down_x, down_y = math.sin(math.radians(45.0)), math.cos(math.radians(45.0))
+        else:
+            down_x /= mag
+            down_y /= mag
+
+        perp_x = -down_y
+        perp_y = down_x
+
+    # 2. Degree conversion scales
+    m_to_lon = 1.0 / (111320.0 * math.cos(math.radians(lat)))
+    m_to_lat = 1.0 / 110640.0
+
+    margin_m = 150.0
+    margin_lon = margin_m * m_to_lon
+    margin_lat = margin_m * m_to_lat
+
+    dist_to_top_m = max(100.0, (top - margin_lat - lat) / m_to_lat)
+    dist_to_bottom_m = max(100.0, (lat - (bottom + margin_lat)) / m_to_lat)
+    dist_to_right_m = max(100.0, (right - margin_lon - lon) / m_to_lon)
+    dist_to_left_m = max(100.0, (lon - (left + margin_lon)) / m_to_lon)
+
+    max_down_avail = min(
+        dist_to_right_m if down_x > 0 else dist_to_left_m,
+        dist_to_top_m if down_y > 0 else dist_to_bottom_m,
+    )
+    max_up_avail = min(
+        dist_to_left_m if down_x > 0 else dist_to_right_m,
+        dist_to_bottom_m if down_y > 0 else dist_to_top_m,
+    )
+    max_lateral_avail = min(dist_to_left_m, dist_to_right_m, dist_to_bottom_m, dist_to_top_m)
+
+    req = request or DemoInputsRequest()
+    L_corr = max(500.0, min(req.corridor_length_m or 2500.0, max_down_avail * 0.85))
+    L_res = max(200.0, min(req.reservoir_extent_m or 700.0, max_up_avail * 0.70))
+    dom_up = min(L_res + 200.0, max_up_avail * 0.85)
+    W_corr = max(300.0, min(req.corridor_width_m or 1000.0, max_lateral_avail * 0.8))
+    L_axis = max(100.0, min(req.dam_axis_length_m or 400.0, W_corr * 0.6))
+    W_res = min(L_axis * 0.85, 350.0)
+
+    # 3. Construct Geometries [longitude, latitude]
+    ax_half = 0.5 * L_axis
+    ax_p1 = [round(lon - ax_half * perp_x * m_to_lon, 6), round(lat - ax_half * perp_y * m_to_lat, 6)]
+    ax_p2 = [round(lon + ax_half * perp_x * m_to_lon, 6), round(lat + ax_half * perp_y * m_to_lat, 6)]
+    axis_shape = LineString([ax_p1, ax_p2])
+
+    up_cx = lon - L_res * down_x * m_to_lon
+    up_cy = lat - L_res * down_y * m_to_lat
+    res_half_w = 0.5 * W_res
+    r1 = [round(lon - res_half_w * perp_x * m_to_lon, 6), round(lat - res_half_w * perp_y * m_to_lat, 6)]
+    r2 = [round(lon + res_half_w * perp_x * m_to_lon, 6), round(lat + res_half_w * perp_y * m_to_lat, 6)]
+    r3 = [round(up_cx + res_half_w * perp_x * m_to_lon, 6), round(up_cy + res_half_w * perp_y * m_to_lat, 6)]
+    r4 = [round(up_cx - res_half_w * perp_x * m_to_lon, 6), round(up_cy - res_half_w * perp_y * m_to_lat, 6)]
+    res_poly = Polygon([r1, r2, r3, r4, r1])
+
+    up_dom_x = lon - dom_up * down_x * m_to_lon
+    up_dom_y = lat - dom_up * down_y * m_to_lat
+    down_dom_x = lon + L_corr * down_x * m_to_lon
+    down_dom_y = lat + L_corr * down_y * m_to_lat
+    dom_half_w = 0.5 * W_corr
+    d1 = [round(up_dom_x - dom_half_w * perp_x * m_to_lon, 6), round(up_dom_y - dom_half_w * perp_y * m_to_lat, 6)]
+    d2 = [round(up_dom_x + dom_half_w * perp_x * m_to_lon, 6), round(up_dom_y + dom_half_w * perp_y * m_to_lat, 6)]
+    d3 = [round(down_dom_x + dom_half_w * perp_x * m_to_lon, 6), round(down_dom_y + dom_half_w * perp_y * m_to_lat, 6)]
+    d4 = [round(down_dom_x - dom_half_w * perp_x * m_to_lon, 6), round(down_dom_y - dom_half_w * perp_y * m_to_lat, 6)]
+    dom_poly = Polygon([d1, d2, d3, d4, d1])
+
+    outlet_shape = LineString([d4, d3])
+
+    # 4. Strict Backend Validation (Task 5)
+    if not dom_poly.is_valid or not res_poly.is_valid or not axis_shape.is_valid or not outlet_shape.is_valid:
+        raise HTTPException(status_code=422, detail="One or more generated demo geometries are topologically invalid.")
+
+    if not dem_box.contains(dom_poly):
+        raise HTTPException(status_code=422, detail="Model domain computational boundary extends outside DEM bounding extent.")
+    if not dem_box.contains(res_poly):
+        raise HTTPException(status_code=422, detail="Reservoir boundary geometry is completely outside the DEM bounding extent.")
+    if not dem_box.contains(axis_shape):
+        raise HTTPException(status_code=422, detail="Dam crest axis geometry extends outside the DEM bounding extent.")
+
+    diff_res = res_poly.difference(dom_poly)
+    if not diff_res.is_empty and diff_res.area > 1e-7:
+        raise HTTPException(status_code=422, detail="Reservoir boundary geometry must be fully contained within computational model domain polygon.")
+
+    diff_ax = axis_shape.difference(dom_poly)
+    if not diff_ax.is_empty and diff_ax.length > 1e-5:
+        raise HTTPException(status_code=422, detail="Dam crest axis geometry must lie within computational model domain polygon.")
+
+    touches_res = res_poly.intersects(axis_shape) or res_poly.boundary.intersects(axis_shape) or res_poly.distance(axis_shape) < 1e-4
+    if not touches_res:
+        raise HTTPException(status_code=422, detail="Dam crest axis must touch or intersect the reservoir boundary geometry.")
+
+    touches_outlet = dom_poly.boundary.intersects(outlet_shape) or dom_poly.boundary.distance(outlet_shape) < 1e-4
+    if not touches_outlet:
+        raise HTTPException(status_code=422, detail="Downstream outlet LineString must touch or intersect the exterior boundary of the model domain.")
+
+    # 5. Physical Hydraulic Parameters
+    H_dam = float(req.dam_height_m or 25.0)
+    freeboard = float(req.freeboard_m or 5.0)
+    crest_elev = round(local_elev + H_dam, 2)
+    pool_elev = round(crest_elev - freeboard, 2)
+    invert_elev = round(local_elev, 2)
+    manning_n = float(req.manning_n or 0.035)
+    duration_s = float(req.simulation_duration_s or 3600.0)
+
+    if crest_elev <= pool_elev:
+        raise HTTPException(status_code=422, detail=f"Crest elevation ({crest_elev} m) must strictly exceed normal pool elevation ({pool_elev} m).")
+    if pool_elev <= invert_elev:
+        raise HTTPException(status_code=422, detail=f"Normal pool elevation ({pool_elev} m) must strictly exceed breach invert elevation ({invert_elev} m).")
+    if H_dam <= 0.0 or manning_n <= 0.0 or duration_s <= 0.0:
+        raise HTTPException(status_code=422, detail="Hydraulic structural height, roughness, and duration must be strictly positive.")
+
+    # 6. Save GeoJSON Files with Provenance Metadata
+    dam_axis_geo = {
+        "type": "FeatureCollection",
+        "features": [{
+            "type": "Feature",
+            "geometry": {"type": "LineString", "coordinates": [ax_p1, ax_p2]},
+            "properties": {
+                "name": "Hypothetical Demo Dam Crest Axis",
+                "source": "hypothetical_demo",
+                "provenance": "HYPOTHETICAL_UNVERIFIED",
+                "length_m": round(float(L_axis), 1),
+                "scientifically_verified": False,
+            },
+        }],
+    }
+
+    res_geo = {
+        "type": "FeatureCollection",
+        "features": [{
+            "type": "Feature",
+            "geometry": {"type": "Polygon", "coordinates": [[r1, r2, r3, r4, r1]]},
+            "properties": {
+                "name": "Hypothetical Demo Reservoir Boundary",
+                "source": "hypothetical_demo",
+                "provenance": "HYPOTHETICAL_UNVERIFIED",
+                "upstream_extent_m": round(float(L_res), 1),
+                "scientifically_verified": False,
+            },
+        }],
+    }
+
+    dom_geo = {
+        "type": "FeatureCollection",
+        "features": [{
+            "type": "Feature",
+            "geometry": {"type": "Polygon", "coordinates": [[d1, d2, d3, d4, d1]]},
+            "properties": {
+                "name": "Hypothetical Demo Model Domain Boundary",
+                "source": "hypothetical_demo",
+                "provenance": "HYPOTHETICAL_UNVERIFIED",
+                "downstream_length_m": round(float(L_corr), 1),
+                "corridor_width_m": round(float(W_corr), 1),
+                "scientifically_verified": False,
+            },
+        }],
+    }
+
+    outlet_geo = {
+        "type": "FeatureCollection",
+        "features": [{
+            "type": "Feature",
+            "geometry": {"type": "LineString", "coordinates": [d4, d3]},
+            "properties": {
+                "name": "Hypothetical Demo Downstream Outlet Boundary",
+                "source": "hypothetical_demo",
+                "provenance": "HYPOTHETICAL_UNVERIFIED",
+                "scientifically_verified": False,
+            },
+        }],
+    }
+
+    (proj_dir / "dam_axis.geojson").write_text(json.dumps(dam_axis_geo, indent=2), encoding="utf-8")
+    (proj_dir / "reservoir_boundary.geojson").write_text(json.dumps(res_geo, indent=2), encoding="utf-8")
+    (proj_dir / "model_domain.geojson").write_text(json.dumps(dom_geo, indent=2), encoding="utf-8")
+    (proj_dir / "downstream_outlet.geojson").write_text(json.dumps(outlet_geo, indent=2), encoding="utf-8")
+
+    # 7. Update Project Metadata
+    p_data["dam_axis_file"] = "dam_axis.geojson"
+    p_data["reservoir_boundary_file"] = "reservoir_boundary.geojson"
+    p_data["model_domain_file"] = "model_domain.geojson"
+    p_data["downstream_outlet_file"] = "downstream_outlet.geojson"
+
+    p_data["dam_axis_metadata"] = {
+        "layer_name": "dam_axis",
+        "feature_count": 1,
+        "geometry_types": ["LineString"],
+        "crs": "EPSG:4326",
+        "is_valid": True,
+        "fully_within_dem_bounds": True,
+        "intersects_dem_bounds": True,
+        "provenance": "HYPOTHETICAL_UNVERIFIED",
+    }
+    p_data["reservoir_metadata"] = {
+        "layer_name": "reservoir_boundary",
+        "feature_count": 1,
+        "geometry_types": ["Polygon"],
+        "crs": "EPSG:4326",
+        "is_valid": True,
+        "fully_within_dem_bounds": True,
+        "intersects_dem_bounds": True,
+        "provenance": "HYPOTHETICAL_UNVERIFIED",
+    }
+    p_data["model_domain_metadata"] = {
+        "layer_name": "model_domain",
+        "feature_count": 1,
+        "geometry_types": ["Polygon"],
+        "crs": "EPSG:4326",
+        "is_valid": True,
+        "fully_within_dem_bounds": True,
+        "intersects_dem_bounds": True,
+        "provenance": "HYPOTHETICAL_UNVERIFIED",
+    }
+    p_data["downstream_outlet_metadata"] = {
+        "layer_name": "downstream_outlet",
+        "feature_count": 1,
+        "geometry_types": ["LineString"],
+        "crs": "EPSG:4326",
+        "is_valid": True,
+        "fully_within_dem_bounds": True,
+        "intersects_dem_bounds": True,
+        "provenance": "HYPOTHETICAL_UNVERIFIED",
+    }
+
+    user_meta = p_data.setdefault("user_provided_metadata", {})
+    eng_params = p_data.setdefault("engineering_parameters", {})
+    sim_params = p_data.setdefault("simulation_parameters", {})
+    breach_params = p_data.setdefault("breach_parameters", {})
+
+    user_meta.update({
+        "vertical_unit": "meters (assumed)",
+        "vertical_datum": "EGM96 (assumed)",
+        "reservoir_level": pool_elev,
+        "dam_crest_elevation": crest_elev,
+        "dam_height": H_dam,
+        "breach_invert_elevation": invert_elev,
+        "breach_width": 50.0,
+        "breach_formation_time_hr": 1.0,
+        "breach_center": [lon, lat],
+        "breach_center_x": lon,
+        "breach_center_y": lat,
+        "manning_roughness": manning_n,
+        "simulation_duration_s": duration_s,
+        "output_interval_s": 60.0,
+        "target_mesh_resolution_m": 50.0,
+        "geometry_crs": "EPSG:4326",
+        "provenance": "HYPOTHETICAL_UNVERIFIED",
+    })
+
+    eng_params.update({
+        "reservoir_level": pool_elev,
+        "pool_elevation": pool_elev,
+        "crest_elevation": crest_elev,
+        "dam_height": H_dam,
+        "freeboard": freeboard,
+        "manning_n": manning_n,
+        "provenance": "HYPOTHETICAL_UNVERIFIED",
+    })
+
+    sim_params.update({
+        "manning_roughness": manning_n,
+        "simulation_duration_s": duration_s,
+        "output_interval_s": 60.0,
+        "target_mesh_resolution_m": 50.0,
+    })
+
+    breach_params.update({
+        "breach_on_dam_axis": True,
+        "breach_distance_to_axis_m": 0.0,
+    })
+
+    p_data["accept_heuristic_inputs"] = True
+    p_data["has_model_domain"] = True
+    p_data["has_reservoir_boundary"] = True
+    p_data["has_downstream_outlet"] = True
+    p_data["provenance"] = "HYPOTHETICAL_UNVERIFIED"
+
+    proj_json.write_text(json.dumps(p_data, indent=2), encoding="utf-8")
+
+    # Update manifest.json with SHA-256
+    manifest_files = {}
+    for f in proj_dir.iterdir():
+        if f.is_file() and f.name != "manifest.json":
+            manifest_files[f.name] = compute_file_sha256(f) or ""
+    manifest_path = proj_dir / "manifest.json"
+    manifest_data = {
+        "project_id": valid_id,
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+        "files": manifest_files,
+        "scientific_status": "validated_unverified",
+        "scientifically_verified": False,
+    }
+    manifest_path.write_text(json.dumps(manifest_data, indent=2), encoding="utf-8")
+
+    # 8. Re-evaluate readiness
+    updated_readiness = assess_project_simulation_readiness(valid_id)
+
+    geometries_summary = {
+        "model_domain": DemoInputsGeometryItem(
+            name="Hypothetical Model Domain",
+            geometry_type="Polygon",
+            feature_count=1,
+            crs="EPSG:4326",
+            is_valid=True,
+            contained_in_dem=True,
+            summary=f"Conservative computational boundary (length ~{L_corr:.0f}m, width ~{W_corr:.0f}m, strictly within DEM raster).",
+        ),
+        "dam_axis": DemoInputsGeometryItem(
+            name="Hypothetical Dam Crest Axis",
+            geometry_type="LineString",
+            feature_count=1,
+            crs="EPSG:4326",
+            is_valid=True,
+            contained_in_dem=True,
+            summary=f"Dam crest alignment ~{L_axis:.0f}m across dam coordinates ({lat:.4f}N, {lon:.4f}E).",
+        ),
+        "reservoir_boundary": DemoInputsGeometryItem(
+            name="Hypothetical Reservoir Boundary",
+            geometry_type="Polygon",
+            feature_count=1,
+            crs="EPSG:4326",
+            is_valid=True,
+            contained_in_dem=True,
+            summary=f"Closed pool polygon ~{L_res:.0f}m upstream of dam axis.",
+        ),
+        "downstream_outlet": DemoInputsGeometryItem(
+            name="Hypothetical Downstream Outlet",
+            geometry_type="LineString",
+            feature_count=1,
+            crs="EPSG:4326",
+            is_valid=True,
+            contained_in_dem=True,
+            summary="Boundary segment along downstream model domain exterior.",
+        ),
+    }
+
+    return DemoInputsResponse(
+        project_id=valid_id,
+        project_name=p_data.get("project_name", "Dam Study"),
+        dam_name=p_data.get("dam_name"),
+        provenance="HYPOTHETICAL_UNVERIFIED",
+        scientifically_verified=False,
+        dam_point_elevation=local_elev,
+        dam_crest_elevation=crest_elev,
+        reservoir_level=pool_elev,
+        dam_height=H_dam,
+        breach_invert_elevation=invert_elev,
+        freeboard_m=freeboard,
+        manning_roughness=manning_n,
+        simulation_duration_s=duration_s,
+        geometry_crs="EPSG:4326",
+        geometries=geometries_summary,
+        readiness=updated_readiness,
+    )
+
+
 
 def get_dam_project_anuga_outputs(project_id: str, run_id: str) -> DamProjectAnugaOutputsResponse:
     """Retrieve output details and result rasters for an ANUGA simulation execution run."""
@@ -4357,3 +4844,142 @@ def cancel_dam_project_anuga_run(project_id: str, run_id: str) -> DamProjectAnug
 
     r_data["has_results"] = _has_run_results(run_dir, r_data)
     return DamProjectAnugaRunResponse(**r_data)
+
+
+def load_or_create_hidkal_demo_project() -> DamProjectDetailResponse:
+    """
+    Load or initialize a complete, clearly-labelled hypothetical demonstration configuration
+    for Hidkal Dam (Raja Lakhamagouda Dam).
+
+    Uses real Hidkal SRTM DEM when available (or synthesized matching raster) and prepares
+    conservative, topologically validated demo geometries (model domain, reservoir polygon,
+    dam crest axis, downstream outlet) and hydraulic parameters.
+
+    All outputs are explicitly tagged:
+    'Hypothetical demonstration input — not for engineering or operational use.'
+    """
+    projects_dir = get_dam_projects_dir()
+    demo_name = "Hidkal Dam Demonstration Study"
+
+    # 1. Check if the demo project already exists (prioritize existing with completed runs)
+    candidates = []
+    for p_dir in projects_dir.iterdir():
+        if p_dir.is_dir() and (p_dir / "project.json").is_file():
+            try:
+                p_data = json.loads((p_dir / "project.json").read_text(encoding="utf-8"))
+                p_name = p_data.get("project_name") or p_data.get("name") or p_data.get("dam_name") or ""
+                if ("hidkal" in p_name.lower() or p_name == demo_name) and (p_dir / "dem.tif").is_file():
+                    runs_dir = p_dir / "anuga_runs" if (p_dir / "anuga_runs").is_dir() else p_dir / "runs"
+                    num_runs = 0
+                    if runs_dir.is_dir():
+                        num_runs = len([r for r in runs_dir.iterdir() if r.is_dir() and not r.name.startswith(".")])
+                    candidates.append((num_runs, p_dir))
+            except Exception:
+                continue
+
+    if candidates:
+        candidates.sort(key=lambda x: x[0], reverse=True)
+        best_dir = candidates[0][1]
+        if not (best_dir / "model_domain.geojson").is_file() or not (best_dir / "dam_axis.geojson").is_file():
+            prepare_dam_project_demo_inputs(best_dir.name)
+        return get_dam_project(best_dir.name)
+
+    # 2. Acquire Hidkal DEM GeoTIFF bytes
+    repo_root = Path(__file__).resolve().parents[2]
+    candidate_dems = [
+        repo_root / "hidkal_real_test_bundle" / "generated_hidkal_test_data" / "hidkal_real_dem_srtm.tif",
+        repo_root / "data" / "raw" / "data_hidkal" / "hidkal_dem.tif",
+    ]
+
+    dem_bytes = None
+    dem_filename = "hidkal_dem.tif"
+    for c_path in candidate_dems:
+        if c_path.is_file():
+            dem_bytes = c_path.read_bytes()
+            dem_filename = c_path.name
+            break
+
+    # Fallback: synthesize in-memory EPSG:4326 GeoTIFF matching Hidkal extent
+    if not dem_bytes:
+        buf = io.BytesIO()
+        width, height = 200, 200
+        min_lon, max_lon = 74.55, 74.77
+        min_lat, max_lat = 16.05, 16.25
+        res_x = (max_lon - min_lon) / width
+        res_y = (max_lat - min_lat) / height
+        transform = rasterio.transform.Affine(res_x, 0.0, min_lon, 0.0, -res_y, max_lat)
+        profile = {
+            "driver": "GTiff",
+            "height": height,
+            "width": width,
+            "count": 1,
+            "dtype": "float32",
+            "crs": "EPSG:4326",
+            "transform": transform,
+            "nodata": -9999.0,
+        }
+        data = np.zeros((height, width), dtype=np.float32)
+        for r in range(height):
+            for c in range(width):
+                data[r, c] = 630.0 + (height - r) * 0.15 - c * 0.15
+        with rasterio.open(buf, "w", **profile) as dst:
+            dst.write(data, 1)
+        dem_bytes = buf.getvalue()
+
+    # 3. Save the project through the standard onboarding ingestion pipeline
+    dam_lat = 16.14306
+    dam_lon = 74.64278
+
+    # Verify if dam coordinates fall within the DEM extent; adjust if necessary
+    with rasterio.open(io.BytesIO(dem_bytes)) as ds:
+        left, bottom, right, top = ds.bounds
+        if not (left <= dam_lon <= right and bottom <= dam_lat <= top):
+            dam_lon = round(0.5 * (left + right), 5)
+            dam_lat = round(0.5 * (bottom + top), 5)
+
+    saved_resp = save_dam_project(
+        dem_bytes=dem_bytes,
+        dem_filename=dem_filename,
+        project_name=demo_name,
+        dam_name="Hidkal Dam / Raja Lakhamagouda Dam",
+        latitude=dam_lat,
+        longitude=dam_lon,
+        dam_height=25.0,
+        crest_elevation=None,
+        pool_elevation=None,
+        manning_n=0.035,
+        vertical_unit="meters (assumed)",
+        vertical_datum="EGM96 (assumed)",
+        reservoir_level=None,
+        breach_width=50.0,
+        breach_center_x=dam_lon,
+        breach_center_y=dam_lat,
+        breach_formation_time_hr=1.0,
+        manning_roughness=0.035,
+        dam_crest_elevation=None,
+        breach_invert_elevation=None,
+        target_mesh_resolution_m=50.0,
+        simulation_duration_s=3600.0,
+        output_interval_s=60.0,
+        geometry_crs="EPSG:4326",
+        acknowledge_unverified_metadata=True,
+    )
+
+    project_id = saved_resp.project_id
+
+    # 4. Prepare and persist conservative hypothetical demo boundary geometries
+    prepare_dam_project_demo_inputs(
+        project_id,
+        DemoInputsRequest(
+            dam_height_m=25.0,
+            freeboard_m=5.0,
+            corridor_length_m=2500.0,
+            corridor_width_m=1000.0,
+            dam_axis_length_m=400.0,
+            reservoir_extent_m=700.0,
+            manning_n=0.035,
+            simulation_duration_s=3600.0,
+        ),
+    )
+
+    return get_dam_project(project_id)

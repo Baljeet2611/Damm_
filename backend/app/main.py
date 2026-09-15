@@ -63,6 +63,8 @@ from app.schemas import (
     HeuristicAssistRequest,
     HeuristicAssistResponse,
     SimulationInputsUpdateRequest,
+    DemoInputsRequest,
+    DemoInputsResponse,
     DamProjectAnugaOutputsResponse,
     ProjectAOIResponse,
     EarthObservationRunRequest,
@@ -191,6 +193,8 @@ from app.onboarding_service import (
     recover_interrupted_anuga_runs,
     compute_terrain_heuristic_assist,
     save_project_simulation_inputs,
+    prepare_dam_project_demo_inputs,
+    load_or_create_hidkal_demo_project,
     get_dam_project_anuga_outputs,
     cancel_dam_project_anuga_run,
 )
@@ -202,6 +206,8 @@ from app.anuga_postprocessing_service import (
     get_dam_project_anuga_layer_point_value,
     get_dam_project_anuga_layer_tile,
     get_dam_project_anuga_layer_geotiff_path,
+    get_dam_project_anuga_timestep_metadata,
+    get_dam_project_anuga_timestep_tile,
 )
 from app.earth_observation_service import (
     derive_project_aoi,
@@ -1360,6 +1366,30 @@ def post_dam_project_simulation_inputs_endpoint(
 
 
 @app.post(
+    "/api/dam-projects/{project_id}/demo-inputs",
+    response_model=DemoInputsResponse,
+    summary="Prepare and persist hypothetical demo simulation inputs",
+    description="Synthesizes, strictly validates, and persists conservative hypothetical demo geometries and hydraulic parameters within DEM bounds.",
+)
+def post_dam_project_demo_inputs_endpoint(
+    project_id: str,
+    request: Optional[DemoInputsRequest] = Body(default=None),
+) -> DemoInputsResponse:
+    req = request if request is not None else DemoInputsRequest()
+    return prepare_dam_project_demo_inputs(project_id, req)
+
+
+@app.post(
+    "/api/dam-projects/load-hidkal-demo",
+    response_model=DamProjectDetailResponse,
+    summary="Load or seed Hidkal Dam hypothetical demonstration configuration",
+    description="Loads or registers a reproducible hypothetical demonstration configuration for Hidkal Dam with validated geometries and conservative parameters.",
+)
+def post_load_hidkal_demo_endpoint() -> DamProjectDetailResponse:
+    return load_or_create_hidkal_demo_project()
+
+
+@app.post(
     "/api/dam-projects/{project_id}/anuga/preflight",
     response_model=DamProjectAnugaPreflightResponse,
     summary="Assess simulation-readiness for ANUGA model generation",
@@ -1563,6 +1593,43 @@ def get_dam_project_anuga_layer_tile_endpoint(
     processing_id: Optional[str] = Query(None, description="Optional processing ID (defaults to latest)"),
 ) -> Response:
     tile_bytes = get_dam_project_anuga_layer_tile(project_id, run_id, layer, z=z, x=x, y=y, processing_id=processing_id)
+    return Response(
+        content=tile_bytes,
+        media_type="image/png",
+        headers={"Cache-Control": "public, max-age=3600"},
+    )
+
+
+@app.get(
+    "/api/dam-projects/{project_id}/anuga/runs/{run_id}/timesteps/info",
+    summary="Get timestep metadata and temporal range for an ANUGA simulation run",
+    description="Returns available timesteps count, time intervals, and depth range for timeline playback.",
+)
+def get_dam_project_anuga_timesteps_info_endpoint(
+    project_id: str,
+    run_id: str,
+    processing_id: Optional[str] = Query(None, description="Optional processing ID (defaults to latest)"),
+) -> Dict[str, Any]:
+    return get_dam_project_anuga_timestep_metadata(project_id, run_id, processing_id=processing_id)
+
+
+@app.get(
+    "/api/dam-projects/{project_id}/anuga/runs/{run_id}/timesteps/{step_idx}/tiles/{z}/{x}/{y}.png",
+    summary="Render Web Mercator map tile for an ANUGA simulation timestep depth frame",
+    description="Renders a 256x256 PNG map tile representing water depth for a discrete simulation timestep step_idx.",
+)
+def get_dam_project_anuga_timestep_tile_endpoint(
+    project_id: str,
+    run_id: str,
+    step_idx: int,
+    z: int,
+    x: int,
+    y: int,
+    processing_id: Optional[str] = Query(None, description="Optional processing ID (defaults to latest)"),
+) -> Response:
+    tile_bytes = get_dam_project_anuga_timestep_tile(
+        project_id, run_id, step_idx, z=z, x=x, y=y, processing_id=processing_id
+    )
     return Response(
         content=tile_bytes,
         media_type="image/png",
@@ -1891,7 +1958,3 @@ def get_dam_project_exposure_run_layers_endpoint(
     run_id: str,
 ) -> Dict[str, Any]:
     return get_exposure_run_layers(project_id, run_id)
-
-
-
-

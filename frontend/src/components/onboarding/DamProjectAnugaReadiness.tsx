@@ -10,6 +10,7 @@ import type {
   DamProjectDetailResponse,
   DamProjectReadinessResponse,
   HeuristicAssistResponse,
+  DemoInputsResponse,
 } from '../../types/damProjects'
 import {
   runAnugaPreflight,
@@ -26,19 +27,24 @@ import {
   fetchDamProjectReadiness,
   fetchTerrainHeuristicAssist,
   saveProjectSimulationInputs,
+  prepareDamProjectDemoInputs,
   cancelDamProjectAnugaRun,
+  fetchDamProjectAnugaTimestepsInfo,
+  type DamProjectAnugaTimestepsInfo,
 } from '../../api/damProjects'
 
 interface DamProjectAnugaReadinessProps {
   project: DamProjectSummary | DamProjectDetailResponse
   onPackageBuilt?: () => void
   onDisplayHazardLayer?: (projectId: string, runId: string, layer: string, processingId?: string) => void
+  onDisplayTimestepLayer?: (projectId: string, runId: string, stepIdx: number, processingId?: string) => void
 }
 
 export const DamProjectAnugaReadiness: React.FC<DamProjectAnugaReadinessProps> = ({
   project,
   onPackageBuilt,
   onDisplayHazardLayer,
+  onDisplayTimestepLayer,
 }) => {
   const [runningPreflight, setRunningPreflight] = useState<boolean>(false)
   const [preflightResult, setPreflightResult] = useState<DamProjectAnugaPreflightResponse | null>(null)
@@ -60,6 +66,12 @@ export const DamProjectAnugaReadiness: React.FC<DamProjectAnugaReadinessProps> =
   const [ackHeuristic, setAckHeuristic] = useState<boolean>(false)
   const [applyingHeuristic, setApplyingHeuristic] = useState<boolean>(false)
   const [heuristicSuccess, setHeuristicSuccess] = useState<string | null>(null)
+
+  // Hypothetical Demo Inputs State (Task PS-161)
+  const [preparingDemo, setPreparingDemo] = useState<boolean>(false)
+  const [demoResult, setDemoResult] = useState<DemoInputsResponse | null>(null)
+  const [demoError, setDemoError] = useState<string | null>(null)
+  const [demoSuccess, setDemoSuccess] = useState<string | null>(null)
 
   // Phase 19: Simulation Configuration Inputs
   const [simDuration, setSimDuration] = useState<string>('3600')
@@ -91,6 +103,55 @@ export const DamProjectAnugaReadiness: React.FC<DamProjectAnugaReadinessProps> =
   const [queryingPoint, setQueryingPoint] = useState<boolean>(false)
   const [pointError, setPointError] = useState<string | null>(null)
   const [showManifestDetails, setShowManifestDetails] = useState<boolean>(false)
+
+  // Transient Flood Animation (Timeline Playback) State
+  const [activeResultsTab, setActiveResultsTab] = useState<'static' | 'animation'>('static')
+  const [timestepsInfo, setTimestepsInfo] = useState<DamProjectAnugaTimestepsInfo | null>(null)
+  const [currentStep, setCurrentStep] = useState<number>(0)
+  const [isPlaying, setIsPlaying] = useState<boolean>(false)
+  const [playbackSpeed, setPlaybackSpeed] = useState<number>(1)
+
+  useEffect(() => {
+    if (activeRun && (activeRun.status === 'completed' || results)) {
+      fetchDamProjectAnugaTimestepsInfo(project.project_id, activeRun.run_id, results?.processing_id)
+        .then(info => setTimestepsInfo(info))
+        .catch(() => {})
+    }
+  }, [activeRun, results, project.project_id])
+
+  // Animation Playback Interval
+  useEffect(() => {
+    let timer: number | null = null
+    if (isPlaying && timestepsInfo && activeRun) {
+      const intervalMs = Math.max(80, Math.round(350 / playbackSpeed))
+      timer = window.setInterval(() => {
+        setCurrentStep((prev) => {
+          const next = prev >= (timestepsInfo.total_timesteps - 1) ? 0 : prev + 1
+          if (onDisplayTimestepLayer) {
+            onDisplayTimestepLayer(project.project_id, activeRun.run_id, next, results?.processing_id)
+          }
+          return next
+        })
+      }, intervalMs)
+    }
+    return () => {
+      if (timer) clearInterval(timer)
+    }
+  }, [isPlaying, playbackSpeed, timestepsInfo, activeRun, project.project_id, results?.processing_id, onDisplayTimestepLayer])
+
+  const handleStepChange = (newStep: number) => {
+    setCurrentStep(newStep)
+    if (onDisplayTimestepLayer && activeRun) {
+      onDisplayTimestepLayer(project.project_id, activeRun.run_id, newStep, results?.processing_id)
+    }
+  }
+
+  const handleTogglePlay = () => {
+    if (!isPlaying && onDisplayTimestepLayer && activeRun) {
+      onDisplayTimestepLayer(project.project_id, activeRun.run_id, currentStep, results?.processing_id)
+    }
+    setIsPlaying((p) => !p)
+  }
 
   const refreshReadiness = async () => {
     setLoadingReadiness(true)
@@ -256,6 +317,23 @@ export const DamProjectAnugaReadiness: React.FC<DamProjectAnugaReadinessProps> =
     }
   }
 
+  const handlePrepareDemoInputs = async () => {
+    setPreparingDemo(true)
+    setDemoError(null)
+    setDemoSuccess(null)
+    try {
+      const res = await prepareDamProjectDemoInputs(project.project_id)
+      setDemoResult(res)
+      setDemoSuccess('✅ Hypothetical demo inputs prepared and saved. Readiness updated!')
+      setReadiness(res.readiness)
+      await refreshReadiness()
+    } catch (err: any) {
+      setDemoError(err.message || 'Failed to prepare demo inputs.')
+    } finally {
+      setPreparingDemo(false)
+    }
+  }
+
   const handleCancelRun = async () => {
     if (!activeRun) return
     setCancellingRun(true)
@@ -417,6 +495,107 @@ export const DamProjectAnugaReadiness: React.FC<DamProjectAnugaReadinessProps> =
           <div style={{ marginTop: '0.5rem', fontSize: '0.72rem', color: '#f59e0b' }}>
             <span>Pending Requirements: </span>
             <span className="font-mono">{readiness.missing_requirements.join(', ')}</span>
+          </div>
+        )}
+      </div>
+
+      {/* Hypothetical Demo Inputs Card (Task PS-161) */}
+      <div className="preflight-report-card" style={{ marginBottom: '1rem', background: '#0f172a', border: '1px solid #3b82f6' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.4rem' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+            <strong style={{ fontSize: '0.85rem' }}>🧪 Hypothetical Demo Inputs (SIH Reference Dam)</strong>
+            <span className="legend-tag" style={{ background: '#7c3aed', color: '#fff', fontSize: '0.65rem' }}>
+              HYPOTHETICAL / UNVERIFIED
+            </span>
+          </div>
+        </div>
+
+        <p style={{ fontSize: '0.74rem', color: '#94a3b8', margin: '0 0 0.6rem 0' }}>
+          Generates conservative hypothetical boundary geometries (model domain 100% within DEM bounds, dam crest LineString, closed reservoir polygon, downstream outlet) and physically consistent hydraulic parameters (crest elevation, normal pool level, freeboard) derived from local DEM terrain elevation for pipeline verification.
+        </p>
+
+        <button
+          type="button"
+          id="btn-prepare-demo-inputs"
+          className="btn-preflight"
+          onClick={handlePrepareDemoInputs}
+          disabled={preparingDemo}
+          style={{
+            background: '#2563eb',
+            color: '#fff',
+            padding: '0.45rem 0.9rem',
+            fontSize: '0.78rem',
+            fontWeight: 600,
+            borderRadius: '4px',
+            cursor: preparingDemo ? 'not-allowed' : 'pointer',
+          }}
+        >
+          {preparingDemo ? <><span className="spinner" /> Preparing & Validating Demo Inputs...</> : '⚡ Prepare Hypothetical Demo Inputs'}
+        </button>
+
+        {demoError && (
+          <div className="damage-error-box font-mono" style={{ marginTop: '0.5rem', fontSize: '0.75rem' }}>
+            ⛔ {demoError}
+          </div>
+        )}
+
+        {demoSuccess && (
+          <div className="val-status-banner success" style={{ marginTop: '0.5rem', fontSize: '0.75rem' }}>
+            {demoSuccess}
+          </div>
+        )}
+
+        {demoResult && (
+          <div style={{ marginTop: '0.6rem', background: '#1e293b', padding: '0.6rem', borderRadius: '4px', border: '1px solid #334155' }}>
+            <div className="val-disclaimer-box font-mono" style={{ fontSize: '0.7rem', margin: '0 0 0.5rem 0', borderColor: '#f59e0b', color: '#fbbf24' }}>
+              ⚠️ <strong>HYPOTHETICAL / UNVERIFIED:</strong> {demoResult.disclaimer}
+            </div>
+
+            <div className="val-metadata-grid font-mono" style={{ fontSize: '0.72rem', marginBottom: '0.5rem' }}>
+              <div className="val-meta-item">
+                <span className="val-meta-label">Dam Point Baseline Elevation</span>
+                <span className="val-meta-value">{demoResult.dam_point_elevation.toFixed(1)} m</span>
+              </div>
+              <div className="val-meta-item">
+                <span className="val-meta-label">Dam Crest Elevation</span>
+                <span className="val-meta-value">{demoResult.dam_crest_elevation.toFixed(1)} m</span>
+              </div>
+              <div className="val-meta-item">
+                <span className="val-meta-label">Normal Pool Level (FSL)</span>
+                <span className="val-meta-value">{demoResult.reservoir_level.toFixed(1)} m</span>
+              </div>
+              <div className="val-meta-item">
+                <span className="val-meta-label">Dam Structural Height</span>
+                <span className="val-meta-value">{demoResult.dam_height.toFixed(1)} m</span>
+              </div>
+              <div className="val-meta-item">
+                <span className="val-meta-label">Breach Invert Elevation</span>
+                <span className="val-meta-value">{demoResult.breach_invert_elevation.toFixed(1)} m</span>
+              </div>
+              <div className="val-meta-item">
+                <span className="val-meta-label">Freeboard (Crest - Pool)</span>
+                <span className="val-meta-value">+{demoResult.freeboard_m.toFixed(1)} m</span>
+              </div>
+              <div className="val-meta-item">
+                <span className="val-meta-label">Manning's Roughness (n)</span>
+                <span className="val-meta-value">{demoResult.manning_roughness}</span>
+              </div>
+              <div className="val-meta-item">
+                <span className="val-meta-label">Simulation Duration</span>
+                <span className="val-meta-value">{demoResult.simulation_duration_s} s (1.0 hr)</span>
+              </div>
+            </div>
+
+            <div style={{ fontSize: '0.72rem', color: '#94a3b8' }}>
+              <div style={{ fontWeight: 600, color: '#e2e8f0', marginBottom: '0.2rem' }}>Generated Boundary Geometries:</div>
+              <ul style={{ margin: 0, paddingLeft: '1.2rem' }}>
+                {Object.entries(demoResult.geometries).map(([key, geom]) => (
+                  <li key={key}>
+                    <strong style={{ color: '#38bdf8' }}>{geom.name}</strong>: {geom.summary} ({geom.contained_in_dem ? '✅ Contained in DEM' : '❌ Out of bounds'})
+                  </li>
+                ))}
+              </ul>
+            </div>
           </div>
         )}
       </div>
@@ -958,60 +1137,225 @@ export const DamProjectAnugaReadiness: React.FC<DamProjectAnugaReadinessProps> =
                       ⚠️ <strong>SCIENTIFIC DISCLAIMER:</strong> These hazard rasters were generated by postprocessing an uncalibrated 2D shallow water equation model with zero-extrapolation mesh masking. They represent hypothetical scenarios and are not certified predictions.
                     </div>
 
-                    {/* Layer Switcher */}
-                    <div className="layer-switcher-row" style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap', alignItems: 'center' }}>
+                    {/* Mode Selector: Static Hazard Maps vs Transient Flood Animation */}
+                    <div style={{ display: 'flex', gap: '0.4rem', marginBottom: '0.6rem', borderBottom: '1px solid #334155', paddingBottom: '0.4rem' }}>
                       <button
                         type="button"
-                        className={`btn-layer-tab ${selectedLayer === 'maximum_depth' ? 'active' : ''}`}
+                        className={`btn-layer-tab ${activeResultsTab === 'static' ? 'active' : ''}`}
                         onClick={() => {
-                          setSelectedLayer('maximum_depth')
+                          setActiveResultsTab('static')
+                          setIsPlaying(false)
                           if (onDisplayHazardLayer && activeRun) {
-                            onDisplayHazardLayer(project.project_id, activeRun.run_id, 'maximum_depth', results.processing_id)
+                            onDisplayHazardLayer(project.project_id, activeRun.run_id, selectedLayer, results.processing_id)
                           }
                         }}
+                        style={{ flex: 1, textAlign: 'center', padding: '0.4rem 0.6rem' }}
                       >
-                        🌊 Maximum Depth (m)
+                        📊 Static Hazard Maps
                       </button>
                       <button
                         type="button"
-                        className={`btn-layer-tab ${selectedLayer === 'maximum_velocity' ? 'active' : ''}`}
+                        className={`btn-layer-tab ${activeResultsTab === 'animation' ? 'active' : ''}`}
                         onClick={() => {
-                          setSelectedLayer('maximum_velocity')
-                          if (onDisplayHazardLayer && activeRun) {
-                            onDisplayHazardLayer(project.project_id, activeRun.run_id, 'maximum_velocity', results.processing_id)
+                          setActiveResultsTab('animation')
+                          if (onDisplayTimestepLayer && activeRun) {
+                            onDisplayTimestepLayer(project.project_id, activeRun.run_id, currentStep, results.processing_id)
                           }
                         }}
+                        style={{ flex: 1, textAlign: 'center', padding: '0.4rem 0.6rem' }}
                       >
-                        💨 Maximum Velocity (m/s)
+                        🌊 Transient Flood Animation (61 Frames)
                       </button>
-                      <button
-                        type="button"
-                        className={`btn-layer-tab ${selectedLayer === 'arrival_time' ? 'active' : ''}`}
-                        onClick={() => {
-                          setSelectedLayer('arrival_time')
-                          if (onDisplayHazardLayer && activeRun) {
-                            onDisplayHazardLayer(project.project_id, activeRun.run_id, 'arrival_time', results.processing_id)
-                          }
-                        }}
-                      >
-                        ⏱️ Flood Arrival Time (s)
-                      </button>
-                      {onDisplayHazardLayer && (
-                        <button
-                          type="button"
-                          className="btn-project-action"
-                          onClick={() => {
-                            if (activeRun) {
-                              onDisplayHazardLayer(project.project_id, activeRun.run_id, selectedLayer, results.processing_id)
-                            }
-                          }}
-                          style={{ marginLeft: 'auto', background: '#0284c7', color: '#ffffff', borderColor: '#38bdf8' }}
-                          title="Render active hazard raster tiles onto MapLibre map"
-                        >
-                          🗺️ Render on Map
-                        </button>
-                      )}
                     </div>
+
+                    {activeResultsTab === 'animation' ? (
+                      /* Transient Flood Animation Player */
+                      <div className="animation-timeline-card" style={{ background: '#0f172a', border: '1px solid #1e293b', borderRadius: '6px', padding: '0.8rem', marginTop: '0.4rem' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.4rem' }}>
+                          <div style={{ fontWeight: 600, color: '#38bdf8', fontSize: '0.85rem' }}>
+                            ⏱️ Simulation Time: <span style={{ color: '#f8fafc' }}>{currentStep} min</span> ({currentStep * 60} s / 3600 s)
+                          </div>
+                          <span className="legend-tag status-tag-unverified font-mono" style={{ fontSize: '0.65rem' }}>
+                            Frame {currentStep + 1} / {timestepsInfo?.total_timesteps || 61}
+                          </span>
+                        </div>
+
+                        <div className="val-disclaimer-box font-mono" style={{ fontSize: '0.65rem', margin: '0.2rem 0 0.6rem 0' }}>
+                          ⚠️ <strong>HYPOTHETICAL DEMO CONFIGURATION:</strong> Computed using ANUGA from demonstration inputs. Not for engineering or operational decision-making.
+                        </div>
+
+                        {/* Slider Scrubber */}
+                        <div style={{ margin: '0.6rem 0' }}>
+                          <input
+                            type="range"
+                            min={0}
+                            max={(timestepsInfo?.total_timesteps || 61) - 1}
+                            value={currentStep}
+                            onChange={(e) => handleStepChange(Number(e.target.value))}
+                            style={{
+                              width: '100%',
+                              cursor: 'pointer',
+                              accentColor: '#0284c7',
+                            }}
+                          />
+                          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.65rem', color: '#94a3b8', marginTop: '0.15rem' }}>
+                            <span>0 min (Breach)</span>
+                            <span>15 min</span>
+                            <span>30 min</span>
+                            <span>45 min</span>
+                            <span>60 min (Final Extent)</span>
+                          </div>
+                        </div>
+
+                        {/* Controls Row */}
+                        <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap', alignItems: 'center', marginTop: '0.6rem' }}>
+                          <button
+                            type="button"
+                            className="btn-project-action"
+                            onClick={handleTogglePlay}
+                            style={{
+                              background: isPlaying ? '#dc2626' : '#16a34a',
+                              color: '#ffffff',
+                              borderColor: isPlaying ? '#ef4444' : '#22c55e',
+                              fontWeight: 600,
+                              minWidth: '85px',
+                            }}
+                          >
+                            {isPlaying ? '⏸ Pause' : '▶ Play'}
+                          </button>
+
+                          <button
+                            type="button"
+                            className="btn-layer-tab"
+                            onClick={() => handleStepChange(0)}
+                            title="Go to Start (0 min)"
+                            disabled={currentStep === 0}
+                          >
+                            ⏮ 0m
+                          </button>
+                          <button
+                            type="button"
+                            className="btn-layer-tab"
+                            onClick={() => handleStepChange(Math.max(0, currentStep - 1))}
+                            title="Previous Step (-1 min)"
+                            disabled={currentStep === 0}
+                          >
+                            ◀ -1m
+                          </button>
+                          <button
+                            type="button"
+                            className="btn-layer-tab"
+                            onClick={() => handleStepChange(Math.min((timestepsInfo?.total_timesteps || 61) - 1, currentStep + 1))}
+                            title="Next Step (+1 min)"
+                            disabled={currentStep >= (timestepsInfo?.total_timesteps || 61) - 1}
+                          >
+                            ▶ +1m
+                          </button>
+                          <button
+                            type="button"
+                            className="btn-layer-tab"
+                            onClick={() => handleStepChange((timestepsInfo?.total_timesteps || 61) - 1)}
+                            title="Go to End (60 min)"
+                            disabled={currentStep >= (timestepsInfo?.total_timesteps || 61) - 1}
+                          >
+                            ⏭ 60m
+                          </button>
+
+                          {/* Speed Selectors */}
+                          <div style={{ display: 'flex', gap: '0.2rem', marginLeft: 'auto', alignItems: 'center' }}>
+                            <span style={{ fontSize: '0.7rem', color: '#94a3b8' }}>Speed:</span>
+                            {[1, 2, 4].map((speed) => (
+                              <button
+                                key={speed}
+                                type="button"
+                                className={`btn-layer-tab ${playbackSpeed === speed ? 'active' : ''}`}
+                                onClick={() => setPlaybackSpeed(speed)}
+                                style={{ padding: '0.2rem 0.4rem', fontSize: '0.7rem' }}
+                              >
+                                {speed}x
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+
+                        {/* Current Timestep Stats */}
+                        <div className="layer-stats-grid font-mono" style={{ fontSize: '0.7rem', marginTop: '0.6rem' }}>
+                          <div className="val-meta-item">
+                            <span className="val-meta-label">Variable</span>
+                            <span className="val-meta-value">Transient Water Depth</span>
+                          </div>
+                          <div className="val-meta-item">
+                            <span className="val-meta-label">Time Elapsed</span>
+                            <span className="val-meta-value">{currentStep * 60} s / 3600 s</span>
+                          </div>
+                          <div className="val-meta-item">
+                            <span className="val-meta-label">Output Interval</span>
+                            <span className="val-meta-value">60 s</span>
+                          </div>
+                          <div className="val-meta-item">
+                            <span className="val-meta-label">Max Scaled Depth</span>
+                            <span className="val-meta-value">{timestepsInfo?.valid_max?.toFixed(3) || '20.159'} m</span>
+                          </div>
+                        </div>
+                      </div>
+                    ) : (
+                      <>
+                        {/* Layer Switcher */}
+                        <div className="layer-switcher-row" style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap', alignItems: 'center' }}>
+                          <button
+                            type="button"
+                            className={`btn-layer-tab ${selectedLayer === 'maximum_depth' ? 'active' : ''}`}
+                            onClick={() => {
+                              setSelectedLayer('maximum_depth')
+                              if (onDisplayHazardLayer && activeRun) {
+                                onDisplayHazardLayer(project.project_id, activeRun.run_id, 'maximum_depth', results.processing_id)
+                              }
+                            }}
+                          >
+                            🌊 Maximum Depth (m)
+                          </button>
+                          <button
+                            type="button"
+                            className={`btn-layer-tab ${selectedLayer === 'maximum_velocity' ? 'active' : ''}`}
+                            onClick={() => {
+                              setSelectedLayer('maximum_velocity')
+                              if (onDisplayHazardLayer && activeRun) {
+                                onDisplayHazardLayer(project.project_id, activeRun.run_id, 'maximum_velocity', results.processing_id)
+                              }
+                            }}
+                          >
+                            💨 Maximum Velocity (m/s)
+                          </button>
+                          <button
+                            type="button"
+                            className={`btn-layer-tab ${selectedLayer === 'arrival_time' ? 'active' : ''}`}
+                            onClick={() => {
+                              setSelectedLayer('arrival_time')
+                              if (onDisplayHazardLayer && activeRun) {
+                                onDisplayHazardLayer(project.project_id, activeRun.run_id, 'arrival_time', results.processing_id)
+                              }
+                            }}
+                          >
+                            ⏱️ Flood Arrival Time (s)
+                          </button>
+                          {onDisplayHazardLayer && (
+                            <button
+                              type="button"
+                              className="btn-project-action"
+                              onClick={() => {
+                                if (activeRun) {
+                                  onDisplayHazardLayer(project.project_id, activeRun.run_id, selectedLayer, results.processing_id)
+                                }
+                              }}
+                              style={{ marginLeft: 'auto', background: '#0284c7', color: '#ffffff', borderColor: '#38bdf8' }}
+                              title="Render active hazard raster tiles onto MapLibre map"
+                            >
+                              🗺️ Render on Map
+                            </button>
+                          )}
+                        </div>
+                      </>
+                    )}
 
                     {/* Active Layer Statistics */}
                     {results.layer_statistics[selectedLayer] && (

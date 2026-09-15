@@ -1,4 +1,4 @@
-from typing import Optional, Dict, Any, List, Tuple, Literal
+from typing import Optional, Dict, Any, List, Tuple, Literal, Union
 from pydantic import BaseModel, Field
 
 
@@ -835,6 +835,7 @@ class DamProjectSummary(BaseModel):
     onboarding_validation_passed: bool
     scientifically_verified: bool = False
     manifest_sha256: str
+    provenance: Optional[Union[Dict[str, Any], str]] = None
     notes: List[str] = []
 
 
@@ -866,7 +867,7 @@ class DamProjectDetailResponse(BaseModel):
     simulation_parameters: Optional[Dict[str, Any]] = None
     anuga_package_built: bool = False
     manifest: Dict[str, Any]
-    provenance: Optional[Dict[str, Any]] = None
+    provenance: Optional[Union[Dict[str, Any], str]] = None
     assumptions_requiring_confirmation: List[str] = []
     metadata_declared: bool = False
     onboarding_validation_passed: bool = True
@@ -999,6 +1000,52 @@ class SimulationInputsUpdateRequest(BaseModel):
     downstream_outlet_geometry: Optional[Dict[str, Any]] = None
     accept_heuristic_inputs: bool = False
     custom_notes: Optional[str] = None
+
+
+class DemoInputsRequest(BaseModel):
+    corridor_length_m: Optional[float] = Field(default=2500.0, ge=500.0, le=20000.0, description="Approximate downstream corridor extent in meters")
+    corridor_width_m: Optional[float] = Field(default=1000.0, ge=200.0, le=5000.0, description="Approximate model domain corridor width in meters")
+    dam_axis_length_m: Optional[float] = Field(default=400.0, ge=50.0, le=2000.0, description="Approximate demo dam axis length in meters")
+    reservoir_extent_m: Optional[float] = Field(default=700.0, ge=100.0, le=5000.0, description="Approximate demo reservoir upstream extent in meters")
+    dam_height_m: Optional[float] = Field(default=25.0, ge=5.0, le=200.0, description="Hypothetical structural dam height in meters")
+    freeboard_m: Optional[float] = Field(default=5.0, ge=0.5, le=30.0, description="Hypothetical freeboard (crest minus normal pool) in meters")
+    manning_n: Optional[float] = Field(default=0.035, ge=0.01, le=0.2, description="Channel roughness Manning's n")
+    simulation_duration_s: Optional[float] = Field(default=3600.0, ge=60.0, le=86400.0, description="Simulation duration in seconds")
+    accept_hypothetical: bool = Field(default=True, description="Acknowledgment that inputs are synthetic demo approximations")
+
+
+class DemoInputsGeometryItem(BaseModel):
+    name: str
+    geometry_type: str
+    feature_count: int = 1
+    crs: str = "EPSG:4326"
+    is_valid: bool = True
+    contained_in_dem: bool = True
+    summary: str
+
+
+class DemoInputsResponse(BaseModel):
+    project_id: str
+    project_name: str
+    dam_name: Optional[str] = None
+    provenance: Literal["HYPOTHETICAL_UNVERIFIED"] = "HYPOTHETICAL_UNVERIFIED"
+    scientifically_verified: bool = False
+    dam_point_elevation: float
+    dam_crest_elevation: float
+    reservoir_level: float
+    dam_height: float
+    breach_invert_elevation: float
+    freeboard_m: float
+    manning_roughness: float
+    simulation_duration_s: float
+    geometry_crs: str = "EPSG:4326"
+    geometries: Dict[str, DemoInputsGeometryItem]
+    readiness: DamProjectReadinessResponse
+    disclaimer: str = (
+        "HYPOTHETICAL / UNVERIFIED DEMO INPUTS: Geometries (model domain, dam crest axis, reservoir boundary) "
+        "and hydraulic parameters are synthesized from DEM terrain for exploratory pipeline validation only. "
+        "They do NOT represent certified real-world engineering conclusions."
+    )
 
 
 class DamProjectAnugaRunRequest(BaseModel):
@@ -1518,6 +1565,3 @@ class SystemHealthSummaryResponse(BaseModel):
     overall_status: str
     timestamp: str
     subsystems: List[SubsystemHealth]
-
-
-
