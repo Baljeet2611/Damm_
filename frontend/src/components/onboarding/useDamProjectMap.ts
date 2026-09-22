@@ -1,6 +1,7 @@
 import { useRef, useCallback } from 'react'
 import maplibregl, { Map as MapLibreMap, Marker } from 'maplibre-gl'
 import type { DamProjectSummary, DamProjectDetailResponse } from '../../types/damProjects'
+import type { SPHAnimationFrame } from '../../api/damProjects'
 import {
   getDamProjectDemTileUrl,
   getDamProjectDamAxisGeometry,
@@ -435,11 +436,107 @@ export function useDamProjectMap(mapRef: React.MutableRefObject<MapLibreMap | nu
     [mapRef, removeDamProjectAnugaHazardRaster]
   )
 
+  const clearSPHParticleLayer = useCallback(() => {
+    const map = mapRef.current
+    if (!map) return
+    if (map.getLayer('sph-particle-layer')) map.removeLayer('sph-particle-layer')
+    if (map.getSource('sph-particle-source')) map.removeSource('sph-particle-source')
+  }, [mapRef])
+
+  const displaySPHParticleFrame = useCallback(
+    (frameData: SPHAnimationFrame, colorMode: 'depth' | 'velocity' = 'depth') => {
+      const map = mapRef.current
+      if (!map) return
+
+      const existingSource = map.getSource('sph-particle-source') as maplibregl.GeoJSONSource | undefined
+      if (existingSource) {
+        // Fast path: update data on existing source (no layer teardown)
+        existingSource.setData(frameData as any)
+        return
+      }
+
+      // First frame: add source + layer
+      map.addSource('sph-particle-source', {
+        type: 'geojson',
+        data: frameData as any,
+      })
+
+      const depthColor: maplibregl.ExpressionSpecification = [
+        'interpolate',
+        ['linear'],
+        ['get', 'd'],
+        0,   'rgba(56, 189, 248, 0)',
+        0.5, 'rgba(56, 189, 248, 0.5)',
+        2,   'rgba(14, 165, 233, 0.75)',
+        5,   'rgba(59, 130, 246, 0.85)',
+        10,  'rgba(37, 99, 235, 0.9)',
+        20,  'rgba(30, 64, 175, 0.95)',
+        40,  'rgba(109, 40, 217, 1)',
+      ]
+
+      const velocityColor: maplibregl.ExpressionSpecification = [
+        'interpolate',
+        ['linear'],
+        ['get', 'v'],
+        0,   'rgba(254, 240, 138, 0)',
+        1,   'rgba(253, 224, 71, 0.6)',
+        3,   'rgba(249, 115, 22, 0.8)',
+        6,   'rgba(239, 68, 68, 0.9)',
+        10,  'rgba(185, 28, 28, 0.95)',
+        20,  'rgba(127, 29, 29, 1)',
+      ]
+
+      const beforeLayer = map.getLayer('custom-dam-axis-layer')
+        ? 'custom-dam-axis-layer'
+        : map.getLayer('roads-line')
+        ? 'roads-line'
+        : undefined
+
+      map.addLayer(
+        {
+          id: 'sph-particle-layer',
+          type: 'circle',
+          source: 'sph-particle-source',
+          paint: {
+            'circle-radius': [
+              'interpolate', ['linear'], ['zoom'],
+              8, 3,
+              12, 6,
+              15, 10,
+            ],
+            'circle-color': colorMode === 'velocity' ? velocityColor : depthColor,
+            'circle-blur': 0.4,
+            'circle-opacity': 0.85,
+          },
+        },
+        beforeLayer,
+      )
+    },
+    [mapRef],
+  )
+
+  const updateDamBreachVisualState = useCallback((isOpen: boolean) => {
+    const map = mapRef.current
+    if (!map) return
+    if (map.getLayer('custom-dam-axis-layer')) {
+      if (isOpen) {
+        map.setPaintProperty('custom-dam-axis-layer', 'line-color', '#f97316')
+        map.setPaintProperty('custom-dam-axis-layer', 'line-dasharray', [4, 2])
+      } else {
+        map.setPaintProperty('custom-dam-axis-layer', 'line-color', '#dc2626')
+        map.setPaintProperty('custom-dam-axis-layer', 'line-dasharray', [1, 0])
+      }
+    }
+  }, [mapRef])
+
   return {
     displayDamProjectOnMap,
     clearDamProjectMap,
     displayDamProjectAnugaHazardRaster,
     displayDamProjectAnugaTimestepRaster,
     removeDamProjectAnugaHazardRaster,
+    displaySPHParticleFrame,
+    clearSPHParticleLayer,
+    updateDamBreachVisualState,
   }
 }

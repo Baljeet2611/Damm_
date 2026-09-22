@@ -150,6 +150,8 @@ def validate_dam_project_dataset(
     downstream_outlet_filename: Optional[str] = None,
     project_name: str = "New Dam Project",
     dam_name: Optional[str] = None,
+    scenario_type: str = "DAM_BREAK",
+    is_intact_control: bool = False,
     latitude: Optional[float] = None,
     longitude: Optional[float] = None,
     dam_height: Optional[float] = None,
@@ -166,6 +168,11 @@ def validate_dam_project_dataset(
     manning_roughness: Optional[float] = 0.035,
     dam_crest_elevation: Optional[float] = None,
     breach_invert_elevation: Optional[float] = None,
+    blockage_height: Optional[float] = None,
+    blockage_crest_elevation: Optional[float] = None,
+    blockage_width: Optional[float] = None,
+    upstream_water_level: Optional[float] = None,
+    opening_width: Optional[float] = None,
     target_mesh_resolution_m: Optional[float] = None,
     simulation_duration_s: Optional[float] = None,
     output_interval_s: Optional[float] = None,
@@ -238,10 +245,17 @@ def validate_dam_project_dataset(
         if not out_safe and out_err:
             errors.append(out_err)
 
+    clean_scenario_type = "RIVER_BLOCKAGE" if str(scenario_type).upper() in ("RIVER_BLOCKAGE", "NATURAL_BLOCKAGE", "LANDSLIDE_DAM") else "DAM_BREAK"
+    clean_scenario_label = "River Blockage / Landslide Dam Scenario" if clean_scenario_type == "RIVER_BLOCKAGE" else "Dam Break Scenario"
+    clean_barrier_type = "natural_landslide_blockage" if clean_scenario_type == "RIVER_BLOCKAGE" else "engineered_dam"
+
     if errors:
         return DamProjectValidationResponse(
             valid=False,
             project_name=clean_project_name,
+            scenario_type=clean_scenario_type,
+            scenario_label=clean_scenario_label,
+            barrier_type=clean_barrier_type,
             dam_name=clean_dam_name,
             errors=errors,
             warnings=warnings,
@@ -255,9 +269,11 @@ def validate_dam_project_dataset(
     # Reconcile coordinate and parameter aliases
     eff_lat = latitude if latitude is not None else breach_center_y
     eff_lon = longitude if longitude is not None else breach_center_x
-    eff_crest = crest_elevation if crest_elevation is not None else dam_crest_elevation
-    eff_pool = pool_elevation if pool_elevation is not None else reservoir_level
+    eff_crest = crest_elevation if crest_elevation is not None else (dam_crest_elevation if dam_crest_elevation is not None else blockage_crest_elevation)
+    eff_pool = pool_elevation if pool_elevation is not None else (reservoir_level if reservoir_level is not None else upstream_water_level)
     eff_manning = manning_n if manning_n is not None else manning_roughness
+    eff_height = dam_height if dam_height is not None else blockage_height
+    eff_breach_width = 0.0 if is_intact_control else (breach_width if breach_width is not None else opening_width)
 
     raster_derived_meta: Optional[RasterDerivedMetadata] = None
     axis_meta: Optional[GeometryValidationMetadata] = None
@@ -845,15 +861,24 @@ def validate_dam_project_dataset(
 
         calc_freeboard = (eff_crest - eff_pool) if (eff_crest is not None and eff_pool is not None) else None
         eng_params = EngineeringParameters(
-            dam_height=dam_height,
+            scenario_type=clean_scenario_type,
+            scenario_label=clean_scenario_label,
+            barrier_type=clean_barrier_type,
+            is_intact_control=is_intact_control,
+            dam_height=eff_height,
             crest_elevation=eff_crest,
             pool_elevation=eff_pool,
             reservoir_level=eff_pool,
             freeboard=calc_freeboard,
-            breach_width=breach_width,
+            breach_width=eff_breach_width,
             breach_formation_time_hr=breach_formation_time_hr,
             manning_n=eff_manning,
             simulation_duration_s=simulation_duration_s,
+            blockage_height=blockage_height,
+            blockage_crest_elevation=blockage_crest_elevation,
+            blockage_width=blockage_width,
+            upstream_water_level=upstream_water_level,
+            opening_width=opening_width,
         )
 
         # Metric Distance Calculation (True Metres, Never Degree Euclidean Distance)
@@ -956,19 +981,28 @@ def validate_dam_project_dataset(
 
     user_meta = UserProvidedMetadata(
         project_name=clean_project_name,
+        scenario_type=clean_scenario_type,
+        scenario_label=clean_scenario_label,
+        barrier_type=clean_barrier_type,
+        is_intact_control=is_intact_control,
         dam_name=clean_dam_name,
         vertical_unit=vertical_unit,
         vertical_datum=vertical_datum,
         reservoir_level=eff_pool,
-        breach_width=breach_width,
+        breach_width=eff_breach_width,
         breach_center=(eff_lon, eff_lat) if eff_lon is not None and eff_lat is not None else None,
         breach_formation_time_hr=breach_formation_time_hr,
         manning_roughness=eff_manning,
         dam_crest_elevation=eff_crest,
-        dam_height=dam_height,
+        dam_height=eff_height,
         dam_latitude=eff_lat,
         dam_longitude=eff_lon,
         breach_invert_elevation=breach_invert_elevation,
+        blockage_height=blockage_height,
+        blockage_crest_elevation=blockage_crest_elevation,
+        blockage_width=blockage_width,
+        upstream_water_level=upstream_water_level,
+        opening_width=opening_width,
         target_mesh_resolution_m=target_mesh_resolution_m,
         simulation_duration_s=simulation_duration_s,
         output_interval_s=output_interval_s,
@@ -977,6 +1011,10 @@ def validate_dam_project_dataset(
 
     normalized_meta = NormalizedProjectMetadata(
         project_name=clean_project_name,
+        scenario_type=clean_scenario_type,
+        scenario_label=clean_scenario_label,
+        barrier_type=clean_barrier_type,
+        is_intact_control=is_intact_control,
         dam_name=clean_dam_name,
         raster_metadata=raster_derived_meta,
         user_provided_metadata=user_meta,
@@ -995,6 +1033,9 @@ def validate_dam_project_dataset(
     return DamProjectValidationResponse(
         valid=is_valid,
         project_name=clean_project_name,
+        scenario_type=clean_scenario_type,
+        scenario_label=clean_scenario_label,
+        barrier_type=clean_barrier_type,
         dam_name=clean_dam_name,
         errors=errors,
         warnings=warnings,
@@ -1022,6 +1063,8 @@ def save_dam_project(
     downstream_outlet_filename: Optional[str] = None,
     project_name: str = "New Dam Project",
     dam_name: Optional[str] = None,
+    scenario_type: str = "DAM_BREAK",
+    is_intact_control: bool = False,
     latitude: Optional[float] = None,
     longitude: Optional[float] = None,
     dam_height: Optional[float] = None,
@@ -1038,6 +1081,11 @@ def save_dam_project(
     manning_roughness: Optional[float] = 0.035,
     dam_crest_elevation: Optional[float] = None,
     breach_invert_elevation: Optional[float] = None,
+    blockage_height: Optional[float] = None,
+    blockage_crest_elevation: Optional[float] = None,
+    blockage_width: Optional[float] = None,
+    upstream_water_level: Optional[float] = None,
+    opening_width: Optional[float] = None,
     target_mesh_resolution_m: Optional[float] = None,
     simulation_duration_s: Optional[float] = None,
     output_interval_s: Optional[float] = None,
@@ -1072,6 +1120,8 @@ def save_dam_project(
         downstream_outlet_filename=downstream_outlet_filename,
         project_name=project_name,
         dam_name=dam_name,
+        scenario_type=scenario_type,
+        is_intact_control=is_intact_control,
         latitude=latitude,
         longitude=longitude,
         dam_height=dam_height,
@@ -1088,6 +1138,11 @@ def save_dam_project(
         manning_roughness=manning_roughness,
         dam_crest_elevation=dam_crest_elevation,
         breach_invert_elevation=breach_invert_elevation,
+        blockage_height=blockage_height,
+        blockage_crest_elevation=blockage_crest_elevation,
+        blockage_width=blockage_width,
+        upstream_water_level=upstream_water_level,
+        opening_width=opening_width,
         target_mesh_resolution_m=target_mesh_resolution_m,
         simulation_duration_s=simulation_duration_s,
         output_interval_s=output_interval_s,
@@ -2589,6 +2644,28 @@ import logging
 from pathlib import Path
 import numpy as np
 
+if sys.platform == "win32":
+    env_dir = Path(sys.executable).parent
+    for d in [
+        env_dir / "Library" / "bin",
+        env_dir / "Library" / "mingw-w64" / "bin",
+        env_dir / "Library" / "usr" / "bin",
+        env_dir / "Scripts",
+        env_dir,
+    ]:
+        if d.is_dir():
+            try:
+                os.add_dll_directory(str(d))
+            except Exception:
+                pass
+    os.environ["PATH"] = os.pathsep.join([str(env_dir / "Library" / "bin"), str(env_dir / "Scripts"), str(env_dir), os.environ.get("PATH", "")])
+    gdal_data = env_dir / "Library" / "share" / "gdal"
+    if gdal_data.is_dir():
+        os.environ["GDAL_DATA"] = str(gdal_data)
+    proj_lib = env_dir / "Library" / "share" / "proj"
+    if proj_lib.is_dir():
+        os.environ["PROJ_LIB"] = str(proj_lib)
+
 # Configure logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger("anuga_simulation")
@@ -3563,17 +3640,20 @@ def _execute_anuga_run_worker(
 
         # Prepend target conda environment paths to avoid host DLL conflicts
         exe_p = Path(python_exe).parent
+        system_root = os.environ.get("SystemRoot", r"C:\Windows")
         conda_paths = [
-            str(exe_p),
+            str(exe_p / "Library" / "bin"),
             str(exe_p / "Library" / "mingw-w64" / "bin"),
             str(exe_p / "Library" / "usr" / "bin"),
-            str(exe_p / "Library" / "bin"),
             str(exe_p / "Scripts"),
-            str(exe_p / "bin"),
+            str(exe_p),
+            f"{system_root}\\system32",
+            f"{system_root}",
+            f"{system_root}\\System32\\Wbem",
         ]
-        existing_path = clean_env.get("PATH", "")
-        clean_env["PATH"] = os.pathsep.join(conda_paths) + os.pathsep + existing_path
+        clean_env["PATH"] = os.pathsep.join(conda_paths)
         clean_env["CONDA_PREFIX"] = str(exe_p)
+        clean_env["CONDA_DEFAULT_ENV"] = "sih-anuga"
 
         try:
             proc = subprocess.Popen(
@@ -4869,10 +4949,17 @@ def load_or_create_hidkal_demo_project() -> DamProjectDetailResponse:
                 p_data = json.loads((p_dir / "project.json").read_text(encoding="utf-8"))
                 p_name = p_data.get("project_name") or p_data.get("name") or p_data.get("dam_name") or ""
                 if ("hidkal" in p_name.lower() or p_name == demo_name) and (p_dir / "dem.tif").is_file():
-                    runs_dir = p_dir / "anuga_runs" if (p_dir / "anuga_runs").is_dir() else p_dir / "runs"
                     num_runs = 0
-                    if runs_dir.is_dir():
-                        num_runs = len([r for r in runs_dir.iterdir() if r.is_dir() and not r.name.startswith(".")])
+                    for r_sub in [p_dir / "runs", p_dir / "anuga" / "runs", p_dir / "sph" / "runs", p_dir / "anuga_runs"]:
+                        if r_sub.is_dir():
+                            for r in r_sub.iterdir():
+                                if r.is_dir() and not r.name.startswith(".") and (r / "run.json").is_file():
+                                    try:
+                                        rj = json.loads((r / "run.json").read_text(encoding="utf-8"))
+                                        if rj.get("status") == "completed":
+                                            num_runs += 1
+                                    except Exception:
+                                        pass
                     candidates.append((num_runs, p_dir))
             except Exception:
                 continue

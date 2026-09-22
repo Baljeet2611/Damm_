@@ -27,6 +27,7 @@ import type {
   ModelComparisonCapabilitiesResponse,
   ModelComparisonRunRequest,
   ModelComparisonRunResponse,
+  SPHvsANUGAComparisonResponse,
   ProjectDelft3DPackageResponse,
   ProjectSPHPackageResponse,
   ExposureCapabilitiesResponse,
@@ -34,6 +35,8 @@ import type {
   ExposureRunSummary,
   ExposureRunDetailResponse,
   SystemHealthSummaryResponse,
+  DecisionSupportResponse,
+  DemoReadinessResponse,
 } from '../types/damProjects'
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'
@@ -549,6 +552,21 @@ export async function loadHidkalDemoProject(): Promise<DamProjectDetailResponse>
   return res.json()
 }
 
+export async function loadRiverBlockageDemoProject(): Promise<DamProjectDetailResponse> {
+  const res = await fetch(`${API_BASE}/api/dam-projects/load-river-blockage-demo`, {
+    method: 'POST',
+  })
+  if (!res.ok) {
+    const errBody = await res.json().catch(() => null)
+    if (errBody && errBody.detail) {
+      if (typeof errBody.detail === 'string') throw new Error(errBody.detail)
+      if (errBody.detail.message) throw new Error(errBody.detail.message)
+    }
+    throw new Error(`Loading River Blockage demo project failed: HTTP ${res.status}`)
+  }
+  return res.json()
+}
+
 export async function cancelDamProjectAnugaRun(
   projectId: string,
   runId: string,
@@ -821,6 +839,41 @@ export function getModelComparisonTileUrl(
   return `${API_BASE}/api/dam-projects/${encodeURIComponent(projectId)}/model-comparison/runs/${encodeURIComponent(comparisonId)}/tiles/${encodeURIComponent(layer)}/{z}/{x}/{y}.png`
 }
 
+// Phase 28: SPH vs ANUGA Specialized Comparison API Functions
+
+export async function fetchSPHvsANUGAComparison(
+  projectId: string,
+  sphRunId?: string,
+  anugaRunId?: string,
+): Promise<SPHvsANUGAComparisonResponse> {
+  const params = new URLSearchParams()
+  if (sphRunId) params.set('sph_run_id', sphRunId)
+  if (anugaRunId) params.set('anuga_run_id', anugaRunId)
+  const qs = params.toString() ? `?${params.toString()}` : ''
+  const res = await fetch(`${API_BASE}/api/dam-projects/${encodeURIComponent(projectId)}/model-comparison${qs}`)
+  if (!res.ok) {
+    const errBody = await res.json().catch(() => null)
+    if (errBody && errBody.detail) {
+      if (typeof errBody.detail === 'string') throw new Error(errBody.detail)
+      if (errBody.detail.message) throw new Error(errBody.detail.message)
+    }
+    throw new Error(`Failed to fetch SPH vs ANUGA comparison: HTTP ${res.status}`)
+  }
+  return res.json()
+}
+
+export function getSPHvsANUGAExportUrl(
+  projectId: string,
+  format: 'json' | 'csv' = 'json',
+  sphRunId?: string,
+  anugaRunId?: string,
+): string {
+  const params = new URLSearchParams({ format })
+  if (sphRunId) params.set('sph_run_id', sphRunId)
+  if (anugaRunId) params.set('anuga_run_id', anugaRunId)
+  return `${API_BASE}/api/dam-projects/${encodeURIComponent(projectId)}/model-comparison/export?${params.toString()}`
+}
+
 // Phase 25: Project Delft3D & SPH API Functions
 
 export async function buildDamProjectDelft3DPackage(projectId: string): Promise<ProjectDelft3DPackageResponse> {
@@ -899,6 +952,91 @@ export async function runDamProjectSPHBenchmark(projectId: string): Promise<any>
   return res.json()
 }
 
+export async function executeDamProjectSPHRun(projectId: string, options?: any): Promise<any> {
+  const res = await fetch(`${API_BASE}/api/dam-projects/${encodeURIComponent(projectId)}/sph/run`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(options || {}),
+  })
+  if (!res.ok) {
+    const errBody = await res.json().catch(() => null)
+    if (errBody && errBody.detail) throw new Error(typeof errBody.detail === 'string' ? errBody.detail : JSON.stringify(errBody.detail))
+    throw new Error(`Failed to execute project-based SPH simulation: HTTP ${res.status}`)
+  }
+  return res.json()
+}
+
+// Phase 26: SPH Flood Animation Pipeline
+
+export interface SPHAnimationFrameStats {
+  time_s: number
+  wet_particle_count: number
+  downstream_particle_count: number
+  max_depth_m: number
+  max_velocity_ms: number
+}
+
+export interface SPHAnimationFrame {
+  type: 'FeatureCollection'
+  frame_index: number
+  time_s: number
+  stats?: SPHAnimationFrameStats
+  features: Array<{
+    type: 'Feature'
+    geometry: { type: 'Point'; coordinates: [number, number] }
+    properties: { d: number; v: number }
+  }>
+}
+
+export interface SPHAnimationFrameMeta {
+  index: number
+  time_s: number
+  stats?: SPHAnimationFrameStats
+}
+
+export interface SPHAnimationManifest {
+  run_id: string
+  total_frames: number
+  duration_s: number
+  particle_count?: number
+  particle_count_per_frame: number
+  arrival_threshold_m: number
+  breach_start_time_s?: number
+  first_downstream_arrival_time_s?: number | null
+  frames: SPHAnimationFrameMeta[]
+}
+
+export async function fetchSPHAnimationManifest(
+  projectId: string,
+  runId: string,
+): Promise<SPHAnimationManifest> {
+  const res = await fetch(
+    `${API_BASE}/api/dam-projects/${encodeURIComponent(projectId)}/sph/runs/${encodeURIComponent(runId)}/animation`,
+  )
+  if (!res.ok) {
+    const errBody = await res.json().catch(() => null)
+    if (errBody?.detail) throw new Error(typeof errBody.detail === 'string' ? errBody.detail : JSON.stringify(errBody.detail))
+    throw new Error(`Failed to fetch SPH animation manifest: HTTP ${res.status}`)
+  }
+  return res.json()
+}
+
+export async function fetchSPHAnimationFrame(
+  projectId: string,
+  runId: string,
+  frameIndex: number,
+): Promise<SPHAnimationFrame> {
+  const res = await fetch(
+    `${API_BASE}/api/dam-projects/${encodeURIComponent(projectId)}/sph/runs/${encodeURIComponent(runId)}/animation/frames/${frameIndex}`,
+  )
+  if (!res.ok) {
+    throw new Error(`Failed to fetch SPH animation frame ${frameIndex}: HTTP ${res.status}`)
+  }
+  return res.json()
+}
+
+
+
 // Phase 22: Exposure & Vulnerability API Functions
 
 export async function getExposureCapabilities(projectId: string): Promise<ExposureCapabilitiesResponse> {
@@ -965,3 +1103,69 @@ export async function getSystemHealthSummary(): Promise<SystemHealthSummaryRespo
   if (!res.ok) throw new Error(`Failed to get system health summary: HTTP ${res.status}`)
   return res.json()
 }
+
+// Phase 29: Dam-Break Decision-Support API functions
+
+export async function fetchDecisionSupportSummary(
+  projectId: string,
+  runId?: string,
+): Promise<DecisionSupportResponse> {
+  const q = runId ? `?run_id=${encodeURIComponent(runId)}` : ''
+  const res = await fetch(`${API_BASE}/api/dam-projects/${encodeURIComponent(projectId)}/decision-support${q}`)
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}))
+    throw new Error(err.detail || `Failed to fetch decision support summary: HTTP ${res.status}`)
+  }
+  return res.json()
+}
+
+export function getDecisionSupportExportUrl(
+  projectId: string,
+  format: 'json' | 'csv' = 'json',
+  runId?: string,
+): string {
+  const qRun = runId ? `&run_id=${encodeURIComponent(runId)}` : ''
+  return `${API_BASE}/api/dam-projects/${encodeURIComponent(projectId)}/decision-support/export?format=${format}${qRun}`
+}
+
+export async function fetchDemoReadiness(projectId: string): Promise<DemoReadinessResponse> {
+  const res = await fetch(`${API_BASE}/api/dam-projects/${encodeURIComponent(projectId)}/demo-readiness`)
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}))
+    throw new Error(err.detail || `Failed to fetch demo readiness: HTTP ${res.status}`)
+  }
+  return res.json()
+}
+
+// Phase C1 & B3: Unified Canonical Scenario, Result & Workflow Summary API
+
+export async function fetchWorkflowSummary(projectId: string): Promise<any> {
+  const res = await fetch(`${API_BASE}/api/dam-projects/${encodeURIComponent(projectId)}/workflow-summary`)
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}))
+    throw new Error(err.detail || `Failed to fetch workflow summary: HTTP ${res.status}`)
+  }
+  return res.json()
+}
+
+export async function listCanonicalResults(projectId: string): Promise<any[]> {
+  const res = await fetch(`${API_BASE}/api/dam-projects/${encodeURIComponent(projectId)}/canonical-results`)
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}))
+    throw new Error(err.detail || `Failed to list canonical results: HTTP ${res.status}`)
+  }
+  return res.json()
+}
+
+export async function listCanonicalScenarios(projectId?: string): Promise<any[]> {
+  const url = projectId
+    ? `${API_BASE}/api/dam-projects/${encodeURIComponent(projectId)}/canonical-scenarios`
+    : `${API_BASE}/api/canonical-scenarios`
+  const res = await fetch(url)
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}))
+    throw new Error(err.detail || `Failed to list canonical scenarios: HTTP ${res.status}`)
+  }
+  return res.json()
+}
+

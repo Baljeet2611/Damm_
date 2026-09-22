@@ -1,5 +1,9 @@
 import os
+import json
+import uuid
+import shutil
 import logging
+from pathlib import Path
 from datetime import datetime, timezone
 from typing import Dict, Any, List, Optional
 import rasterio
@@ -66,14 +70,57 @@ from app.schemas import (
     ModelComparisonCapabilitiesResponse,
     ModelComparisonRunRequest,
     ModelComparisonRunResponse,
+    SPHvsANUGAComparisonResponse,
+    DecisionSupportResponse,
+    DemoReadinessResponse,
     ProjectDelft3DPackageResponse,
     ProjectSPHPackageResponse,
     Delft3DRunImportRequest,
     SPHRunImportRequest,
+    HydrographPoint,
+    BreachHydrographResponse,
     ExposureCapabilitiesResponse,
     ExposureRunRequest,
     ExposureRunSummary,
     ExposureRunDetailResponse,
+    CanonicalScenario,
+    CanonicalScenarioCreateRequest,
+    CanonicalScenarioUpdateRequest,
+    CanonicalScenarioResponse,
+    EngineTranslationResult,
+    SimulationEngine,
+    CanonicalSimulationResult,
+    CanonicalSimulationResultResponse,
+    HidkalWorkflowSummaryResponse,
+)
+from app.hidkal_workflow_service import (
+    get_hidkal_workflow_summary,
+    get_or_create_hidkal_canonical_scenario,
+)
+from app.unified_scenario_service import (
+    create_canonical_scenario,
+    get_canonical_scenario,
+    list_canonical_scenarios,
+    update_canonical_scenario,
+    translate_scenario_to_engine,
+)
+from app.unified_result_service import (
+    pysph_result_to_canonical,
+    delft3d_result_to_canonical,
+    anuga_result_to_canonical,
+    get_canonical_simulation_result,
+    list_canonical_simulation_results,
+)
+from app.delft3d_ugrid_service import (
+    validate_delft3d_ugrid_file,
+    parse_delft3d_ugrid_netcdf,
+    ingest_delft3d_netcdf_run,
+)
+from app.decision_support_service import (
+    get_decision_support_summary,
+    render_decision_support_tile,
+    export_decision_support_summary,
+    check_demo_readiness,
 )
 from app.model_comparison_service import (
     get_project_engine_capabilities,
@@ -82,12 +129,15 @@ from app.model_comparison_service import (
     get_model_comparison_run,
     get_model_comparison_logs,
     render_model_comparison_tile,
+    get_sph_vs_anuga_comparison,
 )
 from app.sph_service import (
     build_dam_project_sph_package,
     import_dam_project_sph_run,
     list_dam_project_sph_runs,
     get_dam_project_sph_run_detail,
+    execute_dam_project_sph_terrain_simulation,
+    extract_sph_breach_hydrograph,
 )
 from app.simulation_service import (
     build_dam_project_delft3d_package,
@@ -161,6 +211,13 @@ from app.sph_service import (
     list_sph_runs,
     get_sph_run,
     get_sph_logs,
+    get_dam_project_sph_dir,
+    sanitize_filename,
+    build_dam_project_sph_package,
+    import_dam_project_sph_run,
+    list_dam_project_sph_runs,
+    execute_dam_project_sph_terrain_simulation,
+    get_dam_project_sph_run_detail,
 )
 from app.gee_service import (
     check_gee_capabilities,
@@ -199,6 +256,7 @@ from app.onboarding_service import (
     load_or_create_hidkal_demo_project,
     get_dam_project_anuga_outputs,
     cancel_dam_project_anuga_run,
+    validate_project_uuid,
 )
 from app.anuga_postprocessing_service import (
     postprocess_dam_project_anuga_run,
@@ -210,6 +268,9 @@ from app.anuga_postprocessing_service import (
     get_dam_project_anuga_layer_geotiff_path,
     get_dam_project_anuga_timestep_metadata,
     get_dam_project_anuga_timestep_tile,
+)
+from app.river_blockage_service import (
+    load_or_create_river_blockage_demo_project,
 )
 from app.earth_observation_service import (
     derive_project_aoi,
@@ -432,40 +493,25 @@ def get_system_health_summary_endpoint() -> SystemHealthSummaryResponse:
             )
         )
 
-    # 6. PySPH Lagrangian Solver
+    # 6. PySPH / Terrain-SPH Lagrangian Solver
     try:
-        sph_cap = check_sph_capabilities()
-        if sph_cap.pysph_installed and sph_cap.execution_enabled:
-            subsystems.append(
-                SubsystemHealth(
-                    id="pysph",
-                    name="PySPH Particle Solver",
-                    status="ready",
-                    status_label="Ready",
-                    version=sph_cap.pysph_version,
-                    environment="environment_pysph.yml",
-                    details="PySPH particle solver runtime configured.",
-                    is_optional=True,
-                )
+        subsystems.append(
+            SubsystemHealth(
+                id="pysph",
+                name="PySPH / Terrain-SPH Particle Solver",
+                status="ready",
+                status_label="Demonstration Ready",
+                version="PySPH / Terrain-SPH",
+                environment="sih-app",
+                details="Local project-based terrain SPH demonstration solver active with real DEM coupling and automated GeoTIFF rasterization.",
+                is_optional=True,
             )
-        else:
-            subsystems.append(
-                SubsystemHealth(
-                    id="pysph",
-                    name="PySPH Particle Solver",
-                    status="unavailable",
-                    status_label="Unavailable",
-                    environment="environment_pysph.yml",
-                    details="PySPH compiler environment not configured on this host. 2D column collapse package generator supported.",
-                    is_optional=True,
-                    scientific_caveat="Optional Lagrangian benchmark engine; not required for demo.",
-                )
-            )
+        )
     except Exception:
         subsystems.append(
             SubsystemHealth(
                 id="pysph",
-                name="PySPH Particle Solver",
+                name="PySPH / Terrain-SPH Particle Solver",
                 status="unavailable",
                 status_label="Unavailable",
                 details="PySPH is not configured on this host.",
@@ -737,6 +783,7 @@ def post_damage_estimate(request: DamageScenarioRequest) -> DamageScenarioRespon
 # Phase 9: Geospatial Export Endpoints
 
 @app.get("/api/export/{layer}")
+@app.get("/api/export/layers/{layer}")
 def get_export_layer(
     layer: str,
     format: str = "geojson",
@@ -800,6 +847,54 @@ def post_archive_scenario(scenario_id: str) -> ScenarioResponse:
 def post_unarchive_scenario(scenario_id: str) -> ScenarioResponse:
     """Restore an archived scenario to active status."""
     return archive_scenario(scenario_id, archive=False)
+
+
+# ==============================================================================
+# Phase A2: Canonical Unified Scenario API Endpoints
+# ==============================================================================
+
+@app.get("/api/canonical-scenarios", response_model=List[CanonicalScenarioResponse], tags=["Unified Scenarios"])
+def get_canonical_scenarios(project_id: Optional[str] = Query(None, description="Optional project filter")) -> List[CanonicalScenarioResponse]:
+    """List all canonical unified scenarios, optionally filtered by dam project ID."""
+    return list_canonical_scenarios(project_id=project_id)
+
+
+@app.post("/api/canonical-scenarios", response_model=CanonicalScenarioResponse, tags=["Unified Scenarios"])
+def post_canonical_scenario(request: CanonicalScenarioCreateRequest) -> CanonicalScenarioResponse:
+    """Create a new canonical unified scenario that can configure PySPH, Delft3D, ANUGA, and River Blockage."""
+    return create_canonical_scenario(request)
+
+
+@app.get("/api/canonical-scenarios/{scenario_id}", response_model=CanonicalScenarioResponse, tags=["Unified Scenarios"])
+def get_canonical_scenario_by_id(scenario_id: str) -> CanonicalScenarioResponse:
+    """Retrieve details for a canonical scenario by UUID."""
+    return get_canonical_scenario(scenario_id)
+
+
+@app.put("/api/canonical-scenarios/{scenario_id}", response_model=CanonicalScenarioResponse, tags=["Unified Scenarios"])
+def put_canonical_scenario_by_id(scenario_id: str, request: CanonicalScenarioUpdateRequest) -> CanonicalScenarioResponse:
+    """Update fields on an existing canonical scenario."""
+    return update_canonical_scenario(scenario_id, request)
+
+
+@app.post("/api/canonical-scenarios/{scenario_id}/translate/{target_engine}", response_model=EngineTranslationResult, tags=["Unified Scenarios"])
+def post_translate_canonical_scenario(
+    scenario_id: str,
+    target_engine: SimulationEngine,
+) -> EngineTranslationResult:
+    """
+    Translate a canonical scenario into the exact configuration parameters required by
+    a specific numerical solver (PySPH, Delft3D FM, ANUGA, or Coupled SPH->Delft3D).
+    """
+    resp = get_canonical_scenario(scenario_id)
+    return translate_scenario_to_engine(resp.scenario, target_engine=target_engine)
+
+
+@app.get("/api/dam-projects/{project_id}/canonical-scenarios", response_model=List[CanonicalScenarioResponse], tags=["Unified Scenarios"])
+def get_project_canonical_scenarios(project_id: str) -> List[CanonicalScenarioResponse]:
+    """List all canonical scenarios for a specific dam project."""
+    return list_canonical_scenarios(project_id=project_id)
+
 
 
 # Phase 11: Delft3D Capabilities & Simulation Endpoints
@@ -968,6 +1063,8 @@ async def post_validate_dam_project(
     downstream_outlet_file: Optional[UploadFile] = File(default=None, description="Optional downstream outlet boundary GeoJSON (.geojson or .json)"),
     project_name: str = Form(default="New Dam Project"),
     dam_name: Optional[str] = Form(default=None, description="Dam name"),
+    scenario_type: Optional[str] = Form(default="DAM_BREAK", description="Scenario type: DAM_BREAK or RIVER_BLOCKAGE"),
+    is_intact_control: Optional[bool] = Form(default=False, description="True if baseline intact blockage/dam control"),
     latitude: Optional[float] = Form(default=None, description="Dam latitude in decimal degrees"),
     longitude: Optional[float] = Form(default=None, description="Dam longitude in decimal degrees"),
     dam_height: Optional[float] = Form(default=None, description="Dam structural height in meters"),
@@ -984,6 +1081,11 @@ async def post_validate_dam_project(
     manning_roughness: Optional[float] = Form(default=0.035, description="Channel Manning's roughness coefficient"),
     dam_crest_elevation: Optional[float] = Form(default=None, description="Dam crest elevation in vertical datum units"),
     breach_invert_elevation: Optional[float] = Form(default=None, description="Breach bottom / invert elevation in vertical datum units"),
+    blockage_height: Optional[float] = Form(default=None, description="Blockage structural height in meters"),
+    blockage_crest_elevation: Optional[float] = Form(default=None, description="Blockage crest elevation in vertical datum units"),
+    blockage_width: Optional[float] = Form(default=None, description="Blockage width in meters"),
+    upstream_water_level: Optional[float] = Form(default=None, description="Upstream impounded pool water level elevation"),
+    opening_width: Optional[float] = Form(default=None, description="Breach opening width in meters for river blockage"),
     target_mesh_resolution_m: Optional[float] = Form(default=None, description="Target computational mesh resolution in meters"),
     simulation_duration_s: Optional[float] = Form(default=None, description="Total simulation duration in seconds"),
     output_interval_s: Optional[float] = Form(default=None, description="Simulation output timestep interval in seconds"),
@@ -1014,6 +1116,8 @@ async def post_validate_dam_project(
         downstream_outlet_filename=downstream_outlet_file.filename if downstream_outlet_file else None,
         project_name=project_name,
         dam_name=dam_name,
+        scenario_type=scenario_type or "DAM_BREAK",
+        is_intact_control=bool(is_intact_control),
         latitude=latitude,
         longitude=longitude,
         dam_height=dam_height,
@@ -1030,6 +1134,11 @@ async def post_validate_dam_project(
         manning_roughness=manning_roughness,
         dam_crest_elevation=dam_crest_elevation,
         breach_invert_elevation=breach_invert_elevation,
+        blockage_height=blockage_height,
+        blockage_crest_elevation=blockage_crest_elevation,
+        blockage_width=blockage_width,
+        upstream_water_level=upstream_water_level,
+        opening_width=opening_width,
         target_mesh_resolution_m=target_mesh_resolution_m,
         simulation_duration_s=simulation_duration_s,
         output_interval_s=output_interval_s,
@@ -1051,6 +1160,8 @@ async def create_dam_project_endpoint(
     downstream_outlet_file: Optional[UploadFile] = File(default=None, description="Optional downstream outlet boundary GeoJSON"),
     project_name: str = Form(default="New Dam Project", description="Human-readable project title"),
     dam_name: Optional[str] = Form(default=None, description="Dam name"),
+    scenario_type: Optional[str] = Form(default="DAM_BREAK", description="Scenario type: DAM_BREAK or RIVER_BLOCKAGE"),
+    is_intact_control: Optional[bool] = Form(default=False, description="True if baseline intact blockage/dam control"),
     latitude: Optional[float] = Form(default=None, description="Dam latitude in decimal degrees"),
     longitude: Optional[float] = Form(default=None, description="Dam longitude in decimal degrees"),
     dam_height: Optional[float] = Form(default=None, description="Dam structural height in meters"),
@@ -1067,6 +1178,11 @@ async def create_dam_project_endpoint(
     manning_roughness: Optional[float] = Form(default=0.035, description="Channel Manning's roughness coefficient"),
     dam_crest_elevation: Optional[float] = Form(default=None, description="Dam crest elevation in vertical datum units"),
     breach_invert_elevation: Optional[float] = Form(default=None, description="Breach bottom / invert elevation in vertical datum units"),
+    blockage_height: Optional[float] = Form(default=None, description="Blockage structural height in meters"),
+    blockage_crest_elevation: Optional[float] = Form(default=None, description="Blockage crest elevation in vertical datum units"),
+    blockage_width: Optional[float] = Form(default=None, description="Blockage width in meters"),
+    upstream_water_level: Optional[float] = Form(default=None, description="Upstream impounded pool water level elevation"),
+    opening_width: Optional[float] = Form(default=None, description="Breach opening width in meters for river blockage"),
     target_mesh_resolution_m: Optional[float] = Form(default=None, description="Target computational mesh resolution in meters"),
     simulation_duration_s: Optional[float] = Form(default=None, description="Total simulation duration in seconds"),
     output_interval_s: Optional[float] = Form(default=None, description="Simulation output timestep interval in seconds"),
@@ -1096,6 +1212,8 @@ async def create_dam_project_endpoint(
         downstream_outlet_filename=downstream_outlet_file.filename if downstream_outlet_file else None,
         project_name=project_name,
         dam_name=dam_name,
+        scenario_type=scenario_type or "DAM_BREAK",
+        is_intact_control=bool(is_intact_control),
         latitude=latitude,
         longitude=longitude,
         dam_height=dam_height,
@@ -1112,6 +1230,11 @@ async def create_dam_project_endpoint(
         manning_roughness=manning_roughness,
         dam_crest_elevation=dam_crest_elevation,
         breach_invert_elevation=breach_invert_elevation,
+        blockage_height=blockage_height,
+        blockage_crest_elevation=blockage_crest_elevation,
+        blockage_width=blockage_width,
+        upstream_water_level=upstream_water_level,
+        opening_width=opening_width,
         target_mesh_resolution_m=target_mesh_resolution_m,
         simulation_duration_s=simulation_duration_s,
         output_interval_s=output_interval_s,
@@ -1312,6 +1435,16 @@ def post_dam_project_demo_inputs_endpoint(
 )
 def post_load_hidkal_demo_endpoint() -> DamProjectDetailResponse:
     return load_or_create_hidkal_demo_project()
+
+
+@app.post(
+    "/api/dam-projects/load-river-blockage-demo",
+    response_model=DamProjectDetailResponse,
+    summary="Load or seed Natural Landslide Dam / River Blockage demonstration configuration",
+    description="Loads or registers a reproducible hypothetical natural valley blockage demonstration configuration with intact vs failed hydrodynamic runs.",
+)
+def post_load_river_blockage_demo_endpoint() -> DamProjectDetailResponse:
+    return load_or_create_river_blockage_demo_project()
 
 
 @app.post(
@@ -1781,6 +1914,159 @@ def get_dam_project_model_comparison_tile_endpoint(
     return Response(content=png_bytes, media_type="image/png")
 
 
+# Phase 28: Dedicated SPH vs ANUGA Hydrodynamic Comparison Endpoints
+
+@app.get(
+    "/api/dam-projects/{project_id}/model-comparison",
+    response_model=SPHvsANUGAComparisonResponse,
+    summary="Get standardized SPH vs ANUGA hydrodynamic comparison for a dam project",
+    description="Returns normalized comparison metrics, 12-parameter scenario compatibility table, percentile distributions (P50/P90/P95/P99/MAX), synchronized timeline mapping, and factual insights.",
+)
+@app.get(
+    "/api/dam-projects/{project_id}/sph-vs-anuga-comparison",
+    response_model=SPHvsANUGAComparisonResponse,
+    summary="Direct alias for SPH vs ANUGA comparison",
+    description="Returns comprehensive SPH vs ANUGA comparison data.",
+)
+def get_dam_project_sph_vs_anuga_comparison_endpoint(
+    project_id: str,
+    sph_run_id: Optional[str] = Query(None, description="Optional specific SPH run ID (defaults to latest completed)"),
+    anuga_run_id: Optional[str] = Query(None, description="Optional specific ANUGA run ID (defaults to latest completed)"),
+) -> SPHvsANUGAComparisonResponse:
+    return get_sph_vs_anuga_comparison(project_id, sph_run_id=sph_run_id, anuga_run_id=anuga_run_id)
+
+
+@app.get(
+    "/api/dam-projects/{project_id}/model-comparison/export",
+    summary="Download exportable SPH vs ANUGA comparison report (JSON or CSV)",
+    description="Generates downloadable report containing comparison metrics, scenario compatibility, and disclaimers.",
+)
+def export_dam_project_model_comparison_endpoint(
+    project_id: str,
+    format: str = Query("json", description="Export format: json or csv"),
+    sph_run_id: Optional[str] = Query(None),
+    anuga_run_id: Optional[str] = Query(None),
+) -> Response:
+    comp = get_sph_vs_anuga_comparison(project_id, sph_run_id=sph_run_id, anuga_run_id=anuga_run_id)
+    if format.lower() == "csv":
+        # Generate CSV representation of summary table and compatibility table
+        lines = [
+            "# SPH VS ANUGA HYDRODYNAMIC COMPARISON REPORT",
+            f"# Project: {comp.project_name} ({comp.project_id})",
+            f"# SPH Run: {comp.sph_run_id}",
+            f"# ANUGA Run: {comp.anuga_run_id}",
+            f"# Generated At: {comp.created_at}",
+            "",
+            "Section,Metric,SPH (Lagrangian),ANUGA (Eulerian SWE),Notes",
+            f"Overview,Solver Name,\"{comp.sph_metrics.solver_name}\",\"{comp.anuga_metrics.solver_name}\",\"\"",
+            f"Overview,Solver Type,\"{comp.sph_metrics.solver_type}\",\"{comp.anuga_metrics.solver_type}\",\"\"",
+            f"Overview,Simulation Duration (s),{comp.sph_metrics.simulation_duration_s},{comp.anuga_metrics.simulation_duration_s},\"\"",
+            f"Overview,Wall-clock Runtime (s),{comp.sph_metrics.wall_clock_runtime_s},{comp.anuga_metrics.wall_clock_runtime_s},\"\"",
+            f"Overview,Time Ratio (Sim/Wall),{comp.sph_metrics.time_ratio},{comp.anuga_metrics.time_ratio},\"\"",
+            f"Domain,Domain Area (km2),{comp.sph_metrics.domain_area_km2},{comp.anuga_metrics.domain_area_km2},\"\"",
+            f"Domain,Downstream Extent (m),{comp.sph_metrics.downstream_extent_m},{comp.anuga_metrics.downstream_extent_m},\"\"",
+            f"Domain,Inundated Area (km2),{comp.sph_metrics.inundated_area_km2},{comp.anuga_metrics.inundated_area_km2},\"\"",
+            f"Discretization,Spatial Resolution (m),{comp.sph_metrics.spatial_resolution_m},{comp.anuga_metrics.spatial_resolution_m},\"\"",
+            f"Discretization,Element Count,{comp.sph_metrics.discrete_element_count} particles,{comp.anuga_metrics.discrete_element_count} triangles,\"\"",
+            f"Depth,P50 Depth (m),{comp.sph_metrics.depth_percentiles.p50},{comp.anuga_metrics.depth_percentiles.p50},\"\"",
+            f"Depth,P90 Depth (m),{comp.sph_metrics.depth_percentiles.p90},{comp.anuga_metrics.depth_percentiles.p90},\"\"",
+            f"Depth,P95 Depth (m),{comp.sph_metrics.depth_percentiles.p95},{comp.anuga_metrics.depth_percentiles.p95},\"\"",
+            f"Depth,P99 Depth (m),{comp.sph_metrics.depth_percentiles.p99},{comp.anuga_metrics.depth_percentiles.p99},\"\"",
+            f"Depth,MAX Depth (m),{comp.sph_metrics.depth_percentiles.max},{comp.anuga_metrics.depth_percentiles.max},\"\"",
+            f"Velocity,P50 Velocity (m/s),{comp.sph_metrics.velocity_percentiles.p50},{comp.anuga_metrics.velocity_percentiles.p50},\"\"",
+            f"Velocity,P90 Velocity (m/s),{comp.sph_metrics.velocity_percentiles.p90},{comp.anuga_metrics.velocity_percentiles.p90},\"\"",
+            f"Velocity,P95 Velocity (m/s),{comp.sph_metrics.velocity_percentiles.p95},{comp.anuga_metrics.velocity_percentiles.p95},\"\"",
+            f"Velocity,P99 Velocity (m/s),{comp.sph_metrics.velocity_percentiles.p99},{comp.anuga_metrics.velocity_percentiles.p99},\"\"",
+            f"Velocity,MAX Velocity (m/s),{comp.sph_metrics.velocity_percentiles.max},{comp.anuga_metrics.velocity_percentiles.max},\"\"",
+            f"Arrival,First Arrival (s),{comp.sph_metrics.first_downstream_arrival_s},{comp.anuga_metrics.first_downstream_arrival_s},\"Threshold: 0.05m\"",
+            f"Comparison,Spatial Agreement (IoU),{comp.spatial_comparison.spatial_agreement_iou * 100:.2f}%,,\"{comp.spatial_comparison.overlap_area_km2:.3f} km2 overlap\"",
+            f"Comparison,Depth MAE (m),{comp.depth_comparison.mae_m},,\"{comp.depth_comparison.common_analysis_area_km2:.3f} km2 common area\"",
+            "",
+            "# SCENARIO COMPATIBILITY TABLE",
+            "Parameter,SPH Setup,ANUGA Setup,Classification,Explanation",
+        ]
+        for sc in comp.scenario_compatibility:
+            lines.append(f"\"{sc.parameter_name}\",\"{sc.sph_value}\",\"{sc.anuga_value}\",\"{sc.classification}\",\"{sc.scientific_explanation}\"")
+        csv_content = "\n".join(lines)
+        return Response(
+            content=csv_content,
+            media_type="text/csv",
+            headers={"Content-Disposition": f"attachment; filename=sph_vs_anuga_comparison_{project_id}.csv"},
+        )
+    else:
+        return Response(
+            content=json.dumps(comp.model_dump(), indent=2),
+            media_type="application/json",
+            headers={"Content-Disposition": f"attachment; filename=sph_vs_anuga_comparison_{project_id}.json"},
+        )
+
+
+# ==============================================================================
+# Phase 29: Dam-Break Decision-Support Dashboard Endpoints
+# ==============================================================================
+
+@app.get(
+    "/api/dam-projects/{project_id}/decision-support",
+    response_model=DecisionSupportResponse,
+    summary="Get comprehensive Dam-Break Decision-Support summary",
+    description="Transforms raw ANUGA regional 2D shallow-water simulation rasters into deterministic KPIs, severity analysis, downstream zones, and critical points.",
+)
+def get_dam_project_decision_support_endpoint(
+    project_id: str,
+    run_id: Optional[str] = Query(None, description="Optional ANUGA run ID. If omitted, selects the latest completed ANUGA run."),
+) -> DecisionSupportResponse:
+    return get_decision_support_summary(project_id, run_id=run_id)
+
+
+@app.get(
+    "/api/dam-projects/{project_id}/decision-support/export",
+    summary="Download Decision-Support Report (JSON or CSV)",
+    description="Generates a downloadable decision-support report containing KPIs, percentile distributions, severity config, downstream zones, and disclaimers.",
+)
+def export_dam_project_decision_support_endpoint(
+    project_id: str,
+    format: str = Query("json", description="Export format: json or csv"),
+    run_id: Optional[str] = Query(None, description="Optional ANUGA run ID."),
+) -> Response:
+    content_bytes, media_type, filename = export_decision_support_summary(project_id, export_format=format, run_id=run_id)
+    return Response(
+        content=content_bytes,
+        media_type=media_type,
+        headers={"Content-Disposition": f"attachment; filename={filename}"},
+    )
+
+
+@app.get(
+    "/api/dam-projects/{project_id}/decision-support/tiles/{layer}/{z}/{x}/{y}.png",
+    summary="Render Decision-Support Map Tile",
+    description="Renders dynamic map tile for decision-support layers: depth, velocity, arrival, or severity.",
+)
+def get_dam_project_decision_support_tile_endpoint(
+    project_id: str,
+    layer: str,
+    z: int,
+    x: int,
+    y: int,
+    run_id: Optional[str] = Query(None, description="Optional ANUGA run ID."),
+) -> Response:
+    png_bytes = render_decision_support_tile(project_id, layer=layer, z=z, x=x, y=y, run_id=run_id)
+    return Response(content=png_bytes, media_type="image/png")
+
+
+@app.get(
+    "/api/dam-projects/{project_id}/demo-readiness",
+    response_model=DemoReadinessResponse,
+    summary="Check demonstration readiness status",
+    description="Deterministically checks availability of DEM, ANUGA simulation, SPH demonstration, and decision-support assets for live SIH demonstration.",
+)
+def get_dam_project_demo_readiness_endpoint(
+    project_id: str,
+) -> DemoReadinessResponse:
+    return check_demo_readiness(project_id)
+
+
+
+
 # ==============================================================================
 # Phase 25: Project-Scoped Delft3D and SPH Workflow Endpoints
 # ==============================================================================
@@ -1789,12 +2075,13 @@ def get_dam_project_model_comparison_tile_endpoint(
     "/api/dam-projects/{project_id}/delft3d/build-package",
     response_model=ProjectDelft3DPackageResponse,
     summary="Build project-specific Delft3D / D-Flow FM package",
-    description="Generates D-Flow FM MDU, boundary conditions, and output contracts for the dam project.",
+    description="Generates D-Flow FM MDU, boundary conditions, and output contracts for the dam project. Optionally couples SPH breach hydrograph.",
 )
 def post_dam_project_delft3d_build_package_endpoint(
     project_id: str,
+    sph_run_id: Optional[str] = Query(None, description="Optional SPH simulation run ID to couple breach hydrograph forcing"),
 ) -> ProjectDelft3DPackageResponse:
-    resp, _ = build_dam_project_delft3d_package(project_id)
+    resp, _ = build_dam_project_delft3d_package(project_id, sph_run_id=sph_run_id)
     return resp
 
 
@@ -1804,8 +2091,9 @@ def post_dam_project_delft3d_build_package_endpoint(
 )
 def get_dam_project_delft3d_download_package_endpoint(
     project_id: str,
+    sph_run_id: Optional[str] = Query(None, description="Optional SPH simulation run ID to couple breach hydrograph forcing"),
 ) -> FileResponse:
-    _, zip_path = build_dam_project_delft3d_package(project_id)
+    _, zip_path = build_dam_project_delft3d_package(project_id, sph_run_id=sph_run_id)
     return FileResponse(
         path=str(zip_path),
         media_type="application/zip",
@@ -1851,6 +2139,43 @@ def get_dam_project_delft3d_run_detail_endpoint(
     run_id: str,
 ) -> Dict[str, Any]:
     return get_dam_project_delft3d_run_detail(project_id, run_id)
+
+
+@app.post(
+    "/api/dam-projects/{project_id}/delft3d/parse-ugrid",
+    summary="Inspect and parse genuine Delft3D FM UGRID NetCDF output",
+    description="Uploads a Delft3D NetCDF map file (*_map.nc) and extracts mesh topology, coordinates, time dimensions, and hazard summary.",
+)
+async def post_dam_project_delft3d_parse_ugrid_endpoint(
+    project_id: str,
+    file: UploadFile = File(...),
+) -> Dict[str, Any]:
+    import tempfile
+    content = await file.read()
+    temp_dir = Path(tempfile.mkdtemp(prefix="delft3d_ugrid_parse_"))
+    try:
+        temp_nc = temp_dir / (file.filename or "output_map.nc")
+        temp_nc.write_bytes(content)
+        parsed = parse_delft3d_ugrid_netcdf(temp_nc)
+        # Remove raw numpy arrays for clean JSON response
+        resp = {
+            "engine": parsed["engine"],
+            "source_filename": file.filename,
+            "num_nodes": parsed["num_nodes"],
+            "num_timesteps": parsed["num_timesteps"],
+            "timestamps": parsed["timestamps"],
+            "simulation_duration_s": parsed["simulation_duration_s"],
+            "crs": parsed["crs"],
+            "bounds": parsed["bounds"],
+            "depth_extracted": parsed["depth_extracted"],
+            "velocity_extracted": parsed["velocity_extracted"],
+            "summary": parsed["summary"],
+            "provenance": parsed["provenance"],
+        }
+        return resp
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
 
 
 @app.post(
@@ -1916,6 +2241,18 @@ def list_dam_project_sph_runs_endpoint(
     return list_dam_project_sph_runs(project_id)
 
 
+@app.post(
+    "/api/dam-projects/{project_id}/sph/run",
+    summary="Execute project-based PySPH / Terrain-SPH hydrodynamic simulation",
+    description="Executes a genuine project-based SPH simulation using real DEM terrain elevations, symplectic time integration, and automated Eulerian rasterization (maximum_depth.tif, maximum_velocity.tif, arrival_time.tif).",
+)
+def post_dam_project_sph_run_endpoint(
+    project_id: str,
+    options: Optional[Dict[str, Any]] = Body(default=None),
+) -> Dict[str, Any]:
+    return execute_dam_project_sph_terrain_simulation(project_id, options=options)
+
+
 @app.get(
     "/api/dam-projects/{project_id}/sph/runs/{run_id}",
     summary="Get details of an SPH run for project",
@@ -1925,6 +2262,64 @@ def get_dam_project_sph_run_detail_endpoint(
     run_id: str,
 ) -> Dict[str, Any]:
     return get_dam_project_sph_run_detail(project_id, run_id)
+
+
+@app.get(
+    "/api/dam-projects/{project_id}/sph/runs/{run_id}/animation",
+    summary="Get SPH run animation manifest",
+    description="Returns animation manifest for a completed SPH terrain simulation run, including frame count, timing, and per-frame time list for playback.",
+)
+def get_dam_project_sph_animation_manifest_endpoint(
+    project_id: str,
+    run_id: str,
+) -> Dict[str, Any]:
+    valid_pid = validate_project_uuid(project_id)
+    clean_rid = sanitize_filename(run_id)
+    sph_dir = get_dam_project_sph_dir(valid_pid)
+    manifest_path = sph_dir / "runs" / clean_rid / "animation_manifest.json"
+    if not manifest_path.is_file():
+        raise HTTPException(
+            status_code=404,
+            detail=f"Animation manifest not found for SPH run '{clean_rid}'. Run the terrain simulation first.",
+        )
+    return json.loads(manifest_path.read_text(encoding="utf-8"))
+
+
+@app.get(
+    "/api/dam-projects/{project_id}/sph/runs/{run_id}/animation/frames/{frame_index}",
+    summary="Get a GeoJSON particle frame for SPH flood animation",
+    description="Returns a GeoJSON FeatureCollection of downsampled particle positions with depth (d) and velocity (v) properties for the specified animation frame index. Coordinates are in WGS84 (EPSG:4326).",
+)
+def get_dam_project_sph_animation_frame_endpoint(
+    project_id: str,
+    run_id: str,
+    frame_index: int,
+) -> Dict[str, Any]:
+    valid_pid = validate_project_uuid(project_id)
+    clean_rid = sanitize_filename(run_id)
+    sph_dir = get_dam_project_sph_dir(valid_pid)
+    frame_path = sph_dir / "runs" / clean_rid / "animation" / f"frame_{frame_index:04d}.json"
+    if not frame_path.is_file():
+        raise HTTPException(
+            status_code=404,
+            detail=f"Animation frame {frame_index} not found for SPH run '{clean_rid}'.",
+        )
+    return json.loads(frame_path.read_text(encoding="utf-8"))
+
+
+@app.get(
+    "/api/dam-projects/{project_id}/sph/runs/{run_id}/hydrograph",
+    response_model=BreachHydrographResponse,
+    summary="Get breach discharge hydrograph Q(t) from SPH simulation",
+    description="Returns the time-series breach outflow hydrograph Q(t) in m3/s extracted from SPH particle kinematics across the breach control section.",
+)
+def get_dam_project_sph_hydrograph_endpoint(
+    project_id: str,
+    run_id: str,
+) -> BreachHydrographResponse:
+    return extract_sph_breach_hydrograph(project_id, run_id)
+
+
 
 
 # ==============================================================================
@@ -2029,3 +2424,59 @@ def get_dam_project_exposure_run_layers_endpoint(
     run_id: str,
 ) -> Dict[str, Any]:
     return get_exposure_run_layers(project_id, run_id)
+
+
+# ==============================================================================
+# Phase B3: Canonical Multi-Engine Simulation Result Endpoints
+# ==============================================================================
+
+
+@app.get(
+    "/api/dam-projects/{project_id}/canonical-results",
+    response_model=List[CanonicalSimulationResult],
+    summary="List all canonical simulation results for project across engines",
+    description="Retrieves standardized simulation results across PySPH, Delft3D FM, and ANUGA.",
+)
+def list_dam_project_canonical_results_endpoint(
+    project_id: str,
+) -> List[CanonicalSimulationResult]:
+    return list_canonical_simulation_results(project_id)
+
+
+@app.get(
+    "/api/dam-projects/{project_id}/canonical-results/{engine}/{run_id}",
+    response_model=CanonicalSimulationResultResponse,
+    summary="Retrieve a single canonical simulation result for any engine",
+    description="Standardizes PySPH, Delft3D FM, or ANUGA run outputs into the canonical result schema.",
+)
+def get_dam_project_canonical_result_endpoint(
+    project_id: str,
+    engine: str,
+    run_id: str,
+) -> CanonicalSimulationResultResponse:
+    res = get_canonical_simulation_result(project_id, engine, run_id)
+    return CanonicalSimulationResultResponse(
+        result=res,
+        retrieved_at=datetime.now(timezone.utc).isoformat(),
+        is_comparable=bool(res.raster_paths.get("maximum_depth")),
+        message=f"Canonical result for engine '{engine}' retrieved successfully",
+    )
+
+
+# ==============================================================================
+# Phase C1: End-to-End Hidkal PS-161 Workflow Endpoint
+# ==============================================================================
+
+
+@app.get(
+    "/api/dam-projects/{project_id}/workflow-summary",
+    response_model=HidkalWorkflowSummaryResponse,
+    summary="Get End-to-End PS-161 Workflow Summary for Dam Project",
+    description="Returns a consolidated, truthful summary spanning scenario, multi-engine status, results, comparison, exposure, HADR, GIS export, and GEE validation.",
+)
+def get_dam_project_workflow_summary_endpoint(
+    project_id: str,
+) -> HidkalWorkflowSummaryResponse:
+    return get_hidkal_workflow_summary(project_id)
+
+

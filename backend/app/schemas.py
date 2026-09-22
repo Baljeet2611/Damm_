@@ -1,3 +1,4 @@
+from enum import Enum
 from typing import Optional, Dict, Any, List, Tuple, Literal, Union
 from pydantic import BaseModel, Field
 
@@ -739,6 +740,10 @@ class DamPointMetadata(BaseModel):
 
 
 class EngineeringParameters(BaseModel):
+    scenario_type: Literal["DAM_BREAK", "RIVER_BLOCKAGE"] = "DAM_BREAK"
+    scenario_label: Optional[str] = None
+    barrier_type: Optional[str] = None
+    is_intact_control: Optional[bool] = False
     dam_height: Optional[float] = None
     crest_elevation: Optional[float] = None
     pool_elevation: Optional[float] = None
@@ -748,10 +753,19 @@ class EngineeringParameters(BaseModel):
     breach_formation_time_hr: Optional[float] = None
     manning_n: Optional[float] = None
     simulation_duration_s: Optional[float] = None
+    blockage_height: Optional[float] = None
+    blockage_crest_elevation: Optional[float] = None
+    blockage_width: Optional[float] = None
+    upstream_water_level: Optional[float] = None
+    opening_width: Optional[float] = None
 
 
 class UserProvidedMetadata(BaseModel):
     project_name: str
+    scenario_type: Literal["DAM_BREAK", "RIVER_BLOCKAGE"] = "DAM_BREAK"
+    scenario_label: Optional[str] = None
+    barrier_type: Optional[str] = None
+    is_intact_control: Optional[bool] = False
     dam_name: Optional[str] = None
     vertical_unit: Optional[str] = None
     vertical_datum: Optional[str] = None
@@ -765,6 +779,11 @@ class UserProvidedMetadata(BaseModel):
     dam_latitude: Optional[float] = None
     dam_longitude: Optional[float] = None
     breach_invert_elevation: Optional[float] = None
+    blockage_height: Optional[float] = None
+    blockage_crest_elevation: Optional[float] = None
+    blockage_width: Optional[float] = None
+    upstream_water_level: Optional[float] = None
+    opening_width: Optional[float] = None
     target_mesh_resolution_m: Optional[float] = None
     simulation_duration_s: Optional[float] = None
     output_interval_s: Optional[float] = None
@@ -783,6 +802,10 @@ class GeometryValidationMetadata(BaseModel):
 
 class NormalizedProjectMetadata(BaseModel):
     project_name: str
+    scenario_type: Literal["DAM_BREAK", "RIVER_BLOCKAGE"] = "DAM_BREAK"
+    scenario_label: Optional[str] = "Dam Break Scenario"
+    barrier_type: Optional[str] = "engineered_dam"
+    is_intact_control: Optional[bool] = False
     dam_name: Optional[str] = None
     raster_metadata: Optional[RasterDerivedMetadata] = None
     user_provided_metadata: Optional[UserProvidedMetadata] = None
@@ -801,6 +824,9 @@ class NormalizedProjectMetadata(BaseModel):
 class DamProjectValidationResponse(BaseModel):
     valid: bool
     project_name: str
+    scenario_type: Literal["DAM_BREAK", "RIVER_BLOCKAGE"] = "DAM_BREAK"
+    scenario_label: Optional[str] = "Dam Break Scenario"
+    barrier_type: Optional[str] = "engineered_dam"
     dam_name: Optional[str] = None
     errors: List[str]
     warnings: List[str]
@@ -817,6 +843,10 @@ class DamProjectValidationResponse(BaseModel):
 class DamProjectSummary(BaseModel):
     project_id: str
     project_name: str
+    scenario_type: Literal["DAM_BREAK", "RIVER_BLOCKAGE"] = "DAM_BREAK"
+    scenario_label: Optional[str] = "Dam Break Scenario"
+    barrier_type: Optional[str] = "engineered_dam"
+    is_intact_control: Optional[bool] = False
     dam_name: Optional[str] = None
     status: str = "validated_unverified"
     scientific_status: str = "validated_unverified"
@@ -842,6 +872,10 @@ class DamProjectSummary(BaseModel):
 class DamProjectDetailResponse(BaseModel):
     project_id: str
     project_name: str
+    scenario_type: Literal["DAM_BREAK", "RIVER_BLOCKAGE"] = "DAM_BREAK"
+    scenario_label: Optional[str] = "Dam Break Scenario"
+    barrier_type: Optional[str] = "engineered_dam"
+    is_intact_control: Optional[bool] = False
     dam_name: Optional[str] = None
     status: str = "validated_unverified"
     scientific_status: str = "validated_unverified"
@@ -984,12 +1018,19 @@ class HeuristicAssistResponse(BaseModel):
 
 
 class SimulationInputsUpdateRequest(BaseModel):
+    scenario_type: Optional[Literal["DAM_BREAK", "RIVER_BLOCKAGE"]] = None
+    is_intact_control: Optional[bool] = False
     reservoir_level: Optional[float] = None
     dam_crest_elevation: Optional[float] = None
     dam_height: Optional[float] = None
     breach_width: Optional[float] = None
     breach_invert_elevation: Optional[float] = None
     breach_formation_time_hr: Optional[float] = None
+    blockage_height: Optional[float] = None
+    blockage_crest_elevation: Optional[float] = None
+    blockage_width: Optional[float] = None
+    upstream_water_level: Optional[float] = None
+    opening_width: Optional[float] = None
     manning_roughness: Optional[float] = None
     simulation_duration_s: Optional[float] = None
     output_interval_s: Optional[float] = None
@@ -1003,6 +1044,8 @@ class SimulationInputsUpdateRequest(BaseModel):
 
 
 class DemoInputsRequest(BaseModel):
+    scenario_type: Optional[Literal["DAM_BREAK", "RIVER_BLOCKAGE"]] = "DAM_BREAK"
+    is_intact_control: Optional[bool] = False
     corridor_length_m: Optional[float] = Field(default=2500.0, ge=500.0, le=20000.0, description="Approximate downstream corridor extent in meters")
     corridor_width_m: Optional[float] = Field(default=1000.0, ge=200.0, le=5000.0, description="Approximate model domain corridor width in meters")
     dam_axis_length_m: Optional[float] = Field(default=400.0, ge=50.0, le=2000.0, description="Approximate demo dam axis length in meters")
@@ -1027,6 +1070,10 @@ class DemoInputsGeometryItem(BaseModel):
 class DemoInputsResponse(BaseModel):
     project_id: str
     project_name: str
+    scenario_type: Literal["DAM_BREAK", "RIVER_BLOCKAGE"] = "DAM_BREAK"
+    scenario_label: Optional[str] = "Dam Break Scenario"
+    barrier_type: Optional[str] = "engineered_dam"
+    is_intact_control: Optional[bool] = False
     dam_name: Optional[str] = None
     provenance: Literal["HYPOTHETICAL_UNVERIFIED"] = "HYPOTHETICAL_UNVERIFIED"
     scientifically_verified: bool = False
@@ -1050,6 +1097,13 @@ class DemoInputsResponse(BaseModel):
 
 class DamProjectAnugaRunRequest(BaseModel):
     acknowledge_hypothetical_unverified: bool = False
+    scenario_type: Optional[Literal["DAM_BREAK", "RIVER_BLOCKAGE"]] = None
+    is_intact_control: Optional[bool] = None
+    opening_width: Optional[float] = None
+    custom_notes: Optional[str] = None
+    simulation_duration_s: Optional[float] = None
+    output_interval_s: Optional[float] = None
+    target_mesh_resolution_m: Optional[float] = None
     custom_notes: Optional[str] = None
     simulation_duration_s: Optional[float] = None
     output_interval_s: Optional[float] = None
@@ -1380,6 +1434,89 @@ class ModelComparisonRunResponse(BaseModel):
     message: str = ""
 
 
+# Phase 28: SPH vs ANUGA Comparison Specialization Schemas
+
+class ScenarioCompatibilityItem(BaseModel):
+    parameter_name: str
+    sph_value: str
+    anuga_value: str
+    classification: Literal["SAME", "SIMILAR", "DIFFERENT", "NOT_APPLICABLE"]
+    scientific_explanation: str
+
+
+class SolverRoleProfile(BaseModel):
+    solver_name: str
+    solver_type: str
+    numerical_formulation: str
+    spatial_focus: str
+    best_represented_for: List[str]
+    limitations: List[str]
+
+
+class PercentileMetrics(BaseModel):
+    p50: float
+    p90: float
+    p95: float
+    p99: float
+    max: float
+    unit: str = "m"
+    location_description: Optional[str] = None
+
+
+class SolverMetricSummary(BaseModel):
+    solver_key: str
+    solver_name: str
+    solver_type: str
+    run_id: str
+    status: str = "completed"
+    simulation_duration_s: float
+    wall_clock_runtime_s: float
+    time_ratio: Optional[float] = None
+    domain_area_km2: float
+    downstream_extent_m: float
+    inundated_area_km2: float
+    spatial_resolution_m: float
+    discrete_element_count: int
+    discrete_element_type: str  # "particles" or "mesh triangles"
+    first_downstream_arrival_s: float
+    arrival_threshold_m: float
+    depth_percentiles: PercentileMetrics
+    velocity_percentiles: PercentileMetrics
+    output_type: str
+
+
+class TimeSyncStep(BaseModel):
+    simulation_time_s: float
+    sph_frame_index: int
+    sph_frame_time_s: float
+    anuga_timestep_index: int
+    anuga_timestep_time_s: float
+    status: str = "synchronized"
+
+
+class SPHvsANUGAComparisonResponse(BaseModel):
+    project_id: str
+    project_name: str
+    sph_run_id: str
+    anuga_run_id: str
+    same_project: bool = True
+    disclaimers: List[str]
+    judge_30s_explanation: str
+    solver_roles: Dict[str, SolverRoleProfile]
+    scenario_compatibility: List[ScenarioCompatibilityItem]
+    sph_metrics: SolverMetricSummary
+    anuga_metrics: SolverMetricSummary
+    spatial_comparison: InundationAgreementStats
+    depth_comparison: DepthDifferenceStats
+    velocity_comparison: VelocityDifferenceStats
+    arrival_comparison: ArrivalTimeDifferenceStats
+    factual_insights: List[str]
+    time_sync_map: List[TimeSyncStep] = []
+    layer_tiles: Dict[str, str] = {}
+    created_at: str
+
+
+
 # Phase 22: Exposure & Vulnerability Assessment Schemas
 
 class ExposureDepthBandConfig(BaseModel):
@@ -1617,3 +1754,393 @@ class SystemHealthSummaryResponse(BaseModel):
     overall_status: str
     timestamp: str
     subsystems: List[SubsystemHealth]
+
+
+# Phase 29: Dam-Break Decision-Support Dashboard Schemas
+
+class DecisionSupportKPIs(BaseModel):
+    maximum_depth_m: float
+    maximum_velocity_ms: float
+    inundated_area_km2: float
+    domain_inundated_pct: float
+    downstream_flood_reach_km: float
+    first_downstream_arrival_s: float
+    first_downstream_arrival_min: float
+    median_downstream_arrival_s: Optional[float] = None
+    median_downstream_arrival_min: Optional[float] = None
+    p90_downstream_arrival_s: Optional[float] = None
+    p90_downstream_arrival_min: Optional[float] = None
+    latest_modeled_arrival_s: Optional[float] = None
+    latest_modeled_arrival_min: Optional[float] = None
+    wet_cell_count: int
+    total_domain_area_km2: float
+
+
+class PercentileDistribution(BaseModel):
+    p50: float
+    p90: float
+    p95: float
+    p99: float
+    max: float
+
+
+class CumulativeDepthAreas(BaseModel):
+    depth_gt_0_1m_km2: float
+    depth_gt_0_5m_km2: float
+    depth_gt_1_0m_km2: float
+    depth_gt_2_0m_km2: float
+
+
+class DistributionBin(BaseModel):
+    range_label: str
+    min_val: float
+    max_val: Optional[float] = None
+    area_km2: float
+    percentage: float
+
+
+class DownstreamZoneMetric(BaseModel):
+    zone_label: str
+    distance_min_m: float
+    distance_max_m: Optional[float] = None
+    max_depth_m: float
+    max_velocity_ms: float
+    earliest_arrival_s: Optional[float] = None
+    earliest_arrival_min: Optional[float] = None
+    inundated_area_km2: float
+    mean_severity_m2s: float
+
+
+class ModeledCriticalPoint(BaseModel):
+    point_id: str
+    title: str
+    metric_name: str
+    value: float
+    unit: str
+    coordinate_utm: List[float]
+    coordinate_wgs84: List[float]
+    simulation_time_s: Optional[float] = None
+    description: str
+    disclaimer: str = "Simulation output — Not field-observed data"
+
+
+class HydraulicSeverityConfig(BaseModel):
+    method: str = "depth_velocity_product"
+    formula: str = "H = h * v"
+    units: str = "m^2/s"
+    classification_type: str = "demonstration"
+    thresholds: List[Dict[str, Any]]
+    disclaimer: str = "Project demonstration thresholds — not regulatory classifications."
+    peak_severity_m2s: float
+
+
+class DecisionSupportScenarioParameters(BaseModel):
+    dam_name: str
+    scenario_type: str = "DAM_BREAK"
+    scenario_label: str = "Dam Break Scenario"
+    barrier_type: str = "engineered_dam"
+    is_intact_control: bool = False
+    reservoir_level_m: float
+    breach_width_m: float
+    breach_type: str
+    manning_roughness: float
+    simulation_duration_s: float
+    terrain_source: str
+    solver: str
+    mesh_cells: Optional[int] = None
+    scientific_status: str = "HYPOTHETICAL_DEMONSTRATION"
+    blockage_crest_elevation_m: Optional[float] = None
+    upstream_water_level_m: Optional[float] = None
+    opening_width_m: Optional[float] = None
+
+
+class DecisionSupportResponse(BaseModel):
+    project_id: str
+    run_id: str
+    solver: str = "ANUGA 2D Regional Shallow-Water Simulation"
+    supplementary_solver: str = "Custom Terrain-SPH Near-Field Demonstration"
+    generated_at: str
+    kpis: DecisionSupportKPIs
+    percentiles: Dict[str, PercentileDistribution]
+    cumulative_depth_areas: CumulativeDepthAreas
+    depth_distribution: List[DistributionBin]
+    velocity_distribution: List[DistributionBin]
+    downstream_zones: List[DownstreamZoneMetric]
+    critical_points: List[ModeledCriticalPoint]
+    severity_config: HydraulicSeverityConfig
+    scenario: DecisionSupportScenarioParameters
+    narrative_summary: str
+    what_this_means: Dict[str, str]
+    limitations: List[str]
+    tile_endpoints: Dict[str, str]
+
+
+class DemoReadinessResponse(BaseModel):
+    project_id: str
+    project_name: str
+    is_ready: bool
+    status_badge: str
+    has_dem: bool
+    anuga_ready: bool
+    sph_ready: bool
+    dashboard_ready: bool
+    comparison_ready: bool
+    preferred_anuga_run_id: Optional[str] = None
+    preferred_sph_run_id: Optional[str] = None
+    available_anuga_runs: int = 0
+    available_sph_runs: int = 0
+    missing_items: List[str] = []
+    summary_message: str
+
+
+# ==============================================================================
+# Phase A1: PySPH -> Delft3D Breach Hydrograph Coupling Schemas
+# ==============================================================================
+
+class HydrographPoint(BaseModel):
+    time_seconds: float = Field(..., description="Timestamp in seconds from simulation start")
+    discharge_cms: float = Field(..., ge=0.0, description="Instantaneous outflow discharge in m^3/s")
+
+
+class BreachHydrographResponse(BaseModel):
+    source_engine: str = "pysph"
+    target_engine: Optional[str] = "delft3d_fm"
+    run_id: str
+    project_id: Optional[str] = None
+    created_at: str
+    time_unit: str = "s"
+    discharge_unit: str = "m3/s"
+    point_count: int
+    duration_seconds: float
+    q_peak_cms: float
+    time_to_peak_seconds: float
+    total_released_volume_m3: float
+    initial_reservoir_volume_m3: Optional[float] = None
+    reservoir_release_fraction: Optional[float] = Field(
+        None, description="Ratio of total released breach outflow volume to total initial reservoir storage volume"
+    )
+    mass_balance_check: str = Field(
+        "not_available",
+        description="Status of global mass balance verification ('verified', 'evaluated', or 'not_available')",
+    )
+    mass_balance_error_pct: Optional[float] = Field(
+        None, description="Global numerical mass balance error percentage if evaluated"
+    )
+    points: List[HydrographPoint]
+    metadata: Dict[str, Any] = {}
+
+
+# ==============================================================================
+# Phase A2: Canonical Unified Scenario Schema & Engine Translation Models
+# ==============================================================================
+
+class ScenarioType(str, Enum):
+    DAM_BREAK = "DAM_BREAK"
+    RIVER_BLOCKAGE = "RIVER_BLOCKAGE"
+    LANDSLIDE_DAM_FAILURE = "LANDSLIDE_DAM_FAILURE"
+
+
+class SimulationEngine(str, Enum):
+    ANUGA = "ANUGA"
+    PYSPH = "PYSPH"
+    DELFT3D = "DELFT3D"
+    COUPLED_SPH_DELFT3D = "COUPLED_SPH_DELFT3D"
+
+
+class CanonicalScenario(BaseModel):
+    scenario_id: str = Field(..., description="Unique UUID identifier for the canonical scenario")
+    project_id: str = Field(..., description="Parent dam project ID or site ID")
+    scenario_name: str = Field(..., min_length=1, max_length=120, description="Human-readable scenario name")
+    scenario_type: ScenarioType = Field(default=ScenarioType.DAM_BREAK, description="DAM_BREAK, RIVER_BLOCKAGE, or LANDSLIDE_DAM_FAILURE")
+    description: Optional[str] = Field(default=None, max_length=1000, description="Scenario description or narrative notes")
+
+    # Terrain & Spatial Reference
+    dem_dataset_id: Optional[str] = Field(default=None, description="DEM raster reference ID or filename")
+    crs: str = Field(default="EPSG:4326", description="Coordinate reference system")
+    dam_crest_elevation_m: Optional[float] = Field(default=None, ge=-500.0, le=9000.0, description="Dam crest / blockage crest elevation in meters")
+    dam_location_lon_lat: Optional[Tuple[float, float]] = Field(default=None, description="(Longitude, Latitude) center coordinates")
+
+    # Hydraulic & Initial Conditions
+    initial_water_level_m: Optional[float] = Field(default=None, ge=0.0, le=9000.0, description="Initial reservoir / upstream water surface elevation in meters")
+    reservoir_volume_m3: Optional[float] = Field(default=None, ge=0.0, description="Total initial reservoir volume in m^3")
+
+    # Breach & Failure Parameters
+    is_intact_control: bool = Field(default=False, description="True for intact baseline control scenario without failure")
+    breach_width_m: float = Field(default=100.0, ge=0.0, le=5000.0, description="Breach / opening final width in meters")
+    breach_depth_m: Optional[float] = Field(default=None, ge=0.0, le=500.0, description="Assumed vertical breach scour depth in meters")
+    breach_start_time_s: float = Field(default=0.0, ge=0.0, description="Breach initiation timestamp in seconds")
+    breach_formation_duration_s: float = Field(default=3600.0, ge=0.0, le=864000.0, description="Duration of breach opening formation in seconds")
+
+    # Hydrodynamic Roughness & Discretization
+    manning_roughness: float = Field(default=0.035, gt=0.001, le=0.5, description="Manning bed friction coefficient n")
+    simulation_duration_s: float = Field(default=3600.0, gt=0.0, le=864000.0, description="Total simulation duration in seconds")
+    output_interval_s: float = Field(default=60.0, gt=0.0, le=36000.0, description="Output recording interval in seconds")
+    target_mesh_resolution_m: float = Field(default=50.0, ge=1.0, le=1000.0, description="Target spatial grid / mesh resolution in meters")
+
+    # Selected Engine & Execution Parameters
+    selected_engine: SimulationEngine = Field(default=SimulationEngine.ANUGA, description="Primary simulation solver")
+    engine_parameters: Dict[str, Any] = Field(default_factory=dict, description="Engine-specific parameter overrides (CFL, particle count, etc.)")
+
+    # Provenance & Traceability
+    provenance: Dict[str, Any] = Field(default_factory=dict, description="Traceability metadata, timestamps, author, origin")
+
+
+class CanonicalScenarioCreateRequest(BaseModel):
+    project_id: str
+    scenario_name: str = Field(..., min_length=1, max_length=120)
+    scenario_type: ScenarioType = Field(default=ScenarioType.DAM_BREAK)
+    description: Optional[str] = Field(default=None, max_length=1000)
+    dem_dataset_id: Optional[str] = None
+    crs: str = "EPSG:4326"
+    dam_crest_elevation_m: Optional[float] = None
+    dam_location_lon_lat: Optional[Tuple[float, float]] = None
+    initial_water_level_m: Optional[float] = None
+    reservoir_volume_m3: Optional[float] = None
+    is_intact_control: bool = False
+    breach_width_m: float = Field(default=100.0, ge=0.0, le=5000.0)
+    breach_depth_m: Optional[float] = None
+    breach_start_time_s: float = 0.0
+    breach_formation_duration_s: float = 3600.0
+    manning_roughness: float = Field(default=0.035, gt=0.001, le=0.5)
+    simulation_duration_s: float = Field(default=3600.0, gt=0.0, le=864000.0)
+    output_interval_s: float = Field(default=60.0, gt=0.0, le=36000.0)
+    target_mesh_resolution_m: float = Field(default=50.0, ge=1.0, le=1000.0)
+    selected_engine: SimulationEngine = Field(default=SimulationEngine.ANUGA)
+    engine_parameters: Dict[str, Any] = Field(default_factory=dict)
+    provenance: Dict[str, Any] = Field(default_factory=dict)
+
+
+class CanonicalScenarioUpdateRequest(BaseModel):
+    scenario_name: Optional[str] = Field(default=None, min_length=1, max_length=120)
+    scenario_type: Optional[ScenarioType] = None
+    description: Optional[str] = None
+    dem_dataset_id: Optional[str] = None
+    crs: Optional[str] = None
+    dam_crest_elevation_m: Optional[float] = None
+    dam_location_lon_lat: Optional[Tuple[float, float]] = None
+    initial_water_level_m: Optional[float] = None
+    reservoir_volume_m3: Optional[float] = None
+    is_intact_control: Optional[bool] = None
+    breach_width_m: Optional[float] = Field(default=None, ge=0.0, le=5000.0)
+    breach_depth_m: Optional[float] = None
+    breach_start_time_s: Optional[float] = None
+    breach_formation_duration_s: Optional[float] = None
+    manning_roughness: Optional[float] = Field(default=None, gt=0.001, le=0.5)
+    simulation_duration_s: Optional[float] = Field(default=None, gt=0.0, le=864000.0)
+    output_interval_s: Optional[float] = Field(default=None, gt=0.0, le=36000.0)
+    target_mesh_resolution_m: Optional[float] = Field(default=None, ge=1.0, le=1000.0)
+    selected_engine: Optional[SimulationEngine] = None
+    engine_parameters: Optional[Dict[str, Any]] = None
+    provenance: Optional[Dict[str, Any]] = None
+
+
+class CanonicalScenarioResponse(BaseModel):
+    scenario: CanonicalScenario
+    created_at: str
+    updated_at: str
+    supported_engines: List[str] = ["ANUGA", "PYSPH", "DELFT3D", "COUPLED_SPH_DELFT3D"]
+    scientific_status: str = "canonical_unified_schema"
+    message: str = "Canonical scenario ready for multi-engine dispatch"
+
+
+class EngineTranslationResult(BaseModel):
+    scenario_id: str
+    target_engine: SimulationEngine
+    translated_config: Dict[str, Any]
+    provenance: Dict[str, Any]
+    is_valid: bool = True
+    validation_messages: List[str] = []
+
+
+class CanonicalSimulationResult(BaseModel):
+    """
+    Canonical Multi-Engine Simulation Result Contract (Phase B3).
+    Standardizes output payloads across PySPH, Delft3D FM, and ANUGA.
+    Missing data is strictly preserved as null/None without fabrication.
+    """
+    run_id: str
+    scenario_id: Optional[str] = None
+    project_id: Optional[str] = None
+    engine: str = Field(..., description="Simulation engine (e.g. 'pysph', 'delft3d_fm', 'anuga')")
+    engine_version: Optional[str] = None
+    execution_status: str = Field(default="completed", description="Execution lifecycle status")
+    scientific_status: Optional[str] = Field(default=None, description="Scientific provenance status")
+    created_at: str
+    completed_at: Optional[str] = None
+    duration_seconds: Optional[float] = None
+
+    # Temporal dimensions
+    timestamps: List[float] = Field(default_factory=list, description="Array of simulation timesteps")
+    time_units: str = "seconds"
+
+    # Key Summary Metrics (None if not available/computed)
+    maximum_depth_m: Optional[float] = None
+    maximum_velocity_ms: Optional[float] = None
+    flood_extent_km2: Optional[float] = None
+    mean_depth_m: Optional[float] = None
+    arrival_time_min_s: Optional[float] = None
+
+    # Breach Hydrograph (if computed/forced)
+    hydrograph: Optional[Dict[str, Any]] = None
+
+    # Spatial & Raster metadata
+    native_crs: Optional[str] = None
+    spatial_bounds: Optional[List[float]] = None  # [xmin, ymin, xmax, ymax]
+    raster_paths: Dict[str, str] = Field(default_factory=dict)  # {"maximum_depth": "/path/to/tif", ...}
+    source_files: List[str] = Field(default_factory=list)
+    layer_hashes: Dict[str, str] = Field(default_factory=dict)
+
+    # Provenance & Metadata
+    provenance: Dict[str, Any] = Field(default_factory=dict)
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+
+
+class CanonicalSimulationResultResponse(BaseModel):
+    result: CanonicalSimulationResult
+    retrieved_at: str
+    is_comparable: bool = True
+    message: str = "Canonical simulation result retrieved successfully"
+
+
+class WorkflowEngineStatus(BaseModel):
+    engine: str
+    is_available: bool
+    version: Optional[str] = None
+    solver_status: str = "available"  # e.g. "available", "solver_unavailable"
+    completed_runs_count: int = 0
+    package_generation_ready: bool = True
+    result_ingestion_ready: bool = True
+    reason: Optional[str] = None
+
+
+class WorkflowGISExportInfo(BaseModel):
+    supported_formats: List[str] = ["geojson", "kml", "shp"]
+    whitelisted_layers: List[str] = ["assets", "roads"]
+    endpoints: Dict[str, str] = Field(default_factory=dict)
+
+
+class WorkflowGEEValidationInfo(BaseModel):
+    tasks_enabled: bool = False
+    gated_reason: str = "Google Earth Engine connector is gated by server policy (ENABLE_GEE_TASKS=false)."
+    whitelisted_datasets: List[str] = ["COPERNICUS/S1_GRD", "NASA/GPM_L3/IMERG_V07", "JRC/GSW1_4/GlobalSurfaceWater"]
+
+
+class HidkalWorkflowSummaryResponse(BaseModel):
+    project_id: str
+    project_name: str
+    project_status: str
+    scenario: Optional[CanonicalScenario] = None
+    available_engines: Dict[str, WorkflowEngineStatus]
+    latest_canonical_results: Dict[str, Optional[CanonicalSimulationResult]] = Field(default_factory=dict)
+    model_comparison_available: bool = False
+    model_comparison_summary: Optional[Dict[str, Any]] = None
+    exposure_summary: Optional[Dict[str, Any]] = None
+    damage_summary: Optional[Dict[str, Any]] = None
+    hadr_decision_support: Optional[Dict[str, Any]] = None
+    gis_export: WorkflowGISExportInfo = Field(default_factory=WorkflowGISExportInfo)
+    gee_validation: WorkflowGEEValidationInfo = Field(default_factory=WorkflowGEEValidationInfo)
+    provenance_warnings: List[str] = Field(default_factory=list)
+    generated_at: str
+
+
+

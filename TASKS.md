@@ -803,3 +803,41 @@ Automated dam-break framework comparing SPH and Delft3D, with inundation, damage
   - [x] `DEMO_CHECKLIST.md`: 5-to-8 minute judge flow with contingency fallbacks.
 - [x] Comprehensive Test Suite Execution:
   - [x] Full pytest suite: 215 passed, 22 skipped, 0 failed.
+
+---
+
+## Phase 24–26: Dynamic Flood Animations & Custom SPH Solver [COMPLETED]
+- [x] Implemented ANUGA dynamic timestep frame extraction and Web Mercator tile animation service.
+- [x] Developed Custom Terrain-SPH solver for near-field breach fluid collapse.
+- [x] Created high-performance 2D Canvas/WebGL SPH particle animation pipeline with depth/velocity color modes.
+- [x] Built interactive frontend playback controls (play, pause, scrub, speed, loop).
+
+---
+
+## Phase 27–28: ANUGA Regional Simulation & SPH-vs-ANUGA Comparison [COMPLETED]
+- [x] Executed and validated full ANUGA 2D regional shallow-water simulation for Hidkal Dam.
+- [x] Derived maximum depth, maximum velocity, and arrival time GeoTIFF rasters.
+- [x] Built scientific multi-engine comparison module (`ModelComparisonPanel.tsx` & `/model-comparison/sph-vs-anuga`).
+- [x] Audited solver terminology: SPH as "Custom Terrain-SPH Near-Field Demonstration", ANUGA as "ANUGA 2D Regional Shallow-Water Simulation".
+- [x] Added CSV/JSON comparison exports and automated regression test suite.
+
+---
+
+## Phase 29: Dam-Break Decision-Support Dashboard [COMPLETED]
+- [x] Built Decision-Support Dashboard with top-level KPI cards (max depth, max velocity, inundated area, first arrival, flood reach).
+- [x] Implemented Hydraulic Severity Index ($H = h \times v$) and raster generation (`hydraulic_severity.tif`).
+- [x] Integrated Modeled Critical Points with interactive GIS map markers and WGS84/UTM coordinate inspection.
+- [x] Implemented descriptive depth and velocity distribution histograms.
+- [x] Created longitudinal downstream distance zone analysis (0-250m, 250-500m, 500-750m, 750-1000m, >1000m).
+- [x] Added JSON and CSV decision summary export endpoints.
+- [x] Formulated transparent scientific disclaimers: demonstration thresholds, uncalibrated Manning $n$, hypothetical breach.
+
+---
+
+## Phase 30: Final System Hardening & SIH Presentation Readiness [COMPLETED]
+- [x] Built Demo Readiness Checker endpoint (`GET /api/dam-projects/{id}/demo-readiness`) and UI badge.
+- [x] Added Presenter Quick Switch navigation bar for friction-free judge demonstrations.
+- [x] Verified arrival-time consistency: excluded initially wet reservoir cells ($t=0\text{ s}$) from downstream arrival metrics.
+- [x] Cleaned repository debug artifacts and verified zero regressions.
+- [x] Authored `docs/FINAL_SYSTEM_ARCHITECTURE.md` and `docs/SIH_FINAL_DEMO_GUIDE.md`.
+- [x] Verified full backend test suite passing (32/32 tests in phase 28 & 29; full suite passing), `npm run lint` 0 errors, `npm run build` passing.

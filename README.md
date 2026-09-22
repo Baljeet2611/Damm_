@@ -68,29 +68,33 @@ powershell -ExecutionPolicy Bypass -File scripts/run-smoke-tests.ps1
 
 ## Product Workflow Stages
 
-The application organizes dam safety workflows into 8 logical, user-facing stages:
+The application organizes dam safety workflows into 9 logical, user-facing stages:
 
-1. **🌐 Overview**: System Health HUD chips and inventory of registered dam studies.
-2. **🏗️ Study Setup**: Ingest custom terrain DEM GeoTIFFs, define dam location coordinates, and parameterize structural characteristics.
-3. **⚡ Simulation**: Pre-simulation 5-tier readiness assessment, mesh generation parameters, gated ANUGA runner with live execution logs, and hazard rasters (depth, velocity, arrival time).
-4. **🛰️ Satellite Evidence**: Sentinel-1 SAR acquisition timeline, backscatter thresholding, and model vs. observation flood extent comparison.
-5. **⚖️ Model Comparison**: Multi-engine spatial comparison (ANUGA vs. Delft3D FM vs. PySPH) with difference maps, inter-model spread, and metric tables.
-6. **👥 Exposure & Impact**: Mass-conserving population exposure, building footprint intersections, segmented road network disruption, critical facilities screening, and LULC cross-tabulation.
-7. **🎯 Decision Support**: Evacuation corridor accessibility, warning lead-time timelines, impact severity matrix, and executive briefing downloads.
-8. **📜 Technical / Provenance**: Cryptographic manifest SHA-256 validation, vulnerability curve provenance (Huizinga et al., 2017 EUR 28552 EN; `unverified_reference`), and scientific governing assumptions.
+1. **🌐 1. Overview & Studies**: System Health HUD chips, registered dam studies inventory, and one-click Hidkal demonstration loader.
+2. **🏗️ 2. Ingest DEM**: Ingest custom terrain DEM GeoTIFFs, inspect elevation bounds, and validate coordinate systems.
+3. **⚡ 3. Hydrodynamic Setup**: Breach geometry, reservoir level, Manning roughness, and multi-solver engine dispatch.
+4. **🌊 4. Flood Results**: 2D ANUGA shallow-water regional simulation outputs, timestep animation player, and maximum hazard rasters (depth, velocity, arrival time).
+5. **📊 5. Decision Support**: Deterministic KPIs, Hydraulic Severity ($H = h \times v$), depth/velocity distributions, downstream reach attenuation, and critical points.
+6. **⚖️ 6. SPH vs ANUGA**: Near-field Custom Terrain-SPH demonstration vs. regional ANUGA 2D shallow-water comparison.
+7. **🛰️ 7. Satellite Evidence**: Sentinel-1 SAR acquisition timeline, backscatter thresholding, and model vs. observation candidate flood extent.
+8. **👥 8. Exposure & Impact**: Population exposure, building footprint intersections, road network disruption, and critical facilities screening.
+9. **💾 9. Export**: Shapefile, KML, GeoJSON, and decision-support JSON/CSV datasets.
 
 ---
 
 ## API Reference Summary
 
 - System Health Summary: `GET http://localhost:8000/api/system/health-summary`
-- Datasets Catalog: `GET http://localhost:8000/api/datasets`
+- Demo Readiness Status: `GET http://localhost:8000/api/dam-projects/{id}/demo-readiness`
+- Decision-Support Summary: `GET http://localhost:8000/api/dam-projects/{id}/decision-support`
+- Decision-Support Export (JSON/CSV): `GET http://localhost:8000/api/dam-projects/{id}/decision-support/export?format=json|csv`
+- Decision-Support Map Tiles: `GET http://localhost:8000/api/dam-projects/{id}/decision-support/tiles/{layer}/{z}/{x}/{y}.png`
+- SPH vs ANUGA Comparison: `GET http://localhost:8000/api/dam-projects/{id}/model-comparison/sph-vs-anuga`
 - Dam Projects Management: `GET / POST http://localhost:8000/api/dam-projects`
-- Project Simulation Readiness: `GET http://localhost:8000/api/dam-projects/{id}/readiness`
-- ANUGA Capabilities & Runs: `GET / POST http://localhost:8000/api/dam-projects/{id}/anuga/capabilities`, `runs`
-- Earth Observation Studio: `GET / POST http://localhost:8000/api/dam-projects/{id}/earth-observation/runs`
-- Model Comparison Studio: `GET / POST http://localhost:8000/api/dam-projects/{id}/model-comparison/runs`
+- ANUGA Capabilities & Runs: `GET / POST http://localhost:8000/api/dam-projects/{id}/anuga/runs`
+- Custom SPH Capabilities & Runs: `GET / POST http://localhost:8000/api/dam-projects/{id}/sph/runs`
 - Exposure & Vulnerability: `GET / POST http://localhost:8000/api/dam-projects/{id}/exposure/runs`
+
 
 
 ### Registered Dataset IDs

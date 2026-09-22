@@ -42,16 +42,33 @@ export interface DamPointMetadata {
 }
 
 export interface EngineeringParameters {
+  scenario_type?: 'DAM_BREAK' | 'RIVER_BLOCKAGE'
+  scenario_label?: string | null
+  barrier_type?: string | null
+  is_intact_control?: boolean
   dam_height?: number | null
   crest_elevation?: number | null
   pool_elevation?: number | null
+  reservoir_level?: number | null
+  freeboard?: number | null
+  breach_width?: number | null
+  breach_formation_time_hr?: number | null
   manning_n?: number | null
   hydraulic_head?: number | null
-  freeboard?: number | null
+  simulation_duration_s?: number | null
+  blockage_height?: number | null
+  blockage_crest_elevation?: number | null
+  blockage_width?: number | null
+  upstream_water_level?: number | null
+  opening_width?: number | null
 }
 
 export interface UserProvidedMetadata {
   project_name: string
+  scenario_type?: 'DAM_BREAK' | 'RIVER_BLOCKAGE'
+  scenario_label?: string | null
+  barrier_type?: string | null
+  is_intact_control?: boolean
   dam_name?: string | null
   dam_point?: DamPointMetadata | null
   engineering_parameters?: EngineeringParameters | null
@@ -63,7 +80,15 @@ export interface UserProvidedMetadata {
   breach_formation_time_hr?: number | null
   manning_roughness?: number | null
   dam_crest_elevation?: number | null
+  dam_height?: number | null
+  dam_latitude?: number | null
+  dam_longitude?: number | null
   breach_invert_elevation?: number | null
+  blockage_height?: number | null
+  blockage_crest_elevation?: number | null
+  blockage_width?: number | null
+  upstream_water_level?: number | null
+  opening_width?: number | null
   target_mesh_resolution_m?: number | null
   simulation_duration_s?: number | null
   output_interval_s?: number | null
@@ -114,6 +139,10 @@ export interface DamProjectValidationResponse {
 export interface DamProjectSummary {
   project_id: string
   project_name: string
+  scenario_type?: 'DAM_BREAK' | 'RIVER_BLOCKAGE'
+  scenario_label?: string | null
+  barrier_type?: string | null
+  is_intact_control?: boolean
   dam_name?: string | null
   status: string
   scientific_status?: string
@@ -139,6 +168,10 @@ export interface DamProjectSummary {
 export interface DamProjectDetailResponse {
   project_id: string
   project_name: string
+  scenario_type?: 'DAM_BREAK' | 'RIVER_BLOCKAGE'
+  scenario_label?: string | null
+  barrier_type?: string | null
+  is_intact_control?: boolean
   dam_name?: string | null
   status: string
   scientific_status?: string
@@ -476,6 +509,13 @@ export interface DamProjectAnugaPointValueResponse {
 
 export interface OnboardingFormValues {
   projectName: string
+  scenarioType?: 'DAM_BREAK' | 'RIVER_BLOCKAGE'
+  is_intact_control?: boolean
+  blockageHeight?: string
+  blockageCrestElevation?: string
+  blockageWidth?: string
+  upstreamWaterLevel?: string
+  openingWidth?: string
   damName: string
   latitude: string
   longitude: string
@@ -758,6 +798,87 @@ export interface ModelComparisonRunResponse {
   scientific_disclaimer: string
 }
 
+// Phase 28: SPH vs ANUGA Specialized Comparison
+export interface ScenarioCompatibilityItem {
+  parameter_name: string
+  sph_value: string
+  anuga_value: string
+  classification: 'SAME' | 'SIMILAR' | 'DIFFERENT' | 'NOT_APPLICABLE'
+  scientific_explanation: string
+}
+
+export interface SolverRoleProfile {
+  solver_name: string
+  solver_type: string
+  numerical_formulation: string
+  spatial_focus: string
+  best_represented_for: string[]
+  limitations: string[]
+}
+
+export interface PercentileMetrics {
+  p50: number
+  p90: number
+  p95: number
+  p99: number
+  max: number
+  unit?: string
+  location_description?: string | null
+}
+
+export interface SolverMetricSummary {
+  solver_key: string
+  solver_name: string
+  solver_type: string
+  run_id: string
+  status: string
+  simulation_duration_s: number
+  wall_clock_runtime_s: number
+  time_ratio?: number | null
+  domain_area_km2: number
+  downstream_extent_m: number
+  inundated_area_km2: number
+  spatial_resolution_m: number
+  discrete_element_count: number
+  discrete_element_type: string
+  first_downstream_arrival_s: number
+  arrival_threshold_m: number
+  depth_percentiles: PercentileMetrics
+  velocity_percentiles: PercentileMetrics
+  output_type: string
+}
+
+export interface TimeSyncStep {
+  simulation_time_s: number
+  sph_frame_index: number
+  sph_frame_time_s: number
+  anuga_timestep_index: number
+  anuga_timestep_time_s: number
+  status: string
+}
+
+export interface SPHvsANUGAComparisonResponse {
+  project_id: string
+  project_name: string
+  sph_run_id: string
+  anuga_run_id: string
+  same_project: boolean
+  disclaimers: string[]
+  judge_30s_explanation: string
+  solver_roles: Record<string, SolverRoleProfile>
+  scenario_compatibility: ScenarioCompatibilityItem[]
+  sph_metrics: SolverMetricSummary
+  anuga_metrics: SolverMetricSummary
+  spatial_comparison: InundationAgreementStats
+  depth_comparison: DepthDifferenceStats
+  velocity_comparison: VelocityDifferenceStats
+  arrival_comparison: ArrivalTimeDifferenceStats
+  factual_insights: string[]
+  time_sync_map: TimeSyncStep[]
+  layer_tiles: Record<string, string>
+  created_at: string
+}
+
 
 // Phase 22: Exposure & Vulnerability Assessment Interfaces
 
@@ -987,4 +1108,246 @@ export interface SystemHealthSummaryResponse {
   overall_status: string
   timestamp: string
   subsystems: SubsystemHealth[]
+}
+
+// Phase 29: Decision-Support Dashboard Types
+export interface DecisionSupportKPIs {
+  maximum_depth_m: number
+  maximum_velocity_ms: number
+  inundated_area_km2: number
+  domain_inundated_pct: number
+  downstream_flood_reach_km: number
+  first_downstream_arrival_s: number
+  first_downstream_arrival_min: number
+  median_downstream_arrival_s?: number | null
+  median_downstream_arrival_min?: number | null
+  p90_downstream_arrival_s?: number | null
+  p90_downstream_arrival_min?: number | null
+  latest_modeled_arrival_s?: number | null
+  latest_modeled_arrival_min?: number | null
+  wet_cell_count: number
+  total_domain_area_km2: number
+}
+
+export interface PercentileDistribution {
+  p50: number
+  p90: number
+  p95: number
+  p99: number
+  max: number
+}
+
+export interface CumulativeDepthAreas {
+  depth_gt_0_1m_km2: number
+  depth_gt_0_5m_km2: number
+  depth_gt_1_0m_km2: number
+  depth_gt_2_0m_km2: number
+}
+
+export interface DistributionBin {
+  range_label: string
+  min_val: number
+  max_val?: number | null
+  area_km2: number
+  percentage: number
+}
+
+export interface DownstreamZoneMetric {
+  zone_label: string
+  distance_min_m: number
+  distance_max_m?: number | null
+  max_depth_m: number
+  max_velocity_ms: number
+  earliest_arrival_s?: number | null
+  earliest_arrival_min?: number | null
+  inundated_area_km2: number
+  mean_severity_m2s: number
+}
+
+export interface ModeledCriticalPoint {
+  point_id: string
+  title: string
+  metric_name: string
+  value: number
+  unit: string
+  coordinate_utm: [number, number]
+  coordinate_wgs84: [number, number]
+  simulation_time_s?: number | null
+  description: string
+  disclaimer: string
+}
+
+export interface SeverityThresholdBand {
+  band: string
+  min_val: number
+  max_val?: number | null
+  color: string
+  description: string
+}
+
+export interface HydraulicSeverityConfig {
+  method: string
+  formula: string
+  units: string
+  classification_type: string
+  thresholds: SeverityThresholdBand[]
+  disclaimer: string
+  peak_severity_m2s: number
+}
+
+export interface DecisionSupportScenarioParameters {
+  dam_name: string
+  scenario_type?: string
+  scenario_label?: string
+  barrier_type?: string
+  is_intact_control?: boolean
+  reservoir_level_m: number
+  breach_width_m: number
+  breach_type: string
+  manning_roughness: number
+  simulation_duration_s: number
+  terrain_source: string
+  solver: string
+  mesh_cells?: number | null
+  scientific_status: string
+  blockage_crest_elevation_m?: number | null
+  upstream_water_level_m?: number | null
+  opening_width_m?: number | null
+}
+
+export interface DecisionSupportResponse {
+  project_id: string
+  run_id: string
+  solver: string
+  supplementary_solver: string
+  generated_at: string
+  kpis: DecisionSupportKPIs
+  percentiles: Record<string, PercentileDistribution>
+  cumulative_depth_areas: CumulativeDepthAreas
+  depth_distribution: DistributionBin[]
+  velocity_distribution: DistributionBin[]
+  downstream_zones: DownstreamZoneMetric[]
+  critical_points: ModeledCriticalPoint[]
+  severity_config: HydraulicSeverityConfig
+  scenario: DecisionSupportScenarioParameters
+  narrative_summary: string
+  what_this_means: Record<string, string>
+  limitations: string[]
+  tile_endpoints: Record<string, string>
+}
+
+export interface DemoReadinessResponse {
+  project_id: string
+  project_name: string
+  is_ready: boolean
+  status_badge: string
+  has_dem: boolean
+  anuga_ready: boolean
+  sph_ready: boolean
+  dashboard_ready: boolean
+  comparison_ready: boolean
+  preferred_anuga_run_id?: string | null
+  preferred_sph_run_id?: string | null
+  available_anuga_runs: number
+  available_sph_runs: number
+  missing_items: string[]
+  summary_message: string
+}
+
+// Phase A2: Canonical Scenario Schema
+export interface CanonicalScenario {
+  scenario_id: string
+  project_id: string
+  scenario_name: string
+  scenario_type: 'DAM_BREAK' | 'RIVER_BLOCKAGE' | 'LANDSLIDE_DAM_FAILURE' | 'OVERTOPPING' | 'PIPING'
+  description?: string | null
+  dem_dataset_id?: string | null
+  crs: string
+  dam_crest_elevation_m?: number | null
+  dam_location_lon_lat?: [number, number] | null
+  initial_water_level_m?: number | null
+  reservoir_volume_m3?: number | null
+  is_intact_control?: boolean
+  breach_width_m: number
+  breach_depth_m?: number | null
+  breach_start_time_s: number
+  breach_formation_duration_s: number
+  manning_roughness: number
+  simulation_duration_s: number
+  output_interval_s: number
+  target_mesh_resolution_m: number
+  selected_engine: 'ANUGA' | 'PYSPH' | 'DELFT3D' | 'COUPLED_SPH_DELFT3D'
+  engine_parameters?: Record<string, any>
+  provenance?: Record<string, any>
+}
+
+// Phase B3: Canonical SimulationResult
+export interface CanonicalSimulationResult {
+  run_id: string
+  scenario_id?: string | null
+  project_id?: string | null
+  engine: string
+  engine_version?: string | null
+  execution_status: string
+  scientific_status?: string | null
+  created_at: string
+  completed_at?: string | null
+  duration_seconds?: number | null
+  timestamps?: number[]
+  time_units?: string
+  maximum_depth_m?: number | null
+  maximum_velocity_ms?: number | null
+  flood_extent_km2?: number | null
+  mean_depth_m?: number | null
+  arrival_time_min_s?: number | null
+  hydrograph?: Record<string, any> | null
+  native_crs?: string | null
+  spatial_bounds?: [number, number, number, number] | null
+  raster_paths?: Record<string, string>
+  source_files?: string[]
+  layer_hashes?: Record<string, string>
+  provenance?: Record<string, any>
+  metadata?: Record<string, any>
+}
+
+// Phase C1/D1: Workflow Summary Dashboard Types
+export interface WorkflowEngineStatus {
+  engine: string
+  is_available: boolean
+  version?: string | null
+  solver_status: string
+  completed_runs_count: number
+  package_generation_ready: boolean
+  result_ingestion_ready: boolean
+  reason?: string | null
+}
+
+export interface WorkflowGISExportInfo {
+  supported_formats: string[]
+  whitelisted_layers: string[]
+  endpoints: Record<string, string>
+}
+
+export interface WorkflowGEEValidationInfo {
+  tasks_enabled: boolean
+  gated_reason: string
+  whitelisted_datasets: string[]
+}
+
+export interface HidkalWorkflowSummaryResponse {
+  project_id: string
+  project_name: string
+  project_status: string
+  scenario?: CanonicalScenario | null
+  available_engines: Record<string, WorkflowEngineStatus>
+  latest_canonical_results: Record<string, CanonicalSimulationResult | null>
+  model_comparison_available: boolean
+  model_comparison_summary?: Record<string, any> | null
+  exposure_summary?: Record<string, any> | null
+  damage_summary?: Record<string, any> | null
+  hadr_decision_support?: Record<string, any> | null
+  gis_export: WorkflowGISExportInfo
+  gee_validation: WorkflowGEEValidationInfo
+  provenance_warnings: string[]
+  generated_at: string
 }

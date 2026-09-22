@@ -484,7 +484,8 @@ function App() {
 
   // Custom Onboarded Dam Project Map Visualization Hook
   const [activeCustomDamProject, setActiveCustomDamProject] = useState<DamProjectSummary | DamProjectDetailResponse | null>(null)
-  const { displayDamProjectOnMap, clearDamProjectMap, displayDamProjectAnugaHazardRaster, displayDamProjectAnugaTimestepRaster } = useDamProjectMap(mapRef)
+  const { displayDamProjectOnMap, clearDamProjectMap, displayDamProjectAnugaHazardRaster, displayDamProjectAnugaTimestepRaster, displaySPHParticleFrame, clearSPHParticleLayer, updateDamBreachVisualState } = useDamProjectMap(mapRef)
+
 
   // Handle Hazard Source Switching with explicit state clearing to prevent stale data bleed
   const handleHazardSourceChange = (newSource: 'sample_hidkal' | 'anuga_hidkal_pilot' | 'anuga_hidkal_refined') => {
@@ -3823,6 +3824,9 @@ set GEE_PROJECT_ID=my-dam-hazard-project
                 onDisplayProjectDem={handleDisplayProjectDem}
                 onDisplayHazardLayer={displayDamProjectAnugaHazardRaster}
                 onDisplayTimestepLayer={displayDamProjectAnugaTimestepRaster}
+                onDisplaySPHParticleFrame={displaySPHParticleFrame}
+                onClearSPHParticleLayer={clearSPHParticleLayer}
+                onUpdateDamBreachState={updateDamBreachVisualState}
               />
             )}
           </aside>

@@ -203,7 +203,12 @@ def load_raw_roads() -> Dict[str, Any]:
     G = nx.read_graphml(str(file_path))
     features = []
 
-    for u, v, k, d in G.edges(keys=True, data=True):
+    if G.is_multigraph():
+        edge_iter = G.edges(keys=True, data=True)
+    else:
+        edge_iter = ((u, v, 0, d) for u, v, d in G.edges(data=True))
+
+    for u, v, k, d in edge_iter:
         # Determine geometry
         if "geometry" in d and d["geometry"]:
             geom = wkt.loads(d["geometry"])

@@ -5,27 +5,37 @@ import type {
   DamProjectDetailResponse,
   DamProjectReadinessResponse,
   OnboardingFormValues,
+  DemoReadinessResponse,
 } from '../../types/damProjects'
+import type { SPHAnimationFrame } from '../../api/damProjects'
 import {
   validateDamProject,
   saveDamProject,
   listDamProjects,
   fetchDamProjectReadiness,
+  fetchDemoReadiness,
   loadHidkalDemoProject,
+  loadRiverBlockageDemoProject,
 } from '../../api/damProjects'
 import { DamProjectAnugaReadiness } from './DamProjectAnugaReadiness'
 import { EarthObservationPanel } from './EarthObservationPanel'
 import { ModelComparisonPanel } from './ModelComparisonPanel'
 import { ExposureVulnerabilityPanel } from './ExposureVulnerabilityPanel'
 import { SystemHealthPanel } from './SystemHealthPanel'
+import { DecisionSupportDashboard } from './DecisionSupportDashboard'
+import { WorkflowSummaryDashboard } from './WorkflowSummaryDashboard'
+import { ThreeSphSimulation } from '../ThreeSphSimulation'
 import './DamOnboardingPanel.css'
 
 export type ProductStage =
   | 'overview'
   | 'setup'
   | 'simulation'
+  | 'three_sph'
   | 'results'
+  | 'decision_support'
   | 'comparison'
+  | 'workflow_summary'
   | 'satellite'
   | 'exposure'
   | 'export'
@@ -34,12 +44,18 @@ interface DamOnboardingPanelProps {
   onDisplayProjectDem?: (project: DamProjectSummary | DamProjectDetailResponse) => void
   onDisplayHazardLayer?: (projectId: string, runId: string, layer: string, processingId?: string) => void
   onDisplayTimestepLayer?: (projectId: string, runId: string, stepIdx: number, processingId?: string) => void
+  onDisplaySPHParticleFrame?: (frameData: SPHAnimationFrame, colorMode: 'depth' | 'velocity') => void
+  onClearSPHParticleLayer?: () => void
+  onUpdateDamBreachState?: (isOpen: boolean) => void
 }
 
 export const DamOnboardingPanel: React.FC<DamOnboardingPanelProps> = ({
   onDisplayProjectDem,
   onDisplayHazardLayer,
   onDisplayTimestepLayer,
+  onDisplaySPHParticleFrame,
+  onClearSPHParticleLayer,
+  onUpdateDamBreachState,
 }) => {
   // Navigation stage state (8-Step User Journey)
   const [currentStage, setCurrentStage] = useState<ProductStage>('overview')
@@ -136,6 +152,7 @@ export const DamOnboardingPanel: React.FC<DamOnboardingPanelProps> = ({
   const [loadingProjects, setLoadingProjects] = useState<boolean>(false)
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null)
   const [_projectReadinessData, setProjectReadinessData] = useState<Record<string, DamProjectReadinessResponse>>({})
+  const [demoReadiness, setDemoReadiness] = useState<DemoReadinessResponse | null>(null)
   const [loadingDemo, setLoadingDemo] = useState<boolean>(false)
   const [demoLoadError, setDemoLoadError] = useState<string | null>(null)
 
@@ -181,10 +198,39 @@ export const DamOnboardingPanel: React.FC<DamOnboardingPanelProps> = ({
     }
   }
 
+  const handleLoadRiverBlockageDemo = async () => {
+    setLoadingDemo(true)
+    setDemoLoadError(null)
+    try {
+      const demoProj = await loadRiverBlockageDemoProject()
+      await loadProjects()
+      setSelectedProjectId(demoProj.project_id)
+      if (onDisplayProjectDem) {
+        onDisplayProjectDem(demoProj)
+      }
+      setCurrentStage('simulation')
+    } catch (err: any) {
+      setDemoLoadError(err.message || 'Failed to load River Blockage demo project.')
+    } finally {
+      setLoadingDemo(false)
+    }
+  }
+
   useEffect(() => {
     // oxlint-disable-next-line react/set-state-in-effect
     loadProjects()
   }, [loadProjects])
+
+  useEffect(() => {
+    if (selectedProjectId) {
+      fetchDemoReadiness(selectedProjectId)
+        .then(setDemoReadiness)
+        .catch(() => setDemoReadiness(null))
+    } else {
+      // oxlint-disable-next-line react/set-state-in-effect
+      setDemoReadiness(null)
+    }
+  }, [selectedProjectId])
 
   const activeProject = projectsList.find((p) => p.project_id === selectedProjectId) || (projectsList.length > 0 ? projectsList[0] : null)
 
@@ -214,6 +260,7 @@ export const DamOnboardingPanel: React.FC<DamOnboardingPanelProps> = ({
     setDownstreamOutletFile(null)
     setFormValues({
       projectName: 'New Dam Study',
+      scenarioType: 'DAM_BREAK',
       damName: 'Sample Dam',
       latitude: '16.215',
       longitude: '74.632',
@@ -254,6 +301,8 @@ export const DamOnboardingPanel: React.FC<DamOnboardingPanelProps> = ({
 
     fd.append('project_name', formValues.projectName)
     fd.append('dam_name', formValues.damName)
+    if (formValues.scenarioType) fd.append('scenario_type', formValues.scenarioType)
+    if (formValues.is_intact_control !== undefined) fd.append('is_intact_control', formValues.is_intact_control ? 'true' : 'false')
     fd.append('latitude', formValues.latitude)
     fd.append('longitude', formValues.longitude)
 
@@ -263,6 +312,12 @@ export const DamOnboardingPanel: React.FC<DamOnboardingPanelProps> = ({
     if (formValues.manningN) fd.append('manning_n', formValues.manningN)
     if (formValues.verticalUnit) fd.append('vertical_unit', formValues.verticalUnit)
     if (formValues.verticalDatum) fd.append('vertical_datum', formValues.verticalDatum)
+
+    if (formValues.blockageHeight) fd.append('blockage_height', formValues.blockageHeight)
+    if (formValues.blockageCrestElevation) fd.append('blockage_crest_elevation', formValues.blockageCrestElevation)
+    if (formValues.blockageWidth) fd.append('blockage_width', formValues.blockageWidth)
+    if (formValues.upstreamWaterLevel) fd.append('upstream_water_level', formValues.upstreamWaterLevel)
+    if (formValues.openingWidth) fd.append('opening_width', formValues.openingWidth)
 
     if (isSave) {
       if (formValues.reservoirLevel) fd.append('reservoir_level', formValues.reservoirLevel)
@@ -385,6 +440,13 @@ export const DamOnboardingPanel: React.FC<DamOnboardingPanelProps> = ({
           <span>⚡</span> 3. Simulation
         </button>
         <button
+          className={`product-stage-btn ${currentStage === 'three_sph' ? 'active' : ''}`}
+          onClick={() => setCurrentStage('three_sph')}
+          title="Interactive Three.js 3D hydrodynamic particle & terrain visualization"
+        >
+          <span>🧊</span> 3D SPH Sim
+        </button>
+        <button
           className={`product-stage-btn ${currentStage === 'results' ? 'active' : ''}`}
           onClick={() => setCurrentStage('results')}
           title="Hazard depth, velocity, arrival time maps & transient flood animation"
@@ -392,32 +454,46 @@ export const DamOnboardingPanel: React.FC<DamOnboardingPanelProps> = ({
           <span>🌊</span> 4. Flood Results
         </button>
         <button
+          className={`product-stage-btn ${currentStage === 'decision_support' ? 'active' : ''}`}
+          onClick={() => setCurrentStage('decision_support')}
+          title="Hydrodynamic decision-support dashboard, hydraulic severity, and downstream intelligence"
+        >
+          <span>📊</span> 5. Decision Support
+        </button>
+        <button
           className={`product-stage-btn ${currentStage === 'comparison' ? 'active' : ''}`}
           onClick={() => setCurrentStage('comparison')}
-          title="Official SPH vs Delft3D inter-model spatial agreement"
+          title="Near-Field SPH vs Regional ANUGA hydrodynamic comparison"
         >
-          <span>⚖️</span> 5. SPH vs Delft3D
+          <span>⚖️</span> 6. SPH vs ANUGA
+        </button>
+        <button
+          className={`product-stage-btn ${currentStage === 'workflow_summary' ? 'active' : ''}`}
+          onClick={() => setCurrentStage('workflow_summary')}
+          title="Unified end-to-end workflow dashboard (PySPH, ANUGA, Delft3D FM, HADR, GEE & GIS Exports)"
+        >
+          <span>📋</span> 7. Unified Summary
         </button>
         <button
           className={`product-stage-btn ${currentStage === 'satellite' ? 'active' : ''}`}
           onClick={() => setCurrentStage('satellite')}
           title="Sentinel-1 SAR Earth Observation & candidate water change"
         >
-          <span>🛰️</span> 6. Satellite Evidence
+          <span>🛰️</span> 8. Satellite Evidence
         </button>
         <button
           className={`product-stage-btn ${currentStage === 'exposure' ? 'active' : ''}`}
           onClick={() => setCurrentStage('exposure')}
           title="Population, buildings, roads, and infrastructure exposure"
         >
-          <span>👥</span> 7. Exposure & Damage
+          <span>👥</span> 9. Exposure & Damage
         </button>
         <button
           className={`product-stage-btn ${currentStage === 'export' ? 'active' : ''}`}
           onClick={() => setCurrentStage('export')}
           title="Export Shapefile, KML, and GeoJSON GIS datasets"
         >
-          <span>💾</span> 8. Export
+          <span>💾</span> 10. Export
         </button>
       </div>
 
@@ -444,6 +520,19 @@ export const DamOnboardingPanel: React.FC<DamOnboardingPanelProps> = ({
           </div>
           {activeProject && (
             <div style={{ display: 'flex', gap: '0.4rem', alignItems: 'center' }}>
+              {demoReadiness && (
+                <span
+                  className="saved-project-badge"
+                  style={{
+                    background: demoReadiness.is_ready ? '#059669' : '#d97706',
+                    color: '#fff',
+                    fontWeight: 700,
+                  }}
+                  title={demoReadiness.summary_message}
+                >
+                  {demoReadiness.status_badge}
+                </span>
+              )}
               {(activeProject.provenance === 'HYPOTHETICAL_UNVERIFIED' || activeProject.project_name.toLowerCase().includes('demo') || activeProject.project_name.toLowerCase().includes('hypothetical')) ? (
                 <>
                   <span className="saved-project-badge" style={{ background: '#7c3aed', color: '#fff' }} title="Not for engineering or operational decision-making.">
@@ -471,6 +560,79 @@ export const DamOnboardingPanel: React.FC<DamOnboardingPanelProps> = ({
         </div>
       )}
 
+      {/* SIH Presenter Quick Switch Bar */}
+      {activeProject && currentStage !== 'overview' && (
+        <div style={{
+          display: 'flex',
+          gap: '0.35rem',
+          padding: '0.35rem 0.75rem',
+          background: '#0f172a',
+          borderBottom: '1px solid #334155',
+          alignItems: 'center',
+          overflowX: 'auto',
+          fontSize: '0.72rem',
+        }}>
+          <span style={{ color: '#94a3b8', fontWeight: 600, whiteSpace: 'nowrap' }}>⚡ Quick Switch:</span>
+          <button
+            className="btn-fit"
+            style={{ fontSize: '0.68rem', padding: '0.15rem 0.45rem' }}
+            onClick={() => setCurrentStage('overview')}
+          >
+            📋 1. Scenario
+          </button>
+          <button
+            className={`btn-fit ${currentStage === 'three_sph' ? 'active' : ''}`}
+            style={{
+              fontSize: '0.68rem',
+              padding: '0.15rem 0.45rem',
+              background: currentStage === 'three_sph' ? '#0284c7' : undefined,
+              color: currentStage === 'three_sph' ? '#fff' : undefined,
+            }}
+            onClick={() => setCurrentStage('three_sph')}
+          >
+            🧊 3D Visualizer
+          </button>
+          <button
+            className={`btn-fit ${currentStage === 'results' ? 'active' : ''}`}
+            style={{ fontSize: '0.68rem', padding: '0.15rem 0.45rem' }}
+            onClick={() => setCurrentStage('results')}
+          >
+            🌊 4. ANUGA Flood
+          </button>
+          <button
+            className={`btn-fit ${currentStage === 'decision_support' ? 'active' : ''}`}
+            style={{
+              fontSize: '0.68rem',
+              padding: '0.15rem 0.45rem',
+              background: currentStage === 'decision_support' ? '#0284c7' : undefined,
+              color: currentStage === 'decision_support' ? '#fff' : undefined,
+            }}
+            onClick={() => setCurrentStage('decision_support')}
+          >
+            📊 5. Decision Support
+          </button>
+          <button
+            className={`btn-fit ${currentStage === 'comparison' ? 'active' : ''}`}
+            style={{ fontSize: '0.68rem', padding: '0.15rem 0.45rem' }}
+            onClick={() => setCurrentStage('comparison')}
+          >
+            ⚖️ 6. SPH vs ANUGA
+          </button>
+          <button
+            className={`btn-fit ${currentStage === 'workflow_summary' ? 'active' : ''}`}
+            style={{
+              fontSize: '0.68rem',
+              padding: '0.15rem 0.45rem',
+              background: currentStage === 'workflow_summary' ? '#0284c7' : undefined,
+              color: currentStage === 'workflow_summary' ? '#fff' : undefined,
+            }}
+            onClick={() => setCurrentStage('workflow_summary')}
+          >
+            📋 7. Summary
+          </button>
+        </div>
+      )}
+
       {/* STAGE 1: OVERVIEW */}
       {currentStage === 'overview' && (
         <div className="onboarding-body">
@@ -490,6 +652,15 @@ export const DamOnboardingPanel: React.FC<DamOnboardingPanelProps> = ({
                   title="Load pre-configured Hidkal Dam hypothetical demo configuration"
                 >
                   {loadingDemo ? <><span className="spinner" /> Loading Demo...</> : '🧪 Load Hidkal Demo'}
+                </button>
+                <button
+                  className="btn-fit"
+                  style={{ background: '#059669', color: '#fff', border: 'none', fontWeight: 600 }}
+                  onClick={handleLoadRiverBlockageDemo}
+                  disabled={loadingDemo}
+                  title="Load natural landslide dam / valley river blockage scenario"
+                >
+                  {loadingDemo ? <><span className="spinner" /> Loading Demo...</> : '🏔️ Load Landslide Dam Demo'}
                 </button>
                 <button className="btn-fit" onClick={() => setCurrentStage('setup')}>
                   ➕ Ingest New Study
@@ -515,16 +686,24 @@ export const DamOnboardingPanel: React.FC<DamOnboardingPanelProps> = ({
                 <span style={{ fontSize: '2rem' }}>📁</span>
                 <span className="stage-empty-state-title">No Custom Dam Studies Registered</span>
                 <p className="stage-empty-state-desc">
-                  Load our verified Hidkal Dam demonstration study with real SRTM DEM bounds, derived computational domain, reservoir polygon, dam crest axis, and conservative elevations, or ingest your own terrain GeoTIFF.
+                  Load our verified Hidkal Dam demonstration study with real SRTM DEM bounds or the Natural Landslide Dam / River Blockage scenario with intact control and failed hydrodynamic routing.
                 </p>
                 <div style={{ display: 'flex', gap: '0.6rem', justifyContent: 'center' }}>
                   <button
                     className="btn-save-dam"
                     onClick={handleLoadHidkalDemo}
                     disabled={loadingDemo}
-                    style={{ maxWidth: '260px', background: '#2563eb' }}
+                    style={{ maxWidth: '240px', background: '#2563eb' }}
                   >
-                    {loadingDemo ? <><span className="spinner" /> Loading Demo...</> : '🧪 Load Hidkal Demo Study'}
+                    {loadingDemo ? <><span className="spinner" /> Loading Demo...</> : '🧪 Load Hidkal Demo'}
+                  </button>
+                  <button
+                    className="btn-save-dam"
+                    onClick={handleLoadRiverBlockageDemo}
+                    disabled={loadingDemo}
+                    style={{ maxWidth: '240px', background: '#059669' }}
+                  >
+                    {loadingDemo ? <><span className="spinner" /> Loading Demo...</> : '🏔️ Load Landslide Dam Demo'}
                   </button>
                   <button className="btn-fit" onClick={() => setCurrentStage('setup')} style={{ padding: '0.5rem 1rem' }}>
                     🚀 Ingest Custom DEM
@@ -549,6 +728,11 @@ export const DamOnboardingPanel: React.FC<DamOnboardingPanelProps> = ({
                           {p.dam_name && (
                             <span style={{ fontSize: '0.72rem', color: '#94a3b8', marginLeft: '0.4rem' }}>
                               ({p.dam_name})
+                            </span>
+                          )}
+                          {p.scenario_type === 'RIVER_BLOCKAGE' && (
+                            <span className="legend-tag" style={{ background: '#059669', color: '#fff', fontSize: '0.62rem', marginLeft: '0.4rem' }}>
+                              🏔️ RIVER BLOCKAGE / LANDSLIDE DAM
                             </span>
                           )}
                         </div>
@@ -629,53 +813,97 @@ export const DamOnboardingPanel: React.FC<DamOnboardingPanelProps> = ({
       {/* STAGE 2: STUDY SETUP */}
       {currentStage === 'setup' && (
         <div className="onboarding-body">
-          {/* Quick Demo Pre-population Card */}
-          <div className="preflight-report-card" style={{ marginBottom: '1rem', background: '#0f172a', border: '1px solid #3b82f6' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.4rem' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                <strong style={{ fontSize: '0.85rem' }}>🧪 Fast Demonstration: Hidkal Dam Study</strong>
-                <span className="legend-tag" style={{ background: '#7c3aed', color: '#fff', fontSize: '0.65rem' }}>
-                  HYPOTHETICAL DEMO CONFIGURATION
-                </span>
+          {/* Quick Demo Pre-population Cards */}
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem', marginBottom: '1rem' }}>
+            <div className="preflight-report-card" style={{ background: '#0f172a', border: '1px solid #3b82f6', margin: 0 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.4rem' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                  <strong style={{ fontSize: '0.85rem' }}>🧪 Hidkal Dam Break Study</strong>
+                  <span className="legend-tag" style={{ background: '#7c3aed', color: '#fff', fontSize: '0.62rem' }}>
+                    DEMO
+                  </span>
+                </div>
               </div>
+              <p style={{ fontSize: '0.72rem', color: '#94a3b8', margin: '0 0 0.5rem 0' }}>
+                Loads Hidkal SRTM DEM bounds, domain polygon, reservoir boundary, dam crest axis, and conservative elevations.
+              </p>
+              <button
+                type="button"
+                className="btn-preflight"
+                onClick={handleLoadHidkalDemo}
+                disabled={loadingDemo}
+                style={{
+                  background: '#2563eb',
+                  color: '#fff',
+                  padding: '0.4rem 0.8rem',
+                  fontSize: '0.74rem',
+                  fontWeight: 600,
+                  borderRadius: '4px',
+                  width: '100%',
+                }}
+              >
+                {loadingDemo ? <><span className="spinner" /> Loading...</> : '⚡ Load Hidkal Dam Demo'}
+              </button>
             </div>
 
-            <p style={{ fontSize: '0.74rem', color: '#94a3b8', margin: '0 0 0.6rem 0' }}>
-              Instantly loads real Hidkal SRTM DEM bounds, derived computational domain polygon, upstream reservoir boundary, dam crest axis, and conservative elevations for pipeline demonstration.
-            </p>
-
-            <div className="val-disclaimer-box font-mono" style={{ fontSize: '0.7rem', margin: '0 0 0.6rem 0', borderColor: '#f59e0b', color: '#fbbf24' }}>
-              ⚠️ <strong>Disclaimer:</strong> Hypothetical demonstration input — not for engineering or operational decision-making.
-            </div>
-
-            <button
-              type="button"
-              className="btn-preflight"
-              onClick={handleLoadHidkalDemo}
-              disabled={loadingDemo}
-              style={{
-                background: '#2563eb',
-                color: '#fff',
-                padding: '0.45rem 0.9rem',
-                fontSize: '0.78rem',
-                fontWeight: 600,
-                borderRadius: '4px',
-                cursor: loadingDemo ? 'not-allowed' : 'pointer',
-              }}
-            >
-              {loadingDemo ? <><span className="spinner" /> Loading Demonstration Study...</> : '⚡ Load Hidkal Demonstration Configuration'}
-            </button>
-
-            {demoLoadError && (
-              <div className="damage-error-box font-mono" style={{ marginTop: '0.5rem', fontSize: '0.75rem' }}>
-                ⛔ {demoLoadError}
+            <div className="preflight-report-card" style={{ background: '#0f172a', border: '1px solid #059669', margin: 0 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.4rem' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                  <strong style={{ fontSize: '0.85rem' }}>🏔️ Natural Landslide Dam / River Blockage</strong>
+                  <span className="legend-tag" style={{ background: '#059669', color: '#fff', fontSize: '0.62rem' }}>
+                    PS161 REQ B
+                  </span>
+                </div>
               </div>
-            )}
+              <p style={{ fontSize: '0.72rem', color: '#94a3b8', margin: '0 0 0.5rem 0' }}>
+                Valley debris obstruction model with intact upstream retention vs breach release wave propagation.
+              </p>
+              <button
+                type="button"
+                className="btn-preflight"
+                onClick={handleLoadRiverBlockageDemo}
+                disabled={loadingDemo}
+                style={{
+                  background: '#059669',
+                  color: '#fff',
+                  padding: '0.4rem 0.8rem',
+                  fontSize: '0.74rem',
+                  fontWeight: 600,
+                  borderRadius: '4px',
+                  width: '100%',
+                }}
+              >
+                {loadingDemo ? <><span className="spinner" /> Loading...</> : '⚡ Load Landslide Dam Demo'}
+              </button>
+            </div>
           </div>
+
+          <div className="val-disclaimer-box font-mono" style={{ fontSize: '0.7rem', margin: '0 0 0.8rem 0', borderColor: '#f59e0b', color: '#fbbf24' }}>
+            ⚠️ <strong>Disclaimer:</strong> Models the hydraulic consequences of an engineered dam or natural valley debris blockage on DEM elevation surfaces. Does NOT model geotechnical slope mechanics, landslide triggering, or sediment transport.
+          </div>
+
+          {demoLoadError && (
+            <div className="damage-error-box font-mono" style={{ margin: '0 0 0.8rem 0', fontSize: '0.75rem' }}>
+              ⛔ {demoLoadError}
+            </div>
+          )}
 
           {/* Step 1: Core Dataset & Dam Point */}
           <div className="onboarding-section">
-            <h4 className="onboarding-sub-title">1. Essential Data (DEM & Dam Location)</h4>
+            <h4 className="onboarding-sub-title">1. Essential Data & Scenario Mode</h4>
+
+            <div className="config-field" style={{ marginBottom: '0.75rem' }}>
+              <label>Scenario / Barrier Type *</label>
+              <select
+                value={formValues.scenarioType || 'DAM_BREAK'}
+                onChange={(e) => handleInputChange('scenarioType', e.target.value as any)}
+                className="config-input"
+                style={{ fontWeight: 600 }}
+              >
+                <option value="DAM_BREAK">🏗️ Engineered Dam Break Scenario</option>
+                <option value="RIVER_BLOCKAGE">🏔️ River Blockage / Natural Landslide Dam Scenario</option>
+              </select>
+            </div>
 
             <div className="file-input-group">
               <label className="file-input-label">DEM GeoTIFF (*.tif, *.tiff) *</label>
@@ -699,17 +927,17 @@ export const DamOnboardingPanel: React.FC<DamOnboardingPanelProps> = ({
                   value={formValues.projectName}
                   onChange={(e) => handleInputChange('projectName', e.target.value)}
                   className="config-input"
-                  placeholder="e.g. Koyna Basin Study"
+                  placeholder="e.g. Valley Blockage Assessment"
                 />
               </div>
               <div className="config-field">
-                <label>Dam / Structure Name *</label>
+                <label>{formValues.scenarioType === 'RIVER_BLOCKAGE' ? 'Obstruction / Valley Name *' : 'Dam / Structure Name *'}</label>
                 <input
                   type="text"
                   value={formValues.damName}
                   onChange={(e) => handleInputChange('damName', e.target.value)}
                   className="config-input"
-                  placeholder="e.g. Koyna Dam"
+                  placeholder={formValues.scenarioType === 'RIVER_BLOCKAGE' ? 'e.g. Upper Valley Landslide Dam' : 'e.g. Koyna Dam'}
                 />
               </div>
             </div>
@@ -747,7 +975,11 @@ export const DamOnboardingPanel: React.FC<DamOnboardingPanelProps> = ({
               onClick={() => setShowEngParams(!showEngParams)}
               style={{ cursor: 'pointer', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}
             >
-              <h4 className="onboarding-sub-title">2. Engineering & Hydraulic Parameters (Optional)</h4>
+              <h4 className="onboarding-sub-title">
+                {formValues.scenarioType === 'RIVER_BLOCKAGE'
+                  ? '2. Blockage & Hydraulic Parameters (Optional)'
+                  : '2. Engineering & Hydraulic Parameters (Optional)'}
+              </h4>
               <span>{showEngParams ? '▲' : '▼'}</span>
             </div>
 
@@ -755,36 +987,36 @@ export const DamOnboardingPanel: React.FC<DamOnboardingPanelProps> = ({
               <div className="accordion-content">
                 <div className="onboarding-grid-3">
                   <div className="config-field">
-                    <label>Dam Height (m)</label>
+                    <label>{formValues.scenarioType === 'RIVER_BLOCKAGE' ? 'Blockage Height (m)' : 'Dam Height (m)'}</label>
                     <input
                       type="number"
                       step="0.1"
                       value={formValues.damHeight}
                       onChange={(e) => handleInputChange('damHeight', e.target.value)}
                       className="config-input font-mono"
-                      placeholder="e.g. 103.0"
+                      placeholder="e.g. 35.0"
                     />
                   </div>
                   <div className="config-field">
-                    <label>Crest Elevation (m)</label>
+                    <label>{formValues.scenarioType === 'RIVER_BLOCKAGE' ? 'Blockage Crest Elevation (m)' : 'Crest Elevation (m)'}</label>
                     <input
                       type="number"
                       step="0.1"
                       value={formValues.crestElevation}
                       onChange={(e) => handleInputChange('crestElevation', e.target.value)}
                       className="config-input font-mono"
-                      placeholder="e.g. 665.0"
+                      placeholder="e.g. 525.0"
                     />
                   </div>
                   <div className="config-field">
-                    <label>Pool Elevation (m)</label>
+                    <label>{formValues.scenarioType === 'RIVER_BLOCKAGE' ? 'Upstream Water Level (m)' : 'Pool Elevation (m)'}</label>
                     <input
                       type="number"
                       step="0.1"
                       value={formValues.poolElevation}
                       onChange={(e) => handleInputChange('poolElevation', e.target.value)}
                       className="config-input font-mono"
-                      placeholder="e.g. 660.0"
+                      placeholder="e.g. 520.0"
                     />
                   </div>
                 </div>
@@ -802,14 +1034,14 @@ export const DamOnboardingPanel: React.FC<DamOnboardingPanelProps> = ({
                     />
                   </div>
                   <div className="config-field">
-                    <label>Breach Width (m)</label>
+                    <label>{formValues.scenarioType === 'RIVER_BLOCKAGE' ? 'Breach Opening Width (m)' : 'Breach Width (m)'}</label>
                     <input
                       type="number"
                       step="1"
                       value={formValues.breachWidth}
                       onChange={(e) => handleInputChange('breachWidth', e.target.value)}
                       className="config-input font-mono"
-                      placeholder="200"
+                      placeholder="60"
                     />
                   </div>
                 </div>
@@ -1134,6 +1366,15 @@ export const DamOnboardingPanel: React.FC<DamOnboardingPanelProps> = ({
         </div>
       )}
 
+      {/* STAGE: 3D SPH SIMULATION VISUALIZATION */}
+      {currentStage === 'three_sph' && (
+        <div className="onboarding-body" style={{ minHeight: '650px', position: 'relative', borderRadius: '8px', overflow: 'hidden' }}>
+          <ThreeSphSimulation
+            projectId={activeProject?.project_id}
+          />
+        </div>
+      )}
+
       {/* STAGE 4: FLOOD RESULTS & ANIMATION */}
       {currentStage === 'results' && (
         <div className="onboarding-body">
@@ -1163,7 +1404,32 @@ export const DamOnboardingPanel: React.FC<DamOnboardingPanelProps> = ({
         </div>
       )}
 
-      {/* STAGE 5: SPH VS DELFT3D MODEL COMPARISON */}
+      {/* STAGE 5: DECISION-SUPPORT DASHBOARD */}
+      {currentStage === 'decision_support' && (
+        <div className="onboarding-body">
+          {!activeProject ? (
+            <div className="stage-empty-state">
+              <span style={{ fontSize: '2rem' }}>📊</span>
+              <span className="stage-empty-state-title">No Dam Study Selected</span>
+              <p className="stage-empty-state-desc">
+                Select a registered dam study from the dropdown above to view the hydrodynamic decision-support dashboard and hydraulic severity metrics.
+              </p>
+            </div>
+          ) : (
+            <DecisionSupportDashboard
+              projectId={activeProject.project_id}
+              onSelectLayer={(tileUrl, layerName) => {
+                if (tileUrl && onDisplayHazardLayer) {
+                  onDisplayHazardLayer(activeProject.project_id, 'decision_support', layerName)
+                }
+              }}
+              onOpenComparison={() => setCurrentStage('comparison')}
+            />
+          )}
+        </div>
+      )}
+
+      {/* STAGE 6: SPH VS ANUGA MODEL COMPARISON */}
       {currentStage === 'comparison' && (
         <div className="onboarding-body">
           {!activeProject ? (
@@ -1183,12 +1449,34 @@ export const DamOnboardingPanel: React.FC<DamOnboardingPanelProps> = ({
                 }
               }}
               onClose={() => setCurrentStage('overview')}
+              onDisplaySPHParticleFrame={onDisplaySPHParticleFrame}
+              onClearSPHParticleLayer={onClearSPHParticleLayer}
+              onUpdateDamBreachState={onUpdateDamBreachState}
             />
           )}
         </div>
       )}
 
-      {/* STAGE 6: SATELLITE EVIDENCE */}
+      {/* STAGE 7: UNIFIED WORKFLOW SUMMARY DASHBOARD */}
+      {currentStage === 'workflow_summary' && (
+        <div className="onboarding-body">
+          <WorkflowSummaryDashboard
+            projectId={activeProject?.project_id}
+            onNavigateToTab={(tab) => {
+              if (tab === 'simulation') setCurrentStage('simulation')
+              else if (tab === 'results') setCurrentStage('results')
+              else if (tab === 'decision_support') setCurrentStage('decision_support')
+              else if (tab === 'comparison') setCurrentStage('comparison')
+              else if (tab === 'three_sph') setCurrentStage('three_sph')
+              else if (tab === 'satellite') setCurrentStage('satellite')
+              else if (tab === 'exposure') setCurrentStage('exposure')
+              else if (tab === 'export') setCurrentStage('export')
+            }}
+          />
+        </div>
+      )}
+
+      {/* STAGE 8: SATELLITE EVIDENCE */}
       {currentStage === 'satellite' && (
         <div className="onboarding-body">
           {!activeProject ? (

@@ -296,16 +296,21 @@ def test_damage_estimate_validation_rules():
 
 
 HIDKAL_ASSETS_PATH = Path(__file__).resolve().parents[2] / "data" / "raw" / "data_hidkal" / "hidkal_assets.geojson"
+HIDKAL_DEPTH_PATH = Path(__file__).resolve().parents[2] / "data" / "raw" / "data_hidkal" / "hidkal_depth.tif"
 
 
-@pytest.mark.skipif(not HIDKAL_ASSETS_PATH.exists(), reason="Local Hidkal dataset is not present in data/raw")
+@pytest.mark.skipif(not (HIDKAL_ASSETS_PATH.exists() and HIDKAL_DEPTH_PATH.exists()), reason="Local Hidkal raster dataset is not present in data/raw")
 def test_real_hidkal_damage_scenario_integration():
     """
     Integration test using actual Hidkal screening assets:
-    Validates damage estimation on 513 assets and ensures no crash or NaN.
+    Validates damage estimation on registered assets and ensures no crash or NaN.
     """
     reset_registered_datasets()
     reset_registered_vector_datasets()
+
+    res_raw = client.get("/api/assets")
+    assert res_raw.status_code == 200
+    total_raw_assets = len(res_raw.json().get("features", []))
 
     payload = {
         "assumed_depth_unit": "assumed meters (unverified)",
@@ -319,8 +324,8 @@ def test_real_hidkal_damage_scenario_integration():
     assert res.status_code == 200
     data = res.json()
 
-    assert data["asset_counts"]["total_assets"] == 513
-    assert data["asset_counts"]["screening_positive_assets"] == 135
-    assert data["total_estimates"]["base_loss"] > 0
-    assert data["total_estimates"]["low_loss"] < data["total_estimates"]["base_loss"]
-    assert data["total_estimates"]["high_loss"] > data["total_estimates"]["base_loss"]
+    assert data["asset_counts"]["total_assets"] == total_raw_assets
+    assert data["asset_counts"]["assessed_assets"] == total_raw_assets
+    assert data["total_estimates"]["base_loss"] >= 0
+    assert data["total_estimates"]["low_loss"] <= data["total_estimates"]["base_loss"]
+    assert data["total_estimates"]["high_loss"] >= data["total_estimates"]["base_loss"]

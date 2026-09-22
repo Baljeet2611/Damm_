@@ -596,10 +596,14 @@ def sanitize_filename(filename: str) -> str:
     return clean
 
 
-def build_dam_project_delft3d_package(project_id: str) -> Tuple[ProjectDelft3DPackageResponse, Path]:
+def build_dam_project_delft3d_package(
+    project_id: str,
+    sph_run_id: Optional[str] = None,
+) -> Tuple[ProjectDelft3DPackageResponse, Path]:
     """
     Build a project-specific Delft3D / D-Flow FM model package archive for the dam project.
     Generates D-Flow FM .mdu configuration, boundary conditions, bathymetry definitions, and manifest.
+    Supports optional direct PySPH breach hydrograph coupling (Phase A1).
     """
     valid_pid = validate_project_uuid(project_id)
     p_dir = get_dam_projects_dir() / valid_pid
@@ -611,7 +615,7 @@ def build_dam_project_delft3d_package(project_id: str) -> Tuple[ProjectDelft3DPa
     packages_dir = d3d_dir / "packages"
     packages_dir.mkdir(parents=True, exist_ok=True)
 
-    pkg_name = f"{valid_pid}_delft3d_package"
+    pkg_name = f"{valid_pid}_delft3d_package" if not sph_run_id else f"{valid_pid}_delft3d_sph_coupled_package"
     pkg_work_dir = packages_dir / pkg_name
     zip_path = packages_dir / f"{pkg_name}.zip"
 
@@ -654,9 +658,9 @@ waterDensity          = 1000.0
 
 [time]
 RefDate               = 20260901
-Tunit                 = H
+Tunit                 = S
 TStart                = 0.0
-TStop                 = 24.0
+TStop                 = 86400.0
 DtUser                = 60.0
 DtMax                 = 1.0
 
@@ -677,8 +681,42 @@ TailwaterLevelM       = {tailwater}
 """
     (pkg_work_dir / "config" / "dflowfm.mdu").write_text(mdu_content, encoding="utf-8")
 
-    # 2. Boundary Conditions EXT File
-    ext_content = f"""# External forcing boundary condition template for {dam_name}
+    # 2. Boundary Conditions & Hydrograph Coupling (Phase A1)
+    coupled_info: Optional[Dict[str, Any]] = None
+    if sph_run_id:
+        from app.sph_service import extract_sph_breach_hydrograph, export_sph_breach_hydrograph_bc
+        sph_hydro = extract_sph_breach_hydrograph(valid_pid, sph_run_id)
+        export_sph_breach_hydrograph_bc(sph_hydro, pkg_work_dir / "boundaries" / "breach_inflow.bc")
+
+        ext_content = f"""# External forcing boundary conditions for {dam_name} (PySPH Coupled Outflow)
+# SPH Run ID: {sph_run_id} | Q_peak: {sph_hydro.q_peak_cms:.2f} m3/s at t={sph_hydro.time_to_peak_seconds:.2f} s
+QUANTITY=dischargebnd
+FILENAME=breach_inflow.bc
+FILETYPE=9
+METHOD=1
+OPERAND=O
+
+QUANTITY=waterlevelbnd
+FILENAME=upstream_stage.tim
+FILETYPE=1
+METHOD=1
+OPERAND=O
+"""
+        coupled_info = {
+            "is_coupled": True,
+            "source_engine": "pysph",
+            "target_engine": "delft3d_fm",
+            "source_sph_run_id": sph_run_id,
+            "derived_from_sph": True,
+            "solver_status": "package_generated_unexecuted",
+            "sph_q_peak_cms": sph_hydro.q_peak_cms,
+            "sph_time_to_peak_s": sph_hydro.time_to_peak_seconds,
+            "sph_total_released_volume_m3": sph_hydro.total_released_volume_m3,
+            "sph_reservoir_release_fraction": sph_hydro.reservoir_release_fraction,
+            "sph_mass_balance_check": sph_hydro.mass_balance_check,
+        }
+    else:
+        ext_content = f"""# External forcing boundary condition template for {dam_name}
 QUANTITY=waterlevelbnd
 FILENAME=upstream_stage.tim
 FILETYPE=1
@@ -713,6 +751,7 @@ Project:               {dam_name}
 Project ID:            {valid_pid}
 Generated:             {datetime.now(timezone.utc).isoformat()}
 D-Flow FM Available:   {caps.dflowfm_available}
+Coupled with PySPH:    {bool(coupled_info)}
 
 SCIENTIFIC REQUIREMENTS & OUTPUT CONTRACT:
 1. EXECUTING D-FLOW FM:
@@ -738,12 +777,14 @@ SCIENTIFIC REQUIREMENTS & OUTPUT CONTRACT:
         "project_id": valid_pid,
         "package_type": "project_delft3d_package",
         "solver_framework": "Delft3D Flexible Mesh (D-Flow FM)",
+        "solver_execution_status": "package_generated_unexecuted",
         "created_at": datetime.now(timezone.utc).isoformat(),
         "capabilities_at_build": {
             "hydromt_available": caps.hydromt_available,
             "dflowfm_available": caps.dflowfm_available,
             "execution_enabled": caps.execution_enabled,
         },
+        "coupling": coupled_info,
         "output_contract": {
             "required_rasters": ["maximum_depth.tif", "maximum_velocity.tif", "arrival_time.tif"],
             "target_crs": "EPSG:32643",
@@ -762,6 +803,15 @@ SCIENTIFIC REQUIREMENTS & OUTPUT CONTRACT:
     pkg_size = zip_path.stat().st_size
     manifest_checksum = compute_file_sha256(pkg_work_dir / "manifest.json") or "unknown"
 
+    notes = [
+        f"Delft3D model package for project '{dam_name}' built successfully.",
+        "Contains D-Flow FM MDU definition and boundary condition templates.",
+    ]
+    if coupled_info:
+        notes.append(
+            f"Coupled with PySPH run '{sph_run_id}': regional boundary condition forced by SPH breach hydrograph (Q_peak: {coupled_info['sph_q_peak_cms']} m3/s, Volume: {coupled_info['sph_total_released_volume_m3']} m3)."
+        )
+
     response = ProjectDelft3DPackageResponse(
         project_id=valid_pid,
         package_filename=zip_path.name,
@@ -771,10 +821,7 @@ SCIENTIFIC REQUIREMENTS & OUTPUT CONTRACT:
         download_url=f"/api/dam-projects/{valid_pid}/delft3d/download-package",
         dflowfm_available=caps.dflowfm_available,
         execution_enabled=caps.execution_enabled,
-        notes=[
-            f"Delft3D Flexible Mesh package for project '{dam_name}' built successfully.",
-            "Contains D-Flow FM MDU definitions, boundary forcing templates, and output contracts.",
-        ],
+        notes=notes,
     )
     return response, zip_path
 
@@ -824,11 +871,14 @@ def import_dam_project_delft3d_run(
         saved_files[clean_name] = dst_path
         file_hashes[clean_name] = compute_file_sha256(dst_path) or ""
 
-    # Identify GeoTIFFs
+    # Identify GeoTIFFs and NetCDF files
     geotiffs = {k: v for k, v in saved_files.items() if v.suffix.lower() in [".tif", ".tiff"]}
+    nc_files = {k: v for k, v in saved_files.items() if v.suffix.lower() in [".nc", ".nc4"]}
     depth_tif = None
     vel_tif = None
     arr_tif = None
+    import_mode = "geotiff"
+    ugrid_summary = None
 
     for name, path in geotiffs.items():
         name_lower = name.lower()
@@ -851,10 +901,29 @@ def import_dam_project_delft3d_run(
                 shutil.copy2(path, std_path)
                 arr_tif = std_path
 
+    # If no depth GeoTIFF was provided, but a NetCDF map output is present, parse UGRID mesh
+    if not depth_tif and nc_files:
+        from app.delft3d_ugrid_service import parse_delft3d_ugrid_netcdf, rasterize_delft3d_ugrid_to_geotiff
+        primary_nc = list(nc_files.values())[0]
+        try:
+            parsed = parse_delft3d_ugrid_netcdf(primary_nc)
+            ugrid_tifs = rasterize_delft3d_ugrid_to_geotiff(parsed, run_dir)
+            if "maximum_depth" in ugrid_tifs:
+                depth_tif = ugrid_tifs["maximum_depth"]
+            if "maximum_velocity" in ugrid_tifs:
+                vel_tif = ugrid_tifs["maximum_velocity"]
+            import_mode = "ugrid_netcdf"
+            ugrid_summary = parsed.get("summary")
+        except Exception as e:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Failed to parse Delft3D UGRID NetCDF file '{primary_nc.name}': {str(e)}"
+            )
+
     if not depth_tif:
         raise HTTPException(
             status_code=422,
-            detail="Uploaded Delft3D run must contain at least maximum_depth.tif (or a recognized depth GeoTIFF)."
+            detail="Uploaded Delft3D run must contain at least maximum_depth.tif (or a recognized depth GeoTIFF / genuine Delft3D NetCDF map file)."
         )
 
     # Validate output GeoTIFF with rasterio
@@ -880,13 +949,14 @@ def import_dam_project_delft3d_run(
         "run_label": req.run_label or "Imported Delft3D Run",
         "status": "completed",
         "solver_execution_status": "imported",
-        "scientific_status": req.scientific_status or "imported_external_run",
+        "scientific_status": req.scientific_status or ("genuine_ugrid_netcdf_ingested" if import_mode == "ugrid_netcdf" else "imported_external_run"),
         "created_at": datetime.now(timezone.utc).isoformat(),
         "notes": req.notes or "",
         "native_crs": native_crs_str,
         "native_resolution_m": round(res_x, 4),
         "bounds": bounds_tup,
         "nodata_value": nodata_val,
+        "summary": ugrid_summary,
         "layers": {
             "has_maximum_depth": True,
             "has_maximum_velocity": vel_tif is not None and vel_tif.is_file(),
@@ -897,7 +967,8 @@ def import_dam_project_delft3d_run(
         "source_file_hashes": file_hashes,
         "provenance": {
             "imported_at": datetime.now(timezone.utc).isoformat(),
-            "import_mode": "geotiff",
+            "import_mode": import_mode,
+            "source_engine": "delft3d_fm",
         }
     }
 
